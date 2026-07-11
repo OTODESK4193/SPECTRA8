@@ -4,110 +4,59 @@
 
 namespace DSP {
 
-void FormantShifter::process(const std::vector<float>& lspCoeffs, 
-                             std::vector<float>& shiftedLsp, 
-                             float shift, 
+void FormantShifter::process(const std::vector<float>& srcEnvelope16k, 
+                             std::vector<float>& destEnvelopeFs, 
+                             float shiftSemitones, 
                              float stretch, 
-                             int order)
+                             double nativeSampleRate)
 {
-    shiftedLsp.resize(order);
+    // ホストSRのFFTサイズ2048に対応するスペクトル包絡（1025点、DCからNyquistまで）
+    int destSize = 1025;
+    destEnvelopeFs.resize(destSize);
 
-    int M = order / 2;
-    float alpha = std::clamp(shift, -0.9f, 0.9f); // 極端な変形を防ぐために制限
-    float alphaSq = alpha * alpha;
-    float onePlusAlphaSq = 1.0f + alphaSq;
-    float twoAlpha = 2.0f * alpha;
+    float shiftRatio = std::pow(2.0f, shiftSemitones / 12.0f);
+    float scaleFactor = shiftRatio * stretch;
+    if (scaleFactor < 0.01f) scaleFactor = 0.01f;
 
-    std::vector<float> lsfsP;
-    std::vector<float> lsfsQ;
-    lsfsP.reserve(M);
-    lsfsQ.reserve(M);
+    // 16kHz領域の513点スペクトルのグリッド幅 (0Hz〜8000Hzを512等分)
+    float binWidth16k = 8000.0f / 512.0f;
+    float invBinWidth16k = 1.0f / binWidth16k;
 
-    // 1. P極 と Q極 を分離し、双一次写像によるワープを適用
-    for (int i = 0; i < M; ++i)
+    double nyquistFs = nativeSampleRate * 0.5;
+
+    for (int i = 0; i < destSize; ++i)
     {
-        float xP = lspCoeffs[2 * i];
-        float xQ = lspCoeffs[2 * i + 1];
+        // 1. 現在のホストSR上の物理周波数 f を算出
+        double f = (static_cast<double>(i) / 1024.0) * nyquistFs;
 
-        // Warping P
-        float numP = onePlusAlphaSq * xP - twoAlpha;
-        float denP = onePlusAlphaSq - twoAlpha * xP;
-        float tempP = (std::abs(denP) > 1e-5f) ? numP / denP : xP;
-        tempP = std::clamp(tempP, -0.999f, 0.999f);
-        lsfsP.push_back(std::acos(tempP));
+        // 2. 変調（シフト＆ストレッチ）の逆写像により、元の16kHz領域での周波数 f_orig を得る
+        double f_orig = f / scaleFactor;
 
-        // Warping Q
-        float numQ = onePlusAlphaSq * xQ - twoAlpha;
-        float denQ = onePlusAlphaSq - twoAlpha * xQ;
-        float tempQ = (std::abs(denQ) > 1e-5f) ? numQ / denQ : xQ;
-        tempQ = std::clamp(tempQ, -0.999f, 0.999f);
-        lsfsQ.push_back(std::acos(tempQ));
-    }
-
-    // 2. アフィン変換によるフォルマントのストレッチ/スクィーズ (P極とQ極を個別に適用)
-    if (std::abs(stretch - 1.0f) > 1e-4f)
-    {
-        // P極の平均とストレッチ
-        float sumP = 0.0f;
-        for (float val : lsfsP) sumP += val;
-        float meanP = sumP / static_cast<float>(M);
-        for (int i = 0; i < M; ++i)
+        if (f_orig < 0.0)
         {
-            lsfsP[i] = meanP + stretch * (lsfsP[i] - meanP);
-            lsfsP[i] = std::clamp(lsfsP[i], 0.001f, 3.1415f);
+            f_orig = 0.0;
         }
 
-        // Q極の平均とストレッチ
-        float sumQ = 0.0f;
-        for (float val : lsfsQ) sumQ += val;
-        float meanQ = sumQ / static_cast<float>(M);
-        for (int i = 0; i < M; ++i)
+        // 3. 16kHz領域（0Hz〜8000Hz）のエンベロープから線形補間
+        if (f_orig <= 8000.0)
         {
-            lsfsQ[i] = meanQ + stretch * (lsfsQ[i] - meanQ);
-            lsfsQ[i] = std::clamp(lsfsQ[i], 0.001f, 3.1415f);
+            float idx = static_cast<float>(f_orig) * invBinWidth16k;
+            int idx0 = static_cast<int>(idx);
+            int idx1 = std::min(512, idx0 + 1);
+            float frac = idx - static_cast<float>(idx0);
+
+            destEnvelopeFs[i] = srcEnvelope16k[idx0] * (1.0f - frac) + srcEnvelope16k[idx1] * frac;
         }
-    }
-
-    // 3. それぞれ個別にソートして順序を保証
-    std::sort(lsfsP.begin(), lsfsP.end());
-    std::sort(lsfsQ.begin(), lsfsQ.end());
-
-    // 4. 交互にマージして交互配置を100%保証
-    std::vector<float> lsfs(order);
-    for (int i = 0; i < M; ++i)
-    {
-        lsfs[2 * i] = lsfsP[i];
-        lsfs[2 * i + 1] = lsfsQ[i];
-    }
-
-    // 5. LSFガードバンドの適用によるフィルタ安定化 (PとQの交互関係を崩さないように全体ソート)
-    float minDistance = 0.25f * 3.14159265f / static_cast<float>(order + 1);
-    std::sort(lsfs.begin(), lsfs.end()); // PとQは交互に並んでいるため、全体ソートしても関係は維持されます
-    applyGuardBand(lsfs, minDistance, order);
-
-    // 6. 余弦ドメイン (LSP) に逆変換 (角度昇順なので、cosは降順になる)
-    for (int i = 0; i < order; ++i)
-    {
-        shiftedLsp[i] = std::cos(lsfs[i]);
-    }
-}
-
-void FormantShifter::applyGuardBand(std::vector<float>& lsfs, float minDistance, int order)
-{
-    // 双方向プッシュ・プルガードバンド処理
-    
-    // 前進パス
-    lsfs[0] = std::max(lsfs[0], minDistance);
-    for (int i = 1; i < order; ++i)
-    {
-        lsfs[i] = std::max(lsfs[i], lsfs[i - 1] + minDistance);
-    }
-
-    // 後退パス
-    lsfs[order - 1] = std::min(lsfs[order - 1], 3.14159265f - minDistance);
-    for (int i = order - 2; i >= 0; --i)
-    {
-        lsfs[i] = std::min(lsfs[i], lsfs[i + 1] - minDistance);
+        else
+        {
+            // 8000Hz以上の高域は、声のエネルギーがないため、緩やかにロールオフ（1オクターブあたり約-12dB）を適用
+            // これにより高域の極によるフィルタ不安定化を完全に防ぎます
+            double excess = f_orig - 8000.0;
+            float rollOff = std::exp(static_cast<float>(-excess / 1500.0)); // 1500Hzごとに約 -8.6dB 減衰
+            
+            // 最小値（ノイズフロア）として 1e-5f (-100dB) を保証
+            destEnvelopeFs[i] = std::max(1e-5f, srcEnvelope16k[512] * rollOff);
+        }
     }
 }
 

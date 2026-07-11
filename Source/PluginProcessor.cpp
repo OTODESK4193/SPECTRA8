@@ -14,7 +14,6 @@ SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
       mAnalysisWindowSize(1024),
       mControlRateBlockSize(32),
       mControlRateCounter(0),
-      mInterpolationBeta(0.0f),
       mCurrentGain(0.0f),
       mTargetGain(0.0f)
 {
@@ -106,9 +105,8 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mMultiRateMapper.setup(sampleRate);
     
     mLpcAnalyzer.setup(24);
-    mLpcToLsp.setup(24);
-    mLspToLpc.setup(24);
     mTelpcIntegrator.setup(10); // fftOrder=10 -> FFTSize=1024
+    mFsFft = std::make_unique<juce::dsp::FFT>(11); // ホストSR用 2048ポイントFFT (size=2048)
 
     mMidiQueue.clear();
     mMidiActiveMode = false;
@@ -125,22 +123,17 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mTeEnvelope.resize(513, 0.0f);
     mBarkEnergies.resize(24, 0.0f);
     m16kLpc.resize(25, 0.0f);
-    m16kLsp.resize(24, 0.0f);
+    m16kLpc[0] = 1.0f;
 
-    // LSP 初期目標値の設定（中立フィルタ、根を等間隔で配置）
-    mLspCurrent.resize(24);
-    for (int i = 0; i < 24; ++i)
-    {
-        float angle = static_cast<float>(i + 1) * 3.14159265f / 25.0f;
-        mLspCurrent[i] = std::cos(angle);
-    }
-    mLspTarget = mLspCurrent;
-    mLspInterpolated = mLspCurrent;
-    mLspShifted = mLspCurrent;
-    mFsLpc.resize(25, 0.0f);
+    mFsEnvelope.assign(1025, 0.0f);
+    mAutocorrBuffer.assign(2048, 0.0f);
+    
+    // LPC 初期目標値の設定 (24次中立フィルタ)
+    mFsLpc.assign(25, 0.0f);
+    mFsLpc[0] = 1.0f;
+    mFsLpcTarget = mFsLpc;
 
     mControlRateCounter = 0;
-    mInterpolationBeta = 0.0f;
     mCurrentGain = 0.0f;
     mTargetGain = 0.0f;
 }
@@ -341,20 +334,86 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             // 結合係数 gamma=0.85
             mTelpcIntegrator.integrate(mTeEnvelope, mBarkEnergies, 0.85f, lpcOrder, m16kLpc, mTargetGain);
 
-            // 16kHz LPC から 16kHz LSP への変換
-            mLpcToLsp.convert(m16kLpc, m16kLsp, lpcOrder);
+            // ===== 新アルゴリズム: スペクトル包絡直接変調 → IFFT → Levinson-Durbin =====
+            
+            // (A) スペクトル領域でフォルマント変調＋ホストSRへのマッピング
+            mFormantShifter.process(mTeEnvelope, mFsEnvelope, formantShift, formantStretch, getSampleRate());
 
-            // ホストSR用の 24次 LSP 空間へ再射影 (高域ダミー極追加)
-            mMultiRateMapper.mapLSF(m16kLsp, lpcOrder, mLspTarget, 24);
+            // (B) パワースペクトルを構築し、IFFTで自己相関系列を得る
+            std::vector<float> ifftBuffer(4096, 0.0f); // 2048点のFFT用（JUCEは2*fftSize必要）
+            
+            // DC と Nyquist
+            float pwrDC = mFsEnvelope[0] * mFsEnvelope[0];
+            float pwrNyq = mFsEnvelope[1024] * mFsEnvelope[1024];
+            ifftBuffer[0] = pwrDC;
+            ifftBuffer[1] = pwrNyq;
+            
+            // 残りのビン（実部にパワー、虚部に0）
+            for (int k = 1; k < 1024; ++k)
+            {
+                float pwr = mFsEnvelope[k] * mFsEnvelope[k];
+                ifftBuffer[2 * k] = pwr;
+                ifftBuffer[2 * k + 1] = 0.0f;
+            }
+            
+            // IFFT実行 → 自己相関系列を得る
+            mFsFft->performRealOnlyInverseTransform(ifftBuffer.data());
+            
+            // (C) Levinson-Durbin再帰法による24次LPC係数の算出
+            // ifftBuffer[0..24] が自己相関 R[0]..R[24]
+            int ldOrder = 24;
+            std::vector<float> newLpc(ldOrder + 1, 0.0f);
+            newLpc[0] = 1.0f;
+            float ldGain = 0.0f;
+            
+            float R0 = ifftBuffer[0];
+            if (R0 > 1e-10f) // 信号がある場合のみ
+            {
+                std::vector<float> a(ldOrder + 1, 0.0f);
+                a[0] = 1.0f;
+                float E = ifftBuffer[0];
+                
+                bool ldStable = true;
+                for (int m = 1; m <= ldOrder; ++m)
+                {
+                    // λ = - Σ_{j=0}^{m-1} a[j] * R[m-j]
+                    float lambda = 0.0f;
+                    for (int j = 0; j < m; ++j)
+                    {
+                        lambda += a[j] * ifftBuffer[m - j];
+                    }
+                    
+                    if (std::abs(E) < 1e-10f) { ldStable = false; break; }
+                    float k_m = -lambda / E;
+                    
+                    // |k_m| >= 1 なら不安定（通常起こらないが安全のため）
+                    if (std::abs(k_m) >= 1.0f) { ldStable = false; break; }
+                    
+                    // 係数の更新
+                    std::vector<float> a_new(ldOrder + 1, 0.0f);
+                    for (int j = 0; j <= m; ++j)
+                    {
+                        a_new[j] = a[j] + k_m * a[m - j];
+                    }
+                    a = a_new;
+                    
+                    E = E * (1.0f - k_m * k_m);
+                }
+                
+                if (ldStable && E > 0.0f)
+                {
+                    newLpc = a;
+                    ldGain = std::sqrt(E);
+                }
+            }
+            
+            mFsLpcTarget = newLpc;
+            mTargetGain = ldGain;
 
-            CHECK_NAN_VEC(mAnalysisFrame, "mAnalysisFrame");
-            CHECK_NAN_VEC(windowedFrame, "windowedFrame");
-            CHECK_NAN(f0, "f0 from detector");
             CHECK_NAN_VEC(mTeEnvelope, "mTeEnvelope");
-            CHECK_NAN_VEC(mBarkEnergies, "mBarkEnergies");
-            CHECK_NAN_VEC(m16kLpc, "m16kLpc");
+            CHECK_NAN_VEC(mFsEnvelope, "mFsEnvelope");
+            CHECK_NAN_VEC(mFsLpcTarget, "mFsLpcTarget");
             CHECK_NAN(mTargetGain, "mTargetGain");
-            CHECK_NAN_VEC(mLspTarget, "mLspTarget");
 
             // 処理したホップ分を削除
             mAnalysisInputBuffer.erase(mAnalysisInputBuffer.begin(), mAnalysisInputBuffer.begin() + mAnalysisHopSize);
@@ -374,51 +433,29 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     for (int sample = 0; sample < numSamples; ++sample)
     {
-        // 6-A. コントロール・レート (32サンプル毎にLSP補間＋LPC逆変換を実行)
+        // 6-A. コントロール・レート (32サンプル毎にLPC係数を更新)
         if (mControlRateCounter >= mControlRateBlockSize || mControlRateCounter == 0)
         {
             mControlRateCounter = 0;
             
-            // LSPおよびゲインの線形補間
-            mInterpolationBeta = 0.0f; // ブロック頭
-            
-            for (int i = 0; i < 24; ++i)
-            {
-                mLspInterpolated[i] = mLspCurrent[i];
-            }
-            mCurrentGain = mTargetGain; // Phase 1では即座に更新するか、緩やかに追従
+            // LPC係数をターゲットに更新
+            mFsLpc = mFsLpcTarget;
+            mCurrentGain = mTargetGain;
 
-            // 6-B. LSPドメインでのフォルマント変調 (Shifter)
-            mFormantShifter.process(mLspInterpolated, mLspShifted, formantShift, formantStretch, 24);
-
-            CHECK_NAN_VEC(mLspInterpolated, "mLspInterpolated");
-            CHECK_NAN_VEC(mLspShifted, "mLspShifted");
-
-            // 6-C. LSP から LPC への逆変換
-            mLspToLpc.convert(mLspShifted, mFsLpc, 24);
-
-            CHECK_NAN_VEC(mFsLpc, "mFsLpc");
-
-            // LPC係数の安全（NaN/Inf防止）ガード
+            // LPC係数のNaN/Infガード
             bool lpcValid = true;
-            for (float val : mFsLpc)
+            for (size_t i = 0; i < mFsLpc.size(); ++i)
             {
-                if (std::isnan(val) || std::isinf(val))
+                if (std::isnan(mFsLpc[i]) || std::isinf(mFsLpc[i]))
                     lpcValid = false;
             }
 
-            if (!lpcValid)
+            if (lpcValid && mFsLpc.size() >= 25)
             {
-                if (mDebugMessage.startsWith("No errors") || mDebugMessage.isEmpty())
-                    mDebugMessage = "WARN: LPC NaN/Inf detected! Reusing last stable coeffs.";
-                // 異常値を破棄し、前回の正常な係数をそのまま使い回すためにコピーをスキップします
-            }
-            else
-            {
-                // 算出された LPC 係数を 8ボイス並列状態にコピー (正常な場合のみ)
+                // 算出された LPC 係数を 8ボイス並列状態にコピー
                 for (int i = 0; i < 24; ++i)
                 {
-                    float val = mFsLpc[i + 1]; // a_1 〜 a_24 (coeffs[0] = 1.0 なのでインデックス+1)
+                    float val = mFsLpc[i + 1];
                     for (int v = 0; v < 8; ++v)
                     {
                         mDspState.filterCoeffsL[i][v] = val;
@@ -426,9 +463,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                     }
                 }
             }
-
-            // 次のブロックに向けて値を更新
-            mLspCurrent = mLspTarget;
+            else
+            {
+                if (mDebugMessage.startsWith("No errors") || mDebugMessage.isEmpty())
+                    mDebugMessage = "WARN: LPC NaN/Inf! Reusing last stable coeffs.";
+            }
         }
 
         mControlRateCounter++;

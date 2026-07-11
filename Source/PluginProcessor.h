@@ -11,8 +11,6 @@
 #include "TrueEnvelope.h"
 #include "BarkFilterBank.h"
 #include "TELPCIntegrator.h"
-#include "LPCtoLSP.h"
-#include "LSPtoLPC.h"
 #include "FormantShifter.h"
 #include "MultiRateMapper.h"
 #include "OscillatorBank.h"
@@ -72,8 +70,6 @@ private:
     DSP::TELPCIntegrator mTelpcIntegrator;
     
     // 変換・フォルマント処理モジュール
-    DSP::LPCtoLSP mLpcToLsp;
-    DSP::LSPtoLPC mLspToLpc;
     DSP::FormantShifter mFormantShifter;
 
     // 8ボイス並列DSP状態
@@ -87,23 +83,21 @@ private:
     std::vector<float> mTeEnvelope;
     std::vector<float> mBarkEnergies;
     std::vector<float> m16kLpc;
-    std::vector<float> m16kLsp;
     
-    // LSP 補間バッファ (ホストサンプリングレート Fs の 24次)
-    std::vector<float> mLspCurrent;
-    std::vector<float> mLspTarget;
-    std::vector<float> mLspInterpolated;
-    std::vector<float> mLspShifted;
-    std::vector<float> mFsLpc;
+    // ホストSR用のFFT/IFFTオブジェクト (サイズ2048 = 11次)
+    std::unique_ptr<juce::dsp::FFT> mFsFft;
+    std::vector<float> mFsEnvelope;       // ホストSR用スペクトル包絡 (1025点)
+    std::vector<float> mAutocorrBuffer;   // 自己相関用IFFTバッファ (2048点)
+    std::vector<float> mFsLpc;            // ホストSRのLPC係数 (25点)
+    std::vector<float> mFsLpcTarget;      // 補間ターゲットLPC係数 (25点)
 
     // 分析タイミング制御 (16kHz で 100サンプルホップ = 6.25ms毎)
     int mAnalysisHopSize;
     int mAnalysisWindowSize;
     
-    // コントロール・レート制御 (ホストSRで 32サンプル毎にLSP補間)
+    // コントロール・レート制御 (ホストSRで 32サンプル毎にLPC更新)
     int mControlRateBlockSize;
     int mControlRateCounter;
-    float mInterpolationBeta; // 0.0f 〜 1.0f
     
     // 前回のLPCゲイン（スカラー）
     float mCurrentGain;

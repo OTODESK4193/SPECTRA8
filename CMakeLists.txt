@@ -64,10 +64,6 @@ target_sources(SPECTRA8 PRIVATE
     Source/DSP/BarkFilterBank.cpp
     Source/DSP/TELPCIntegrator.h
     Source/DSP/TELPCIntegrator.cpp
-    Source/DSP/LPCtoLSP.h
-    Source/DSP/LPCtoLSP.cpp
-    Source/DSP/LSPtoLPC.h
-    Source/DSP/LSPtoLPC.cpp
     Source/DSP/FormantShifter.h
     Source/DSP/FormantShifter.cpp
     Source/DSP/MultiRateMapper.h
