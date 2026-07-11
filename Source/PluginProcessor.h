@@ -5,7 +5,6 @@
 #include <memory>
 #include <atomic>
 
-// DSPとボイスのヘッダー
 #include "VoiceState.h"
 #include "MidiQueue.h"
 #include "OscillatorBank.h"
@@ -40,7 +39,6 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
-    // パラメータアクセス用の APVTS
     juce::AudioProcessorValueTreeState apvts;
 
     juce::String getDebugMessage() const
@@ -50,34 +48,32 @@ public:
         return "No errors. Running fine.";
     }
 
+    // Band EQ およびアナライザー用メソッド
+    void setBandGain(int bandIdx, float gain) { mBandGains[bandIdx].store(gain); }
+    float getBandGain(int bandIdx) const { return mBandGains[bandIdx].load(); }
+    float getBandLevel(int bandIdx) const { return mBandLevelsForUi[bandIdx].load(); }
+
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    // DSPモジュール群
     DSP::MidiQueue mMidiQueue;
     DSP::VoiceManager mVoiceManager;
     DSP::OscillatorBank mOscillatorBank;
     DSP::NoiseGenerator mNoiseGenerator;
 
-    // 8ボイス並列DSP状態
     alignas(32) DSP::PolyphonicVoiceSoA mDspState;
 
-    // 48バンド ZDF SVF 状態変数 (16kHz動作)
-    std::vector<float> mBandEnvelopes;       // 48バンドの現在のエンベロープ
-    std::vector<float> mTargetBandEnvelopes; // 48バンドの目標エンベロープ
+    std::vector<float> mBandEnvelopes;
+    std::vector<float> mTargetBandEnvelopes;
 
-    // 分析側のZDF SVF状態変数（48バンド * 各2セクション分）
     std::vector<float> mAnalFilterS1;
     std::vector<float> mAnalFilterS2;
 
-    // フィルタバンク中心周波数
     std::vector<float> mBandF0;
 
-    // ZDF SVF フィルタ係数配列 (最大サイズ48)
     std::vector<float> mBandCoeffsG;
     std::vector<float> mBandCoeffsK;
     std::vector<float> mBandCoeffsA1;
-    std::vector<float> mBandCoeffsA2;
 
     juce::LinearSmoothedValue<float> mFormantShiftSmoother;
 
@@ -87,15 +83,12 @@ private:
     std::vector<float> mWetFsBuffer;
     std::vector<float> mDryLBuffer;
 
-    // 分析タイミング制御 (16kHz領域)
     int mAnalysisHopSize;
     int mAnalysisWindowSize;
 
-    // コントロール・レート制御 (16kHz領域で 32サンプル毎にエンベロープ更新)
     int mControlRateBlockSize;
     int mControlRateCounter;
 
-    // 有声/無声 (Voiced/Unvoiced) 動的ブレンド比率
     float mCurrentUnvoicedRatio;
     float mTargetUnvoicedRatio;
 
@@ -106,6 +99,17 @@ private:
 
     // ★フェイルセーフ：Autoモード時のボイスONエッジ検出用フラグ
     bool mWasAutoVoiceActive = false;
+
+    // LPC分析用
+    std::vector<float> mLpcAnalysisBuffer;
+    std::vector<float> mCurrentLpcCoeffs;
+
+    // Band EQ およびアナライザーレベル
+    std::array<std::atomic<float>, 48> mBandGains;
+    std::array<std::atomic<float>, 48> mBandLevelsForUi;
+
+    // 最終段リミッター用状態
+    float mLimiterGain = 1.0f;
 
     std::atomic<int> mErrorState{ 0 };
 

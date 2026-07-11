@@ -2,6 +2,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "PluginProcessor.h"
 #include "MainPanel.h"
+#include "BandEditorPanel.h"
 
 class SPECTRA8AudioProcessorEditor : public juce::AudioProcessorEditor,
                                      public juce::Timer {
@@ -14,10 +15,21 @@ public:
     void timerCallback() override;
 
 private:
+    void updateTabVisibility();
+
     SPECTRA8AudioProcessor& audioProcessor;
     
-    // メイン操作パネル
-    GUI::MainPanel mMainPanel;
+    // タブ選択ボタン
+    juce::TextButton mTabVocoderBtn;
+    juce::TextButton mTabExcitationBtn;
+    juce::TextButton mTabBandsEqBtn;
+
+    int mActiveTab = 0; // 0: VOCODER, 1: EXCITATION, 2: BANDS EQ
+
+    // タブパネル
+    GUI::VocoderTabPanel mVocoderPanel;
+    GUI::ExcitationTabPanel mExcitationPanel;
+    GUI::BandEditorPanel mBandsEqPanel;
 
     // デバッグ情報表示用ラベル
     juce::Label mDebugLabel;

@@ -27,11 +27,7 @@ namespace DSP {
         for (int i = 0; i < PolyphonicVoiceSoA::kWaveTableSize; ++i)
         {
             float phase = static_cast<float>(i) / static_cast<float>(PolyphonicVoiceSoA::kWaveTableSize);
-
-            // 1. ノコギリ波
             mWavetableSaw[i] = 2.0f * phase - 1.0f;
-
-            // 2. パルス波
             mWavetablePulse[i] = (phase < 0.5f) ? 1.0f : -1.0f;
 
             // 3. 三角波
@@ -68,12 +64,26 @@ namespace DSP {
         const float* g_coeffs,
         const float* k_coeffs,
         const float* a1_coeffs,
-        const float* a2_coeffs,
+        const float* /*a2_coeffs*/,
         float& outL,
         float& outR)
     {
         __m256 oscL = _mm256_setzero_ps();
         __m256 oscR = _mm256_setzero_ps();
+
+<<<<<<< HEAD
+        __m256 phaseL_vec = _mm256_load_ps(state.phaseL);
+=======
+        // 1. LEFT オシレーター波形生成
+        __m256 phaseL_vec = _mm256_load_ps(state.phaseL);
+        __m256i idx0_L_raw = _mm256_cvttps_epi32(phaseL_vec);
+        __m256 idx0_L_float = _mm256_cvtepi32_ps(idx0_L_raw);
+        __m256 t_L = _mm256_sub_ps(phaseL_vec, idx0_L_float);
+
+        __m256i maskVec = _mm256_set1_epi32(PolyphonicVoiceSoA::kWaveTableMask);
+        __m256i idx0_L = _mm256_and_si256(idx0_L_raw, maskVec);
+        __m256i idx1_L = _mm256_add_epi32(idx0_L, _mm256_set1_epi32(1));
+        idx1_L = _mm256_and_si256(idx1_L, maskVec);
 
         __m256 phaseL_vec = _mm256_load_ps(state.phaseL);
         __m256 phaseR_vec = _mm256_load_ps(state.phaseR);
@@ -109,7 +119,6 @@ namespace DSP {
         }
         else if (waveform == 1) // Pulse
         {
-            // pulseWidth (0.05 ~ 0.95) に基づき、SIMDで直接パルス波を生成する
             __m256 thresh = _mm256_set1_ps(pulseWidth * static_cast<float>(PolyphonicVoiceSoA::kWaveTableSize));
             
             // LEFT
@@ -122,8 +131,6 @@ namespace DSP {
         }
         else // Wavetable (waveform == 2)
         {
-            // 将来的なWavetableモーフィング・カスタム読み込みに対応する余地
-            // wavetablePosition (0.0 ~ 1.0) を用いて、初期Wavetable(Tri) と カスタムWavetable を線形補間する
             const float* tableTri = mWavetableTri.data();
             const float* tableCustom = mCustomWavetable.data();
 
@@ -178,98 +185,150 @@ namespace DSP {
         __m256 excitationL = _mm256_fmadd_ps(oneMinusNoiseMix, oscL, _mm256_mul_ps(noiseMix, noiseBuffer));
         __m256 excitationR = _mm256_fmadd_ps(oneMinusNoiseMix, oscR, _mm256_mul_ps(noiseMix, noiseBuffer));
 
-
-        // 4. ZDF SVF フィルタバンクによる変調とボイス加算
-        alignas(32) float actMask[8];
-        alignas(32) float excL[8];
-        alignas(32) float excR[8];
-        alignas(32) float voiceEnvelopes[8];
-
-        _mm256_store_ps(actMask, activeVoicesMask);
-        _mm256_store_ps(excL, excitationL);
-        _mm256_store_ps(excR, excitationR);
-        _mm256_store_ps(voiceEnvelopes, envelopes);
-
         float sumL = 0.0f;
         float sumR = 0.0f;
 
-        int activeBands = std::clamp(currentNumBands, 8, static_cast<int>(PolyphonicVoiceSoA::kNumBands));
-
-        for (int v = 0; v < 8; ++v)
+        if (vocoderMode == 0) // Filterbank Mode (ZDF SVF 48 Bands)
         {
-            if (actMask[v] > 0.0f)
+            // 4. ZDF SVF フィルタバンクによる変調とボイス加算
+            alignas(32) float actMask[8];
+            alignas(32) float excL[8];
+            alignas(32) float excR[8];
+            alignas(32) float voiceEnvelopes[8];
+
+            _mm256_store_ps(actMask, activeVoicesMask);
+            _mm256_store_ps(excL, excitationL);
+            _mm256_store_ps(excR, excitationR);
+            _mm256_store_ps(voiceEnvelopes, envelopes);
+
+            int activeBands = std::clamp(currentNumBands, 8, static_cast<int>(PolyphonicVoiceSoA::kNumBands));
+
+            for (int v = 0; v < 8; ++v)
             {
-                float vL = excL[v];
-                float vR = excR[v];
-
-                float voiceSumL = 0.0f;
-                float voiceSumR = 0.0f;
-
-                for (int i = 0; i < activeBands; ++i)
+                if (actMask[v] > 0.0f)
                 {
-                    float g = g_coeffs[i];
-                    float a1 = a1_coeffs[i]; // 1.0f / (1.0f + g * (g + k))
+                    float vL = excL[v];
+                    float vR = excR[v];
 
-                    // --- ZDF SVF (LEFT) - 4次直列 (S1 -> S2) 正確なVA構造へ修正 ---
-                    // セクション 1
-                    float s1_L_s1 = state.filterS1_S1_L[i][v];
-                    float s2_L_s1 = state.filterS1_S2_L[i][v];
-                    float v1_L_s1 = a1 * (s1_L_s1 + g * (vL - s2_L_s1));
-                    float y_bp_L_s1 = v1_L_s1;
-                    float y_lp_L_s1 = s2_L_s1 + g * v1_L_s1;
+                    float voiceSumL = 0.0f;
+                    float voiceSumR = 0.0f;
 
-                    state.filterS1_S1_L[i][v] = 2.0f * y_bp_L_s1 - s1_L_s1;
-                    state.filterS1_S2_L[i][v] = 2.0f * y_lp_L_s1 - s2_L_s1;
+                    for (int i = 0; i < activeBands; ++i)
+                    {
+                        float g = g_coeffs[i];
+                        float a1 = a1_coeffs[i];
 
-                    // セクション 2 (S1 -> S2)
-                    float s1_L_s2 = state.filterS2_S1_L[i][v];
-                    float s2_L_s2 = state.filterS2_S2_L[i][v];
-                    float v1_L_s2 = a1 * (s1_L_s2 + g * (y_bp_L_s1 - s2_L_s2));
-                    float y_bp_L_s2 = v1_L_s2;
-                    float y_lp_L_s2 = s2_L_s2 + g * v1_L_s2;
+                        // --- ZDF SVF (LEFT) - 4次直列 (S1 -> S2) ---
+                        float s1_L_s1 = state.filterS1_S1_L[i][v];
+                        float s2_L_s1 = state.filterS1_S2_L[i][v];
+                        float v1_L_s1 = a1 * (s1_L_s1 + g * (vL - s2_L_s1));
+                        float y_bp_L_s1 = v1_L_s1;
+                        float y_lp_L_s1 = s2_L_s1 + g * v1_L_s1;
 
-                    state.filterS2_S1_L[i][v] = 2.0f * y_bp_L_s2 - s1_L_s2;
-                    state.filterS2_S2_L[i][v] = 2.0f * y_lp_L_s2 - s2_L_s2;
+                        state.filterS1_S1_L[i][v] = 2.0f * y_bp_L_s1 - s1_L_s1;
+                        state.filterS1_S2_L[i][v] = 2.0f * y_lp_L_s1 - s2_L_s1;
 
+                        float s1_L_s2 = state.filterS2_S1_L[i][v];
+                        float s2_L_s2 = state.filterS2_S2_L[i][v];
+                        float v1_L_s2 = a1 * (s1_L_s2 + g * (y_bp_L_s1 - s2_L_s2));
+                        float y_bp_L_s2 = v1_L_s2;
+                        float y_lp_L_s2 = s2_L_s2 + g * v1_L_s2;
 
-                    // --- ZDF SVF (RIGHT) - 4次直列 (S1 -> S2) 正確なVA構造へ修正 ---
-                    // セクション 1
-                    float s1_R_s1 = state.filterS1_S1_R[i][v];
-                    float s2_R_s1 = state.filterS1_S2_R[i][v];
-                    float v1_R_s1 = a1 * (s1_R_s1 + g * (vR - s2_R_s1));
-                    float y_bp_R_s1 = v1_R_s1;
-                    float y_lp_R_s1 = s2_R_s1 + g * v1_R_s1;
-
-                    state.filterS1_S1_R[i][v] = 2.0f * y_bp_R_s1 - s1_R_s1;
-                    state.filterS1_S2_R[i][v] = 2.0f * y_lp_R_s1 - s2_R_s1;
-
-                    // セクション 2 (S1 -> S2)
-                    float s1_R_s2 = state.filterS2_S1_R[i][v];
-                    float s2_R_s2 = state.filterS2_S2_R[i][v];
-                    float v1_R_s2 = a1 * (s1_R_s2 + g * (y_bp_R_s1 - s2_R_s2));
-                    float y_bp_R_s2 = v1_R_s2;
-                    float y_lp_R_s2 = s2_R_s2 + g * v1_R_s2;
-
-                    state.filterS2_S1_R[i][v] = 2.0f * y_bp_R_s2 - s1_R_s2;
-                    state.filterS2_S2_R[i][v] = 2.0f * y_lp_R_s2 - s2_R_s2;
+                        state.filterS2_S1_L[i][v] = 2.0f * y_bp_L_s2 - s1_L_s2;
+                        state.filterS2_S2_L[i][v] = 2.0f * y_lp_L_s2 - s2_L_s2;
 
 
-                    // フォルマントシフト＆ストレッチ写像 (中心周波数を基準に伸縮)
-                    float centerBand = static_cast<float>(activeBands - 1) * 0.5f;
-                    float srcIdx = centerBand + (static_cast<float>(i) - centerBand) / formantStretch - formantShift;
-                    srcIdx = std::clamp(srcIdx, 0.0f, static_cast<float>(activeBands - 1));
-                    int idx0 = static_cast<int>(srcIdx);
-                    int idx1 = std::min(activeBands - 1, idx0 + 1);
-                    float frac = srcIdx - idx0;
-                    float modEnv = modulatorEnvelopes[idx0] * (1.0f - frac) + modulatorEnvelopes[idx1] * frac;
+                        // --- ZDF SVF (RIGHT) - 4次直列 (S1 -> S2) ---
+                        float s1_R_s1 = state.filterS1_S1_R[i][v];
+                        float s2_R_s1 = state.filterS1_S2_R[i][v];
+                        float v1_R_s1 = a1 * (s1_R_s1 + g * (vR - s2_R_s1));
+                        float y_bp_R_s1 = v1_R_s1;
+                        float y_lp_R_s1 = s2_R_s1 + g * v1_R_s1;
 
-                    voiceSumL += y_bp_L_s2 * modEnv;
-                    voiceSumR += y_bp_R_s2 * modEnv;
+                        state.filterS1_S1_R[i][v] = 2.0f * y_bp_R_s1 - s1_R_s1;
+                        state.filterS1_S2_R[i][v] = 2.0f * y_lp_R_s1 - s2_R_s1;
+
+                        float s1_R_s2 = state.filterS2_S1_R[i][v];
+                        float s2_R_s2 = state.filterS2_S2_R[i][v];
+                        float v1_R_s2 = a1 * (s1_R_s2 + g * (y_bp_R_s1 - s2_R_s2));
+                        float y_bp_R_s2 = v1_R_s2;
+                        float y_lp_R_s2 = s2_R_s2 + g * v1_R_s2;
+
+                        state.filterS2_S1_R[i][v] = 2.0f * y_bp_R_s2 - s1_R_s2;
+                        state.filterS2_S2_R[i][v] = 2.0f * y_lp_R_s2 - s2_R_s2;
+
+
+                        // フォルマントシフト＆ストレッチ写像
+                        float centerBand = static_cast<float>(activeBands - 1) * 0.5f;
+                        float srcIdx = centerBand + (static_cast<float>(i) - centerBand) / formantStretch - formantShift;
+                        
+                        float modEnv = 0.0f;
+                        if (srcIdx >= 0.0f && srcIdx < static_cast<float>(activeBands - 1))
+                        {
+                            int idx0 = static_cast<int>(srcIdx);
+                            int idx1 = idx0 + 1;
+                            float frac = srcIdx - static_cast<float>(idx0);
+                            modEnv = modulatorEnvelopes[idx0] * (1.0f - frac) + modulatorEnvelopes[idx1] * frac;
+                        }
+                        else if (srcIdx < 0.0f)
+                        {
+                            if (srcIdx > -1.0f) {
+                                modEnv = modulatorEnvelopes[0] * (1.0f + srcIdx);
+                            }
+                        }
+                        else
+                        {
+                            float overshoot = srcIdx - static_cast<float>(activeBands - 1);
+                            if (overshoot < 1.0f) {
+                                modEnv = modulatorEnvelopes[activeBands - 1] * (1.0f - overshoot);
+                            }
+                        }
+
+                        voiceSumL += y_bp_L_s2 * modEnv;
+                        voiceSumR += y_bp_R_s2 * modEnv;
+                    }
+
+                    sumL += voiceSumL * voiceEnvelopes[v];
+                    sumR += voiceSumR * voiceEnvelopes[v];
                 }
-
-                sumL += voiceSumL * voiceEnvelopes[v];
-                sumR += voiceSumR * voiceEnvelopes[v];
             }
+        }
+        else // LPCMode (16th order voice-parallel LPC synthesis)
+        {
+            __m256 yL = excitationL;
+            __m256 yR = excitationR;
+
+            // 16次のLPC合成フィルタをAVX2で一括実行
+            for (int i = 0; i < 16; ++i)
+            {
+                __m256 coeff = _mm256_load_ps(&state.lpcCoeffs[i][0]);
+                __m256 histL = _mm256_load_ps(&state.lpcHistoryL[i][0]);
+                __m256 histR = _mm256_load_ps(&state.lpcHistoryR[i][0]);
+                
+                yL = _mm256_fnmadd_ps(coeff, histL, yL);
+                yR = _mm256_fnmadd_ps(coeff, histR, yR);
+            }
+
+            // 履歴バッファをシフト
+            for (int i = 15; i > 0; --i)
+            {
+                _mm256_store_ps(&state.lpcHistoryL[i][0], _mm256_load_ps(&state.lpcHistoryL[i - 1][0]));
+                _mm256_store_ps(&state.lpcHistoryR[i][0], _mm256_load_ps(&state.lpcHistoryR[i - 1][0]));
+            }
+            _mm256_store_ps(&state.lpcHistoryL[0][0], yL);
+            _mm256_store_ps(&state.lpcHistoryR[0][0], yR);
+
+            // 音量エンベロープを乗算
+            __m256 outVoiceL = _mm256_mul_ps(yL, envelopes);
+            __m256 outVoiceR = _mm256_mul_ps(yR, envelopes);
+
+            // アクティブボイスにマスク
+            outVoiceL = _mm256_and_ps(outVoiceL, activeVoicesMask);
+            outVoiceR = _mm256_and_ps(outVoiceR, activeVoicesMask);
+
+            // 全ボイスの和を計算
+            sumL = SimdUtils::horizontalSum(outVoiceL);
+            sumR = SimdUtils::horizontalSum(outVoiceR);
         }
 
         __m256 bitMask = _mm256_cmp_ps(activeVoicesMask, _mm256_setzero_ps(), _CMP_GT_OQ);

@@ -7,20 +7,20 @@
 
 ArcDialLookAndFeel::ArcDialLookAndFeel()
 {
-    setColour(juce::Slider::textBoxTextColourId, GUI::ColorPalette::textBody);
+    setColour(juce::Slider::textBoxTextColourId, GUI::ColorPalette::textHeader);
     setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     setColour(juce::ComboBox::backgroundColourId, GUI::ColorPalette::panelBg);
-    setColour(juce::ComboBox::textColourId, GUI::ColorPalette::textBody);
+    setColour(juce::ComboBox::textColourId, GUI::ColorPalette::textHeader);
     setColour(juce::ComboBox::outlineColourId, GUI::ColorPalette::panelBorder);
-    setColour(juce::ComboBox::arrowColourId, GUI::ColorPalette::textMuted);
+    setColour(juce::ComboBox::arrowColourId, GUI::ColorPalette::textBody);
     setColour(juce::PopupMenu::backgroundColourId, GUI::ColorPalette::panelBg);
-    setColour(juce::PopupMenu::textColourId, GUI::ColorPalette::textBody);
-    setColour(juce::PopupMenu::highlightedBackgroundColourId, GUI::ColorPalette::neonPurple.withAlpha(0.3f));
-    setColour(juce::PopupMenu::highlightedTextColourId, GUI::ColorPalette::textBody);
-    setColour(juce::ToggleButton::textColourId, GUI::ColorPalette::textBody);
-    setColour(juce::ToggleButton::tickColourId, GUI::ColorPalette::neonGreen);
+    setColour(juce::PopupMenu::textColourId, GUI::ColorPalette::textHeader);
+    setColour(juce::PopupMenu::highlightedBackgroundColourId, GUI::ColorPalette::lilac.withAlpha(0.3f));
+    setColour(juce::PopupMenu::highlightedTextColourId, GUI::ColorPalette::textHeader);
+    setColour(juce::ToggleButton::textColourId, GUI::ColorPalette::textHeader);
+    setColour(juce::ToggleButton::tickColourId, GUI::ColorPalette::mint);
     setColour(juce::ToggleButton::tickDisabledColourId, GUI::ColorPalette::textMuted);
-    setColour(juce::Label::textColourId, GUI::ColorPalette::textMuted);
+    setColour(juce::Label::textColourId, GUI::ColorPalette::textBody);
 }
 
 void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
@@ -81,7 +81,7 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
     const auto pointerLength = radius * 0.4f;
     p2.addRoundedRectangle(-1.5f, -radius + 1.5f, 3.0f, pointerLength, 1.5f);
     p2.applyTransform(juce::AffineTransform::rotation(angle).translated(centreX, centreY));
-    g.setColour(GUI::ColorPalette::textBody);
+    g.setColour(GUI::ColorPalette::textHeader);
     g.fillPath(p2);
 
     // 5. ライブ変調ドット

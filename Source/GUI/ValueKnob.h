@@ -29,9 +29,9 @@ private:
         editor->setSize(96, 26);
         editor->setJustification(juce::Justification::centred);
         editor->setColour(juce::TextEditor::backgroundColourId, GUI::ColorPalette::panelBg);
-        editor->setColour(juce::TextEditor::textColourId, GUI::ColorPalette::textBody);
+        editor->setColour(juce::TextEditor::textColourId, GUI::ColorPalette::textHeader);
         editor->setColour(juce::TextEditor::outlineColourId, GUI::ColorPalette::panelBorder);
-        editor->setColour(juce::TextEditor::focusedOutlineColourId, GUI::ColorPalette::neonGreen.withAlpha(0.7f));
+        editor->setColour(juce::TextEditor::focusedOutlineColourId, GUI::ColorPalette::mint.withAlpha(0.7f));
         editor->setInputRestrictions(12, "0123456789.-");
         editor->setText(juce::String(getValue(), 3), juce::dontSendNotification);
         editor->setSelectAllWhenFocused(true);

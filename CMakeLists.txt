@@ -68,6 +68,8 @@ target_sources(SPECTRA8 PRIVATE
     Source/GUI/MainPanel.cpp
     Source/GUI/ValueKnob.h
     Source/GUI/GlowToggle.h
+    Source/GUI/BandEditorPanel.h
+    Source/GUI/BandEditorPanel.cpp
 )
 
 # ----------------------------------------------------------------------------

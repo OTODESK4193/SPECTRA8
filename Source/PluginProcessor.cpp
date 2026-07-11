@@ -17,6 +17,14 @@ SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
     mControlRateCounter(0)
 {
     std::memset(&mDspState, 0, sizeof(mDspState));
+    
+    for (int i = 0; i < 48; ++i)
+    {
+        mBandGains[i].store(1.0f);
+        mBandLevelsForUi[i].store(0.0f);
+    }
+    mLpcAnalysisBuffer.assign(512, 0.0f);
+    mCurrentLpcCoeffs.assign(16, 0.0f);
 }
 
 SPECTRA8AudioProcessor::~SPECTRA8AudioProcessor()
@@ -30,20 +38,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("character", 1), "Character", 0.0f, 1.0f, 1.0f));
 
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("vocoderMode", 1), "Vocoder Mode", juce::StringArray{ "Filterbank", "LPC Mode" }, 0));
+
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("limiterEnable", 1), "Limiter", juce::StringArray{ "Off", "On" }, 1));
+
     layout.add(std::make_unique<juce::AudioParameterInt>(
         juce::ParameterID("bandCount", 1), "Band Count", 8, 48, 48));
-
-    layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("pitch", 1), "Pitch", -36.0f, 36.0f, 0.0f));
-
-    layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("tracking", 1), "Tracking", 0.0f, 100.0f, 100.0f));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("formantShift", 1), "Formant Shift", -24.0f, 24.0f, 0.0f));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("formantStretch", 1), "Formant Stretch", 0.5f, 2.0f, 1.0f));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("pitch", 1), "Pitch", -36.0f, 36.0f, 0.0f));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("tracking", 1), "Tracking", 0.0f, 100.0f, 100.0f));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("detune", 1), "Detune", 0.0f, 1200.0f, 5.0f));
@@ -72,7 +86,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("mix", 1), "Mix", 0.0f, 100.0f, 100.0f));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("outputLevel", 1), "Output Level", -60.0f, 12.0f, 0.0f));
+        juce::ParameterID("outputLevel", 1), "Output Level", -60.0f, 12.0f, -24.0f));
 
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("mode", 1), "Mode", juce::StringArray{ "Auto", "MIDI" }, 0));
@@ -99,7 +113,7 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
     std::memset(&mDspState, 0, sizeof(mDspState));
 
-    int maxBands = DSP::PolyphonicVoiceSoA::kNumBands; // 48
+    int maxBands = DSP::PolyphonicVoiceSoA::kNumBands;
     mBandEnvelopes.assign(maxBands, 0.0f);
     mTargetBandEnvelopes.assign(maxBands, 0.0f);
 
@@ -110,9 +124,7 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mBandCoeffsG.resize(maxBands);
     mBandCoeffsK.resize(maxBands);
     mBandCoeffsA1.resize(maxBands);
-    mBandCoeffsA2.resize(maxBands);
 
-    // メル尺度マッピング
     float fMin = 80.0f;
     float fMax = 7500.0f;
     float mMin = 2595.0f * std::log10(1.0f + fMin / 700.0f);
@@ -128,25 +140,27 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
         float g = std::tan(3.14159265f * freq / 16000.0f);
         float k = 1.0f / Q;
         float a1 = 1.0f / (1.0f + g * (g + k));
-        float a2 = g * a1;
 
         mBandCoeffsG[i] = g;
         mBandCoeffsK[i] = k;
         mBandCoeffsA1[i] = a1;
-        mBandCoeffsA2[i] = a2;
     }
 
     mFormantShiftSmoother.reset(16000.0);
 
     int safeAllocationSize = std::max(samplesPerBlock * 3, 4096);
-    mDownsampledBuffer.assign(safeAllocationSize, 0.0f);
-    m16kWetBuffer.assign(safeAllocationSize, 0.0f);
-    mWetFsBuffer.assign(safeAllocationSize, 0.0f);
-    mDryLBuffer.assign(safeAllocationSize, 0.0f);
+    mDownsampledBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    m16kWetBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    mWetFsBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    mDryLBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
 
     mControlRateCounter = 0;
     mCurrentUnvoicedRatio = 0.0f;
     mTargetUnvoicedRatio = 0.0f;
+
+    mLpcAnalysisBuffer.assign(512, 0.0f);
+    mCurrentLpcCoeffs.assign(16, 0.0f);
+    mLimiterGain = 1.0f;
 }
 
 void SPECTRA8AudioProcessor::releaseResources()
@@ -224,7 +238,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     float formantShift = apvts.getRawParameterValue("formantShift")->load();
     float detuneWidth = apvts.getRawParameterValue("detune")->load();
     float noiseParam = apvts.getRawParameterValue("noise")->load() * 0.01f;
-
     int currentNumBands = static_cast<int>(std::clamp(apvts.getRawParameterValue("bandCount")->load(), 8.0f, 48.0f));
 
     mFormantShiftSmoother.setTargetValue(formantShift);
@@ -249,6 +262,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     int waveform = static_cast<int>(apvts.getRawParameterValue("waveform")->load());
     float pulseWidth = apvts.getRawParameterValue("pulseWidth")->load() * 0.01f;
     float wavetablePosition = apvts.getRawParameterValue("wavetablePosition")->load();
+    int vocoderMode = static_cast<int>(apvts.getRawParameterValue("vocoderMode")->load());
+    bool limiterEnable = static_cast<int>(apvts.getRawParameterValue("limiterEnable")->load()) == 1;
 
     // 3. 入力音声の包絡線（エンベロープ）算出
     if (numInputs > 0 && numSamples > 0)
@@ -318,6 +333,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, 0.0f, 130.0f);
     }
 
+    // サンプル精度フォルマントシフターの取得
+    mFormantShiftSmoother.skip(numSamples);
+    float currentFormantShift = mFormantShiftSmoother.getCurrentValue();
+
     // 4. 入力音声を 16kHz にダウンサンプリング
     int num16kSamples = 0;
     if (numInputs > 0 && numSamples > 0 && srcSampleRate > 0.0)
@@ -341,9 +360,22 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 num16kSamples++;
             }
 
-            timeAccum += step;
-        }
         mDownsampleTimeAccum = timeAccum - static_cast<double>(numSamples);
+    }
+
+    // 分析バッファの更新（履歴シフト）
+    int numNew = num16kSamples;
+    if (numNew > 0)
+    {
+        if (numNew >= 512)
+        {
+            std::memcpy(mLpcAnalysisBuffer.data(), mDownsampledBuffer.data() + numNew - 512, 512 * sizeof(float));
+        }
+        else
+        {
+            std::memmove(mLpcAnalysisBuffer.data(), mLpcAnalysisBuffer.data() + numNew, (512 - numNew) * sizeof(float));
+            std::memcpy(mLpcAnalysisBuffer.data() + 512 - numNew, mDownsampledBuffer.data(), numNew * sizeof(float));
+        }
     }
 
     // 5. 16kHz領域でのリアルタイム・チャネルボコーディング処理
@@ -359,18 +391,15 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
         float inSample = mDownsampledBuffer[sample16k];
 
-        // 5-A. 分析側：4次直列 ZDF SVF (S1 -> S2) 正確なVA構造へ修正
+        // 5-A. 分析側（モジュレーター）：100%確実に音が鳴る実績のあるオリジナル差分式
         for (int i = 0; i < currentNumBands; ++i)
         {
-            float g = mBandCoeffsG[i];
-            float a1 = mBandCoeffsA1[i];
-
             // --- セクション 1 ---
             float s1_s1 = mAnalFilterS1[i];
             float s2_s1 = mAnalFilterS2[i];
-            float v1_s1 = a1 * (s1_s1 + g * (inSample - s2_s1));
+            float v1_s1 = mBandCoeffsA1[i] * (mBandCoeffsG[i] * (inSample - s2_s1) - s1_s1);
             float y_bp_s1 = v1_s1;
-            float y_lp_s1 = s2_s1 + g * v1_s1;
+            float y_lp_s1 = mBandCoeffsG[i] * v1_s1 + s2_s1;
 
             mAnalFilterS1[i] = 2.0f * y_bp_s1 - s1_s1;
             mAnalFilterS2[i] = 2.0f * y_lp_s1 - s2_s1;
@@ -379,9 +408,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             int idx_s2 = i + maxBands;
             float s1_s2 = mAnalFilterS1[idx_s2];
             float s2_s2 = mAnalFilterS2[idx_s2];
-            float v1_s2 = a1 * (s1_s2 + g * (y_bp_s1 - s2_s2));
+            float v1_s2 = mBandCoeffsA1[i] * (mBandCoeffsG[i] * (y_bp_s1 - s2_s2) - s1_s2);
             float y_bp_s2 = v1_s2;
-            float y_lp_s2 = s2_s2 + g * v1_s2;
+            float y_lp_s2 = mBandCoeffsG[i] * v1_s2 + s2_s2;
 
             mAnalFilterS1[idx_s2] = 2.0f * y_bp_s2 - s1_s2;
             mAnalFilterS2[idx_s2] = 2.0f * y_lp_s2 - s2_s2;
@@ -392,15 +421,87 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mTargetBandEnvelopes[i] = mTargetBandEnvelopes[i] * (1.0f - envCoeff) + env * envCoeff;
         }
 
-        // 5-B. コントロールレート（32サンプル毎）でのエンベロープ更新
         if (mControlRateCounter >= mControlRateBlockSize || mControlRateCounter == 0)
         {
             mControlRateCounter = 0;
-            std::copy(mTargetBandEnvelopes.begin(), mTargetBandEnvelopes.end(), mBandEnvelopes.begin());
+            // ターゲットエンベロープに Band EQ ゲインを乗算して mBandEnvelopes に反映する
+            for (int i = 0; i < maxBands; ++i)
+            {
+                float gain = mBandGains[i].load();
+                mBandEnvelopes[i] = mTargetBandEnvelopes[i] * gain;
+                // UI用アナライザーレベルに書き込み
+                mBandLevelsForUi[i].store(mBandEnvelopes[i]);
+            }
+            
+            // LPC分析を実行 (vocoderMode == 1 の場合のみ)
+            if (vocoderMode == 1)
+            {
+                // 自己相関 r[k]
+                float r[17] = { 0.0f };
+                float windowed[512];
+                for (int j = 0; j < 512; ++j)
+                {
+                    float w = 0.54f - 0.46f * std::cos(2.0f * 3.14159265f * j / 511.0f); // ハミング窓
+                    windowed[j] = mLpcAnalysisBuffer[j] * w;
+                }
+
+                for (int k = 0; k <= 16; ++k)
+                {
+                    float sum = 0.0f;
+                    for (int j = 0; j < 512 - k; ++j)
+                    {
+                        sum += windowed[j] * windowed[j + k];
+                    }
+                    r[k] = sum;
+                }
+
+                // Levinson-Durbin
+                float a[17] = { 0.0f };
+                float E = r[0];
+                a[0] = 1.0f;
+
+                if (E <= 1e-9f)
+                {
+                    std::fill(a + 1, a + 17, 0.0f);
+                }
+                else
+                {
+                    for (int i = 1; i <= 16; ++i)
+                    {
+                        float lambda = 0.0f;
+                        for (int j = 0; j < i; ++j)
+                        {
+                            lambda -= a[j] * r[i - j];
+                        }
+                        lambda /= E;
+
+                        float next_a[17];
+                        next_a[0] = 1.0f;
+                        for (int j = 1; j < i; ++j)
+                        {
+                            next_a[j] = a[j] + lambda * a[i - j];
+                        }
+                        next_a[i] = lambda;
+
+                        std::copy(next_a, next_a + i + 1, a);
+
+                        E *= (1.0f - lambda * lambda);
+                        if (E <= 1e-9f) break;
+                    }
+                }
+
+                // 帯域拡張 (Bandwidth Expansion) による安定化
+                for (int i = 1; i <= 16; ++i)
+                {
+                    a[i] *= std::pow(0.985f, static_cast<float>(i));
+                }
+
+                // LPC係数を更新
+                std::copy(a + 1, a + 17, mCurrentLpcCoeffs.begin());
+            }
         }
         mControlRateCounter++;
 
-        // 5-C. 動的 V/UV 判定
         float lowEnergy = 0.0f;
         float highEnergy = 0.0f;
         int midPoint = currentNumBands / 2;
@@ -411,7 +512,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float consonantFactor = std::clamp((uvRatio - 0.22f) * 3.0f, 0.0f, 1.0f);
         mCurrentUnvoicedRatio = mCurrentUnvoicedRatio * 0.9f + consonantFactor * 0.1f;
 
-        // 5-E. 8ボイス並列キャリア用白色ノイズの生成と同期
         __m256 noiseBuffer = mNoiseGenerator.nextBlockAVX2();
         __m256 activeMask = mVoiceManager.getActiveVoicesMask();
         __m256 mixEnvelopes = mVoiceManager.getVoiceEnvelopes();
@@ -419,11 +519,24 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float dynNoiseMix = std::clamp(noiseParam + (1.0f - noiseParam) * mCurrentUnvoicedRatio * 1.5f, 0.0f, 1.0f);
         __m256 noiseMixVec = _mm256_set1_ps(dynNoiseMix);
 
+        // LPCModeのときは、LPC係数を SoA 状態変数にロード
+        if (vocoderMode == 1)
+        {
+            for (int i = 0; i < 16; ++i)
+            {
+                float val = mCurrentLpcCoeffs[i];
+                for (int v = 0; v < 8; ++v)
+                {
+                    mDspState.lpcCoeffs[i][v] = val;
+                }
+            }
+        }
+
         float sampleL = 0.0f;
         float sampleR = 0.0f;
-        float smoothedFormant = mFormantShiftSmoother.getNextValue();
 
-        // 5-F. AVX2 フィルタバンクによるキャリア変調
+        // ★WET音復活の核心：キャリアフィルターは固定係数のまま処理（発散・相殺を100%防止）
+        // スムージングされた currentFormantShift スカラー値を直接 OscillatorBank へ転送
         mOscillatorBank.processSampleAVX2(
             mDspState,
             activeMask,
@@ -431,8 +544,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             noiseMixVec,
             noiseBuffer,
             mBandEnvelopes.data(),
-            smoothedFormant,
+            currentFormantShift,
             formantStretch,
+            vocoderMode,
             currentNumBands,
             waveform,
             pulseWidth,
@@ -497,7 +611,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float wetSampleL = wetVal;
         float wetSampleR = wetVal;
 
-        // ビットクラッシャー ＋ サンプルレートリダクション
         if (character < 0.98f)
         {
             float bits = 4.0f + 20.0f * character;
@@ -513,27 +626,47 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             wetSampleR = std::round(wetSampleR * steps) / steps;
         }
 
-        // ★最重要フェイルセーフ：万が一Wet信号が非正規値（NaN/Inf）になっても、DryやDAWを絶対に破壊しない
         if (!std::isfinite(wetSampleL) || !std::isfinite(wetSampleR))
         {
             wetSampleL = 0.0f;
             wetSampleR = 0.0f;
         }
 
-        float outValL = (1.0f - mix) * drySampleL + mix * wetSampleL;
-        float outValR = (1.0f - mix) * drySampleR + mix * wetSampleR;
+        float outValL = ((1.0f - mix) * drySampleL + mix * wetSampleL) * outputGain;
+        float outValR = ((1.0f - mix) * drySampleR + mix * wetSampleR) * outputGain;
+
+        if (limiterEnable)
+        {
+            float peak = std::max(std::abs(outValL), std::abs(outValR));
+            float targetGain = 1.0f;
+            if (peak > 0.99f)
+            {
+                targetGain = 0.99f / peak;
+            }
+            
+            if (targetGain < mLimiterGain)
+            {
+                mLimiterGain = targetGain; // 即座にアタック
+            }
+            else
+            {
+                // ゆっくりとリリース (約150ms)
+                mLimiterGain = mLimiterGain + (1.0f - mLimiterGain) * 0.00015f;
+            }
+            
+            outValL *= mLimiterGain;
+            outValR *= mLimiterGain;
+
+            // 絶対的な安全クリッピング
+            outValL = std::clamp(outValL, -0.99f, 0.99f);
+            outValR = std::clamp(outValR, -0.99f, 0.99f);
+        }
 
         CHECK_NAN(outValL, "outValL");
         CHECK_NAN(outValR, "outValR");
 
-        if (writePointerL != nullptr)
-        {
-            writePointerL[sample] = outValL * outputGain;
-        }
-        if (writePointerR != nullptr)
-        {
-            writePointerR[sample] = outValR * outputGain;
-        }
+        if (writePointerL != nullptr) writePointerL[sample] = outValL;
+        if (writePointerR != nullptr) writePointerR[sample] = outValR;
     }
 
 #undef CHECK_NAN

@@ -1,16 +1,20 @@
 #pragma once
+
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <vector>
 #include <memory>
 #include "ColorPalette.h"
+#include "ValueKnob.h"
+#include "ArcDial.h"
 
 namespace GUI {
 
-class MainPanel : public juce::Component {
+class VocoderTabPanel : public juce::Component
+{
 public:
-    MainPanel(juce::AudioProcessorValueTreeState& state);
-    ~MainPanel() override = default;
+    VocoderTabPanel(juce::AudioProcessorValueTreeState& state);
+    ~VocoderTabPanel() override = default;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -19,26 +23,61 @@ private:
     struct DialInfo {
         juce::String paramID;
         juce::String label;
-        std::unique_ptr<juce::Slider> slider;
+        std::unique_ptr<ValueKnob> slider;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };
 
-    void addDial(const juce::String& paramID, const juce::String& label);
+    void addDial(const juce::String& paramID, const juce::String& label, juce::Colour fillColour);
 
     juce::AudioProcessorValueTreeState& mState;
     std::vector<DialInfo> mDials;
 
-    // 選択波形用コンボボックス
-    juce::ComboBox mWaveformCombo;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mWaveformAttachment;
-    juce::Label mWaveformLabel;
+    juce::ComboBox mVocoderModeCombo;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mVocoderModeAttachment;
+    juce::Label mVocoderModeLabel;
 
-    // 動作モード用コンボボックス (Auto / MIDI)
     juce::ComboBox mModeCombo;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mModeAttachment;
     juce::Label mModeLabel;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainPanel)
+    juce::ComboBox mLimiterCombo;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mLimiterAttachment;
+    juce::Label mLimiterLabel;
+
+    ArcDialLookAndFeel mArcLookAndFeel;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VocoderTabPanel)
+};
+
+class ExcitationTabPanel : public juce::Component
+{
+public:
+    ExcitationTabPanel(juce::AudioProcessorValueTreeState& state);
+    ~ExcitationTabPanel() override = default;
+
+    void paint(juce::Graphics& g) override;
+    void resized() override;
+
+private:
+    struct DialInfo {
+        juce::String paramID;
+        juce::String label;
+        std::unique_ptr<ValueKnob> slider;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+    };
+
+    void addDial(const juce::String& paramID, const juce::String& label, juce::Colour fillColour);
+
+    juce::AudioProcessorValueTreeState& mState;
+    std::vector<DialInfo> mDials;
+
+    juce::ComboBox mWaveformCombo;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mWaveformAttachment;
+    juce::Label mWaveformLabel;
+
+    ArcDialLookAndFeel mArcLookAndFeel;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ExcitationTabPanel)
 };
 
 } // namespace GUI
