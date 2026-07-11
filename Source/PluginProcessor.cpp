@@ -10,7 +10,7 @@ SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
       mMidiQueue(1024),
       mDspState(),
       mAnalysisHopSize(100),
-      mAnalysisWindowSize(400),
+      mAnalysisWindowSize(1024),
       mControlRateBlockSize(32),
       mControlRateCounter(0),
       mInterpolationBeta(0.0f),
@@ -198,6 +198,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     float detuneWidth = apvts.getRawParameterValue("detune")->load();
     float noiseParam = apvts.getRawParameterValue("noise")->load() * 0.01f; // 0.0f 〜 1.0f
 
+    float pitchTranspose = apvts.getRawParameterValue("pitch")->load();
+    float tracking = apvts.getRawParameterValue("tracking")->load() * 0.01f;
+
     float attack = apvts.getRawParameterValue("attack")->load();
     float decay = apvts.getRawParameterValue("decay")->load();
     float sustain = apvts.getRawParameterValue("sustain")->load();
@@ -234,8 +237,13 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         {
             mVoiceManager.setVoiceActive(i, false);
         }
-        mVoiceManager.setVoiceFrequency(0, mCurrentF0);
-        mVoiceManager.setVoiceEnvelope(0, std::min(1.0f, mInputEnvelope * 4.0f));
+        
+        float baseF0 = 150.0f; // C3ベースのデフォルトピッチ
+        float freq0 = baseF0 + (mCurrentF0 - baseF0) * tracking;
+        float finalF0 = freq0 * std::pow(2.0f, pitchTranspose / 12.0f);
+
+        mVoiceManager.setVoiceFrequency(0, finalF0);
+        mVoiceManager.setVoiceEnvelope(0, 1.0f);
     }
 
     // 4. 入力音声を 16kHz にダウンサンプリング (分析パス)
@@ -354,8 +362,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mControlRateCounter++;
 
         // 6-D. ボイス状態の更新 (ADSRエンベロープなど)
-        mVoiceManager.updateVoices(attack, decay, sustain, release);
-        mVoiceManager.syncToDspState(mDspState, detuneWidth);
+        if (mMidiActiveMode)
+        {
+            mVoiceManager.updateVoices(attack, decay, sustain, release);
+        }
+        mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, tracking, mCurrentF0);
 
         // 6-E. 8ボイス並列用白色ノイズの生成
         __m256 noiseBuffer = mNoiseGenerator.nextBlockAVX2();
@@ -368,7 +379,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         __m256 mixEnvelopes = mVoiceManager.getVoiceEnvelopes(); // 各ボイスのエンベロープ
         __m256 noiseMixVec = _mm256_set1_ps(noiseParam); // 有声無声パラメータ
 
-        mOscillatorBank.processSampleAVX2(mDspState, activeMask, noiseMixVec, noiseBuffer, sampleL, sampleR);
+        mOscillatorBank.processSampleAVX2(mDspState, activeMask, mixEnvelopes, noiseMixVec, noiseBuffer, sampleL, sampleR);
 
         // 各ボイスの音量およびグローバルゲイン、LPC合成後のスケーリングを適用
         // LPC残差エネルギーに基づき、ゲインを調整

@@ -51,6 +51,7 @@ void OscillatorBank::generateWavetables()
 
 void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
                                        __m256 activeVoicesMask,
+                                       __m256 envelopes,
                                        __m256 noiseMix,
                                        __m256 noiseBuffer,
                                        float& outL,
@@ -103,6 +104,10 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
     __m256 oneMinusNoiseMix = _mm256_sub_ps(_mm256_set1_ps(1.0f), noiseMix);
     __m256 excitationL = _mm256_fmadd_ps(oneMinusNoiseMix, oscL, _mm256_mul_ps(noiseMix, noiseBuffer));
     __m256 excitationR = _mm256_fmadd_ps(oneMinusNoiseMix, oscR, _mm256_mul_ps(noiseMix, noiseBuffer));
+
+    // 各ボイスの音量エンベロープを適用
+    excitationL = _mm256_mul_ps(excitationL, envelopes);
+    excitationR = _mm256_mul_ps(excitationR, envelopes);
 
 
     // 4. LPC合成IIRフィルタリング (24次のループ)

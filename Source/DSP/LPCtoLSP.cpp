@@ -159,7 +159,11 @@ bool LPCtoLSP::convert(const std::vector<float>& lpcCoeffs, std::vector<float>& 
             }
 
             // 見つかった根を保存
-            xRoot = std::clamp(xRoot, -1.0f, 1.0f);
+            if (std::isnan(xRoot))
+            {
+                xRoot = x + dx * 0.5f;
+            }
+            xRoot = std::clamp(xRoot, -0.999f, 0.999f);
             lspCoeffs.push_back(xRoot);
             rootsFound++;
 

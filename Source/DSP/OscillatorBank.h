@@ -21,6 +21,7 @@ public:
     // outR: 出力される右チャンネル混合結果 (スカラー)
     void processSampleAVX2(PolyphonicVoiceSoA& state,
                             __m256 activeVoicesMask,
+                            __m256 envelopes,
                             __m256 noiseMix,
                             __m256 noiseBuffer,
                             float& outL,

@@ -80,7 +80,7 @@ void MultiRateMapper::mapLSF(const std::vector<float>& lsp16k, int order16k, std
     {
         // 降順 LSP根 を 昇順 LSF角度 に変換
         float x = lsp16k[i];
-        float omega16k = std::acos(x);
+        float omega16k = std::acos(std::clamp(x, -0.999f, 0.999f));
         
         // Fs空間にリマッピング: w_Fs = w_16k * (16k / Fs)
         float omegaFs = omega16k * scaleRatio;

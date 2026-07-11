@@ -22,7 +22,7 @@ public:
     void updateVoices(float attackTime, float decayTime, float sustainLevel, float releaseTime);
 
     // SoAのデータをAVX2レンダリング用構造体に書き出す（同期）
-    void syncToDspState(PolyphonicVoiceSoA& dspState, float detuneWidthCents);
+    void syncToDspState(PolyphonicVoiceSoA& dspState, float detuneWidthCents, float pitchTranspose, float tracking, float currentF0);
 
     // オートモード用：特定のボイスの状態を直接書き換える
     void setVoiceActive(int voiceIdx, bool active);

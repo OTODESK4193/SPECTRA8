@@ -17,7 +17,7 @@ public:
 
     void setup(double sampleRate)
     {
-        mSampleRate = sampleRate;
+        mSampleRate = std::max(8000.0, sampleRate); // 最小 8kHz 保証
         mSampleCounter = 0.0;
         mLastSampleL = 0.0f;
         mLastSampleR = 0.0f;
@@ -29,15 +29,26 @@ public:
         character = std::clamp(character, 0.0f, 1.0f);
 
         // 1. 実効サンプリングレート低減 (エイリアシング効果)
-        // character=0 のとき 8kHz、character=1 のときホストサンプリングレートに連続可変
         double minRate = 8000.0;
         double targetRate = minRate + (mSampleRate - minRate) * static_cast<double>(character * character);
+        targetRate = std::max(minRate, targetRate);
+        
         double sampleInterval = mSampleRate / targetRate;
+        sampleInterval = std::max(1.0, sampleInterval); // 1.0サンプル未満にならないようガード
+
+        if (std::isnan(mSampleCounter))
+        {
+            mSampleCounter = 0.0;
+        }
 
         mSampleCounter += 1.0;
         if (mSampleCounter >= sampleInterval)
         {
             mSampleCounter = std::fmod(mSampleCounter, sampleInterval);
+            if (std::isnan(mSampleCounter))
+            {
+                mSampleCounter = 0.0;
+            }
             mLastSampleL = sampleL;
             mLastSampleR = sampleR;
         }
@@ -49,8 +60,6 @@ public:
         }
 
         // 2. ビットクラッシュ (量子化ノイズ)
-        // character=0 で 4ビット、character=1 で 32ビット(浮動小数点)
-        // character >= 0.95f のときは音質優先でビットクラッシュをスキップ
         if (character < 0.95f)
         {
             float bits = 4.0f + 24.0f * (character * character); // 4bit 〜 28bit

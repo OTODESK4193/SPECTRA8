@@ -169,9 +169,8 @@ void TrueEnvelope::estimate(const float* windowedFrame, int windowSize, float f0
         for (int k = 1; k < mFftSize / 2; ++k)
         {
             float re = mFftBuffer[2 * k];
-            float im = mFftBuffer[2 * k + 1];
-            mLogEnvelope[k] = std::sqrt(re * re + im * im);
-            mLogEnvelope[mFftSize - k] = mLogEnvelope[k];
+            mLogEnvelope[k] = re;
+            mLogEnvelope[mFftSize - k] = re;
         }
 
         // 収束判定

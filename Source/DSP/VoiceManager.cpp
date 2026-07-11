@@ -240,15 +240,19 @@ void VoiceManager::updateVoices(float attackTime, float decayTime, float sustain
     }
 }
 
-void VoiceManager::syncToDspState(PolyphonicVoiceSoA& dspState, float detuneWidthCents)
+void VoiceManager::syncToDspState(PolyphonicVoiceSoA& dspState, float detuneWidthCents, float pitchTranspose, float tracking, float currentF0)
 {
     // ノートに基づく位相増分の算出
     for (int i = 0; i < 8; ++i)
     {
         if (mActiveStates[i] == 1.0f)
         {
-            // 周波数計算: f = 440 * 2^((note - 69) / 12)
-            float freq0 = 440.0f * std::pow(2.0f, (mVoiceBlock.noteNo[i] - 69.0f) / 12.0f);
+            // MIDIノート+トランスポーズから周波数を算出
+            float freqMidi = 440.0f * std::pow(2.0f, ((mVoiceBlock.noteNo[i] + pitchTranspose) - 69.0f) / 12.0f);
+            
+            // tracking パラメータに基づき、MIDIピッチと入力音声ピッチの間でブレンド
+            // (1.0 = 完全入力ピッチ追従、0.0 = 完全MIDIピッチ固定)
+            float freq0 = freqMidi + (currentF0 - freqMidi) * tracking;
             
             // WidthとTriggerRandomによる左右デチューン幅
             float detuneVal = detuneWidthCents + mVoiceBlock.triggerRand[i] * 10.0f; // 僅かなバラツキを加える
