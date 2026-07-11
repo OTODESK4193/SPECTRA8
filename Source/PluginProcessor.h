@@ -111,5 +111,7 @@ private:
     float mInputEnvelope = 0.0f;
     float mCurrentF0 = 150.0f;
 
+    std::unique_ptr<juce::dsp::FFT> mAnalysisFft; // オーディオコールバック内でのメモリ確保を防ぐためメンバ化
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessor)
 };

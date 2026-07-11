@@ -17,6 +17,7 @@ SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
       mCurrentGain(0.0f),
       mTargetGain(0.0f)
 {
+    mAnalysisFft = std::make_unique<juce::dsp::FFT>(10);
 }
 
 SPECTRA8AudioProcessor::~SPECTRA8AudioProcessor()
@@ -257,10 +258,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     // 5. 16kHz領域でのホップごとのLPC/TrueEnvelope分析
     // frameRateが0%の場合は前回のフレームを「フリーズ」する
-    if (frameRate > 0.0f && mAnalysisInputBuffer.size() >= static_cast<size_t>(mAnalysisHopSize))
+    if (frameRate > 0.0f && mAnalysisInputBuffer.size() >= static_cast<size_t>(mAnalysisWindowSize))
     {
         // 簡易ホップレート制御 (frameRateが低い場合は一部の分析ホップをスキップして負荷を軽減可能)
-        while (mAnalysisInputBuffer.size() >= static_cast<size_t>(mAnalysisHopSize))
+        while (mAnalysisInputBuffer.size() >= static_cast<size_t>(mAnalysisWindowSize))
         {
             // 分析フレームの構築
             std::fill(mAnalysisFrame.begin(), mAnalysisFrame.end(), 0.0f);
@@ -282,9 +283,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             std::vector<float> fftBuffer(2048, 0.0f);
             std::copy(mAnalysisFrame.begin(), mAnalysisFrame.end(), fftBuffer.begin());
             
-            // FFT実行
-            juce::dsp::FFT analysisFft(10); // 1024
-            analysisFft.performRealOnlyForwardTransform(fftBuffer.data());
+            // FFT実行 (コールバック内でのインスタンス生成を排除)
+            mAnalysisFft->performRealOnlyForwardTransform(fftBuffer.data());
             
             std::vector<float> powerSpectrum(513, 0.0f);
             powerSpectrum[0] = fftBuffer[0] * fftBuffer[0];
