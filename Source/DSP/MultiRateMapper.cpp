@@ -77,67 +77,82 @@ void MultiRateMapper::mapLSF(const std::vector<float>& lsp16k, int order16k, std
     // lspFs は targetOrder (24次) のサイズにする
     lspFs.resize(targetOrder);
 
-    // 1. 16kHz LSP を角度 (LSF) に変換し、ホストサンプリングレート Fs の角度空間に射影
-    std::vector<float> mappedLsfs;
-    mappedLsfs.reserve(targetOrder);
+    int M_src = order16k / 2;
+    int M_tgt = targetOrder / 2;
+    int numDummyM = M_tgt - M_src;
 
     float scaleRatio = 16000.0f / static_cast<float>(mNativeSampleRate);
 
-    for (int i = 0; i < order16k; ++i)
+    std::vector<float> lsfsP;
+    std::vector<float> lsfsQ;
+    lsfsP.reserve(M_tgt);
+    lsfsQ.reserve(M_tgt);
+
+    // 1. 元のLSPをPとQに分離し、角度ドメインに変換してFs空間にスケール
+    for (int i = 0; i < M_src; ++i)
     {
-        // 降順 LSP根 を 昇順 LSF角度 に変換
-        float x = lsp16k[i];
-        float omega16k = std::acos(std::clamp(x, -0.999f, 0.999f));
-        
-        // Fs空間にリマッピング: w_Fs = w_16k * (16k / Fs)
-        float omegaFs = omega16k * scaleRatio;
-        mappedLsfs.push_back(omegaFs);
+        float xP = lsp16k[2 * i];
+        float xQ = lsp16k[2 * i + 1];
+
+        lsfsP.push_back(std::acos(std::clamp(xP, -0.999f, 0.999f)) * scaleRatio);
+        lsfsQ.push_back(std::acos(std::clamp(xQ, -0.999f, 0.999f)) * scaleRatio);
     }
 
-    // 2. 8000Hz から Fs/2 (ナイキスト) までの高域帯域にダミー根を合成
-    int numDummyRoots = targetOrder - order16k;
-    if (numDummyRoots > 0)
+    // 2. 高域ダミー極を追加 (PとQが交互になるようにずらして配置)
+    if (numDummyM > 0)
     {
-        // 8000Hz 以上のホストSRでの角度
-        float omegaStart = 3.14159265f * scaleRatio; // 8kHz/Nyquist_16k = pi * 16k/Fs
-        float omegaEnd = 3.14159265f; // ナイキスト (Fs/2)
-        
-        for (int k = 0; k < numDummyRoots; ++k)
+        float omegaStart = 3.14159265f * scaleRatio;
+        float omegaEnd = 3.14159265f;
+        float step = (omegaEnd - omegaStart) / static_cast<float>(numDummyM);
+
+        for (int k = 0; k < numDummyM; ++k)
         {
-            float frac = static_cast<float>(k + 1) / static_cast<float>(numDummyRoots + 1);
-            float dummyOmega = omegaStart + frac * (omegaEnd - omegaStart);
-            mappedLsfs.push_back(dummyOmega);
+            // Pのダミーは区間の前半、Qのダミーは後半に配置して交互性を保つ
+            float pOmega = omegaStart + (static_cast<float>(k) + 0.25f) * step;
+            float qOmega = omegaStart + (static_cast<float>(k) + 0.75f) * step;
+
+            lsfsP.push_back(pOmega);
+            lsfsQ.push_back(qOmega);
         }
     }
 
-    // 3. 全てのLSF角度をソートして交互配置を保証
-    std::sort(mappedLsfs.begin(), mappedLsfs.end());
+    // 3. それぞれソート
+    std::sort(lsfsP.begin(), lsfsP.end());
+    std::sort(lsfsQ.begin(), lsfsQ.end());
 
-    // LSFガードバンド適用 (隣り合う極の近接防止)
-    float minDistance = 0.05f * 3.14159265f / static_cast<float>(targetOrder + 1);
+    // 4. 交互にマージして単一の配列にする
+    std::vector<float> mergedLsfs(targetOrder);
+    for (int i = 0; i < M_tgt; ++i)
+    {
+        mergedLsfs[2 * i] = lsfsP[i];
+        mergedLsfs[2 * i + 1] = lsfsQ[i];
+    }
+
+    // 5. ガードバンドの適用 (PとQの交互関係を崩さないように全体を微調整)
+    float minDistance = 0.25f * 3.14159265f / static_cast<float>(targetOrder + 1);
     
+    // Pが常にQよりわずかに小さいため、全体ソートをしても交互性は維持されます
+    std::sort(mergedLsfs.begin(), mergedLsfs.end());
+
     // 前進パス
-    mappedLsfs[0] = std::max(mappedLsfs[0], minDistance);
+    mergedLsfs[0] = std::max(mergedLsfs[0], minDistance);
     for (int i = 1; i < targetOrder; ++i)
     {
-        mappedLsfs[i] = std::max(mappedLsfs[i], mappedLsfs[i - 1] + minDistance);
+        mergedLsfs[i] = std::max(mergedLsfs[i], mergedLsfs[i - 1] + minDistance);
     }
 
     // 後退パス
-    mappedLsfs[targetOrder - 1] = std::min(mappedLsfs[targetOrder - 1], 3.14159265f - minDistance);
+    mergedLsfs[targetOrder - 1] = std::min(mergedLsfs[targetOrder - 1], 3.14159265f - minDistance);
     for (int i = targetOrder - 2; i >= 0; --i)
     {
-        mappedLsfs[i] = std::min(mappedLsfs[i], mappedLsfs[i + 1] - minDistance);
+        mergedLsfs[i] = std::min(mergedLsfs[i], mergedLsfs[i + 1] - minDistance);
     }
 
-    // 4. 余弦ドメイン (LSP) に逆変換 (角度昇順なので、cosは降順になる)
+    // 6. 余弦ドメイン (LSP) に逆変換 (角度昇順なので、cosは降順になる)
     for (int i = 0; i < targetOrder; ++i)
     {
-        lspFs[i] = std::cos(mappedLsfs[i]);
+        lspFs[i] = std::cos(mergedLsfs[i]);
     }
-    
-    // 安全のため降順ソートを確認
-    std::sort(lspFs.begin(), lspFs.end(), std::greater<float>());
 }
 
 } // namespace DSP

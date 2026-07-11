@@ -12,67 +12,84 @@ void FormantShifter::process(const std::vector<float>& lspCoeffs,
 {
     shiftedLsp.resize(order);
 
-    // 1. 双一次共形写像によるシフティング (余弦ドメインで直接実行、超越関数不使用)
-    // x' = ((1 + a^2)*x - 2a) / (1 + a^2 - 2a*x)
+    int M = order / 2;
     float alpha = std::clamp(shift, -0.9f, 0.9f); // 極端な変形を防ぐために制限
     float alphaSq = alpha * alpha;
     float onePlusAlphaSq = 1.0f + alphaSq;
     float twoAlpha = 2.0f * alpha;
 
-    std::vector<float> tempLsp(order);
-    for (int i = 0; i < order; ++i)
+    std::vector<float> lsfsP;
+    std::vector<float> lsfsQ;
+    lsfsP.reserve(M);
+    lsfsQ.reserve(M);
+
+    // 1. P極 と Q極 を分離し、双一次写像によるワープを適用
+    for (int i = 0; i < M; ++i)
     {
-        float x = lspCoeffs[i];
-        float numerator = onePlusAlphaSq * x - twoAlpha;
-        float denominator = onePlusAlphaSq - twoAlpha * x;
-        if (std::abs(denominator) > 1e-5f)
-        {
-            tempLsp[i] = numerator / denominator;
-        }
-        else
-        {
-            tempLsp[i] = x;
-        }
-        tempLsp[i] = std::clamp(tempLsp[i], -0.999f, 0.999f);
+        float xP = lspCoeffs[2 * i];
+        float xQ = lspCoeffs[2 * i + 1];
+
+        // Warping P
+        float numP = onePlusAlphaSq * xP - twoAlpha;
+        float denP = onePlusAlphaSq - twoAlpha * xP;
+        float tempP = (std::abs(denP) > 1e-5f) ? numP / denP : xP;
+        tempP = std::clamp(tempP, -0.999f, 0.999f);
+        lsfsP.push_back(std::acos(tempP));
+
+        // Warping Q
+        float numQ = onePlusAlphaSq * xQ - twoAlpha;
+        float denQ = onePlusAlphaSq - twoAlpha * xQ;
+        float tempQ = (std::abs(denQ) > 1e-5f) ? numQ / denQ : xQ;
+        tempQ = std::clamp(tempQ, -0.999f, 0.999f);
+        lsfsQ.push_back(std::acos(tempQ));
     }
 
-    // 2. 角度ドメイン (LSF) への変換
-    std::vector<float> lsfs(order);
-    float sumOmega = 0.0f;
-    for (int i = 0; i < order; ++i)
-    {
-        // tempLspは降順なので、acosによって得られるlsfs(角度)は昇順になる
-        lsfs[i] = std::acos(tempLsp[i]);
-        sumOmega += lsfs[i];
-    }
-
-    // 3. アフィン変換によるフォルマントのストレッチ/スクィーズ
-    // w' = mean + sigma * (w - mean)
+    // 2. アフィン変換によるフォルマントのストレッチ/スクィーズ (P極とQ極を個別に適用)
     if (std::abs(stretch - 1.0f) > 1e-4f)
     {
-        float meanOmega = sumOmega / static_cast<float>(order);
-        for (int i = 0; i < order; ++i)
+        // P極の平均とストレッチ
+        float sumP = 0.0f;
+        for (float val : lsfsP) sumP += val;
+        float meanP = sumP / static_cast<float>(M);
+        for (int i = 0; i < M; ++i)
         {
-            lsfs[i] = meanOmega + stretch * (lsfs[i] - meanOmega);
-            lsfs[i] = std::clamp(lsfs[i], 0.001f, 3.1415f);
+            lsfsP[i] = meanP + stretch * (lsfsP[i] - meanP);
+            lsfsP[i] = std::clamp(lsfsP[i], 0.001f, 3.1415f);
         }
-        // 角度ドメインのソートを維持
-        std::sort(lsfs.begin(), lsfs.end());
+
+        // Q極の平均とストレッチ
+        float sumQ = 0.0f;
+        for (float val : lsfsQ) sumQ += val;
+        float meanQ = sumQ / static_cast<float>(M);
+        for (int i = 0; i < M; ++i)
+        {
+            lsfsQ[i] = meanQ + stretch * (lsfsQ[i] - meanQ);
+            lsfsQ[i] = std::clamp(lsfsQ[i], 0.001f, 3.1415f);
+        }
     }
 
-    // 4. LSFガードバンドの適用によるフィルタ安定化
-    float minDistance = 0.05f * 3.14159265f / static_cast<float>(order + 1);
+    // 3. それぞれ個別にソートして順序を保証
+    std::sort(lsfsP.begin(), lsfsP.end());
+    std::sort(lsfsQ.begin(), lsfsQ.end());
+
+    // 4. 交互にマージして交互配置を100%保証
+    std::vector<float> lsfs(order);
+    for (int i = 0; i < M; ++i)
+    {
+        lsfs[2 * i] = lsfsP[i];
+        lsfs[2 * i + 1] = lsfsQ[i];
+    }
+
+    // 5. LSFガードバンドの適用によるフィルタ安定化 (PとQの交互関係を崩さないように全体ソート)
+    float minDistance = 0.25f * 3.14159265f / static_cast<float>(order + 1);
+    std::sort(lsfs.begin(), lsfs.end()); // PとQは交互に並んでいるため、全体ソートしても関係は維持されます
     applyGuardBand(lsfs, minDistance, order);
 
-    // 5. 余弦ドメイン (LSP) に逆変換
+    // 6. 余弦ドメイン (LSP) に逆変換 (角度昇順なので、cosは降順になる)
     for (int i = 0; i < order; ++i)
     {
-        // 角度 lsfs は昇順なので、cos変換された shiftedLsp は降順になる
         shiftedLsp[i] = std::cos(lsfs[i]);
     }
-    
-    // 安全のため降順ソートを確認
-    std::sort(shiftedLsp.begin(), shiftedLsp.end(), std::greater<float>());
 }
 
 void FormantShifter::applyGuardBand(std::vector<float>& lsfs, float minDistance, int order)

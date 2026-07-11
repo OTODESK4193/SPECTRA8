@@ -62,37 +62,35 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
 
     // 1. LEFT オシレーター波形生成 (Wavetable補間)
     __m256 phaseL_vec = _mm256_load_ps(state.phaseL);
-    __m256i idx0_L = _mm256_cvttps_epi32(phaseL_vec);
-    __m256i idx1_L = _mm256_add_epi32(idx0_L, _mm256_set1_epi32(1));
+    __m256i idx0_L_raw = _mm256_cvttps_epi32(phaseL_vec);
+    __m256 idx0_L_float = _mm256_cvtepi32_ps(idx0_L_raw);
+    __m256 t_L = _mm256_sub_ps(phaseL_vec, idx0_L_float);
 
     __m256i maskVec = _mm256_set1_epi32(PolyphonicVoiceSoA::kWaveTableMask);
-    idx0_L = _mm256_and_si256(idx0_L, maskVec);
+    __m256i idx0_L = _mm256_and_si256(idx0_L_raw, maskVec);
+    __m256i idx1_L = _mm256_add_epi32(idx0_L, _mm256_set1_epi32(1));
     idx1_L = _mm256_and_si256(idx1_L, maskVec);
 
     __m256 y0_L = _mm256_i32gather_ps(tablePtrSaw, idx0_L, 4);
     __m256 y1_L = _mm256_i32gather_ps(tablePtrSaw, idx1_L, 4);
-
-    __m256 idx0_L_float = _mm256_cvtepi32_ps(idx0_L);
-    __m256 t_L = _mm256_sub_ps(phaseL_vec, idx0_L_float);
 
     // FMA補間: out_L = y0_L * (1 - t_L) + y1_L * t_L
     __m256 tmp_L = _mm256_fnmadd_ps(t_L, y0_L, y0_L);
     __m256 oscL = _mm256_fmadd_ps(t_L, y1_L, tmp_L);
 
 
-    // 2. RIGHT オシレーター波形生成 (Wavetable補間)
+    // 2. RIGHT オシレーター波生成 (Wavetable補間)
     __m256 phaseR_vec = _mm256_load_ps(state.phaseR);
-    __m256i idx0_R = _mm256_cvttps_epi32(phaseR_vec);
-    __m256i idx1_R = _mm256_add_epi32(idx0_R, _mm256_set1_epi32(1));
+    __m256i idx0_R_raw = _mm256_cvttps_epi32(phaseR_vec);
+    __m256 idx0_R_float = _mm256_cvtepi32_ps(idx0_R_raw);
+    __m256 t_R = _mm256_sub_ps(phaseR_vec, idx0_R_float);
 
-    idx0_R = _mm256_and_si256(idx0_R, maskVec);
+    __m256i idx0_R = _mm256_and_si256(idx0_R_raw, maskVec);
+    __m256i idx1_R = _mm256_add_epi32(idx0_R, _mm256_set1_epi32(1));
     idx1_R = _mm256_and_si256(idx1_R, maskVec);
 
     __m256 y0_R = _mm256_i32gather_ps(tablePtrSaw, idx0_R, 4);
     __m256 y1_R = _mm256_i32gather_ps(tablePtrSaw, idx1_R, 4);
-
-    __m256 idx0_R_float = _mm256_cvtepi32_ps(idx0_R);
-    __m256 t_R = _mm256_sub_ps(phaseR_vec, idx0_R_float);
 
     // FMA補間
     __m256 tmp_R = _mm256_fnmadd_ps(t_R, y0_R, y0_R);
@@ -134,9 +132,10 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
         yR_sum = _mm256_fnmadd_ps(coeffR, histR, yR_sum);
     }
 
-    // 5. ボイス有効無効マスクの適用
-    yL_sum = _mm256_mul_ps(yL_sum, activeVoicesMask);
-    yR_sum = _mm256_mul_ps(yR_sum, activeVoicesMask);
+    // 5. ボイス有効無効マスクの適用 (NaNの漏れを防ぐためビットANDによる物理的クリアを実行)
+    __m256 bitMask = _mm256_cmp_ps(activeVoicesMask, _mm256_setzero_ps(), _CMP_GT_OQ);
+    yL_sum = _mm256_and_ps(yL_sum, bitMask);
+    yR_sum = _mm256_and_ps(yR_sum, bitMask);
 
     // 6. 出力履歴を円形バッファに書き戻す
     _mm256_store_ps(&state.filterHistoryL[wPtr][0], yL_sum);
@@ -152,7 +151,11 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
     phaseL_vec = _mm256_add_ps(phaseL_vec, phaseIncrL_vec);
     phaseR_vec = _mm256_add_ps(phaseR_vec, phaseIncrR_vec);
 
-    // ブランチレス位相ラッピング
+    // 非アクティブボイスの位相もNaN/異常値化を防ぐためビットクリア
+    phaseL_vec = _mm256_and_ps(phaseL_vec, bitMask);
+    phaseR_vec = _mm256_and_ps(phaseR_vec, bitMask);
+
+    // ブランクレス位相ラッピング
     __m256 sizeVec = _mm256_set1_ps(static_cast<float>(PolyphonicVoiceSoA::kWaveTableSize));
     __m256 cmpL = _mm256_cmp_ps(phaseL_vec, sizeVec, _CMP_GE_OQ);
     __m256 subL = _mm256_and_ps(cmpL, sizeVec);

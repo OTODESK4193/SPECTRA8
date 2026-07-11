@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include <cmath>
+#include <cstring>
 
 SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
     : AudioProcessor(BusesProperties()
@@ -114,8 +115,8 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mInputEnvelope = 0.0f;
     mCurrentF0 = 150.0f;
 
-    // 状態構造体のクリア
-    mDspState = DSP::PolyphonicVoiceSoA();
+    // 状態構造体のクリア (MSVCでのアライメント構造体コピーバグによるゴミ混入を防ぐためmemsetを使用)
+    std::memset(&mDspState, 0, sizeof(mDspState));
 
     // 分析バッファの初期化
     mAnalysisInputBuffer.clear();
@@ -398,14 +399,31 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
             CHECK_NAN_VEC(mFsLpc, "mFsLpc");
 
-            // 算出された LPC 係数を 8ボイス並列状態にコピー
-            for (int i = 0; i < 24; ++i)
+            // LPC係数の安全（NaN/Inf防止）ガード
+            bool lpcValid = true;
+            for (float val : mFsLpc)
             {
-                float val = mFsLpc[i + 1]; // a_1 〜 a_24 (coeffs[0] = 1.0 なのでインデックス+1)
-                for (int v = 0; v < 8; ++v)
+                if (std::isnan(val) || std::isinf(val))
+                    lpcValid = false;
+            }
+
+            if (!lpcValid)
+            {
+                if (mDebugMessage.startsWith("No errors") || mDebugMessage.isEmpty())
+                    mDebugMessage = "WARN: LPC NaN/Inf detected! Reusing last stable coeffs.";
+                // 異常値を破棄し、前回の正常な係数をそのまま使い回すためにコピーをスキップします
+            }
+            else
+            {
+                // 算出された LPC 係数を 8ボイス並列状態にコピー (正常な場合のみ)
+                for (int i = 0; i < 24; ++i)
                 {
-                    mDspState.filterCoeffsL[i][v] = val;
-                    mDspState.filterCoeffsR[i][v] = val;
+                    float val = mFsLpc[i + 1]; // a_1 〜 a_24 (coeffs[0] = 1.0 なのでインデックス+1)
+                    for (int v = 0; v < 8; ++v)
+                    {
+                        mDspState.filterCoeffsL[i][v] = val;
+                        mDspState.filterCoeffsR[i][v] = val;
+                    }
                 }
             }
 
