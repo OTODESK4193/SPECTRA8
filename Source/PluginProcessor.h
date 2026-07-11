@@ -79,28 +79,31 @@ private:
     std::vector<float> mAnalysisInputBuffer; // ダウンサンプルされた16kHzの継続サンプル
     std::vector<float> mAnalysisFrame;       // 400サンプルの分析用フレーム
     
-    // 中間データバッファ
-    std::vector<float> mTeEnvelope;
-    std::vector<float> mBarkEnergies;
-    std::vector<float> m16kLpc;
+    // 16kHz分析用中間バッファ
+    std::vector<float> mTeEnvelope;       // 16kHzスペクトル包絡 (513点)
+    std::vector<float> mBarkEnergies;     // Barkエネルギー (25点)
+    std::vector<float> m16kLpc;           // 16kHz LPC係数 (17点)
     
-    // ホストSR用のFFT/IFFTオブジェクト (サイズ2048 = 11次)
+    // 16kHz領域用のFFT/IFFTオブジェクト (サイズ1024 = 10次)
     std::unique_ptr<juce::dsp::FFT> mFsFft;
-    std::vector<float> mFsEnvelope;       // ホストSR用スペクトル包絡 (1025点)
-    std::vector<float> mIfftBuffer;       // IFFT用バッファ (4096点, 事前確保)
-    std::vector<float> mFsLpc;            // ホストSRのLPC係数 (25点)
-    std::vector<float> mFsLpcTarget;      // 補間ターゲットLPC係数 (25点)
+    std::vector<float> mFsEnvelope;       // 16kHz変調後スペクトル包絡 (513点)
+    std::vector<float> mIfftBuffer;       // 16kHz IFFT用バッファ (2048点, 事前確保)
+    std::vector<float> mFsLpc;            // 16kHzのLPC係数 (17点)
+    std::vector<float> mFsLpcTarget;      // 16kHz補間ターゲットLPC係数 (17点)
     
-    // Levinson-Durbin計算用の事前確保バッファ (オーディオスレッドでのheap allocを防止)
-    std::vector<float> mLdA;              // 係数バッファ (25点)
-    std::vector<float> mLdANew;           // 係数更新用バッファ (25点)
-    std::vector<float> mLdNewLpc;         // 結果バッファ (25点)
+    // Levinson-Durbin計算用の事前確保バッファ (16次LPC用、17点)
+    std::vector<float> mLdA;              // 係数バッファ (17点)
+    std::vector<float> mLdANew;           // 係数更新用バッファ (17点)
+    std::vector<float> mLdNewLpc;         // 結果バッファ (17点)
+    
+    // 16kHz中間 Wet 音バッファ
+    std::vector<float> m16kWetBuffer;
 
     // 分析タイミング制御 (16kHz で 100サンプルホップ = 6.25ms毎)
     int mAnalysisHopSize;
     int mAnalysisWindowSize;
     
-    // コントロール・レート制御 (ホストSRで 32サンプル毎にLPC更新)
+    // コントロール・レート制御 (16kHz領域で 32サンプル毎にLPC更新)
     int mControlRateBlockSize;
     int mControlRateCounter;
     

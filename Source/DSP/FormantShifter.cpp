@@ -5,31 +5,27 @@
 namespace DSP {
 
 void FormantShifter::process(const std::vector<float>& srcEnvelope16k, 
-                             std::vector<float>& destEnvelopeFs, 
+                             std::vector<float>& destEnvelope16k, 
                              float shiftSemitones, 
-                             float stretch, 
-                             double nativeSampleRate)
+                             float stretch)
 {
-    // ホストSRのFFTサイズ2048に対応するスペクトル包絡（1025点、DCからNyquistまで）
-    int destSize = 1025;
-    destEnvelopeFs.resize(destSize);
+    int destSize = 513;
+    destEnvelope16k.resize(destSize);
 
     float shiftRatio = std::pow(2.0f, shiftSemitones / 12.0f);
     float scaleFactor = shiftRatio * stretch;
     if (scaleFactor < 0.01f) scaleFactor = 0.01f;
 
-    // 16kHz領域の513点スペクトルのグリッド幅 (0Hz〜8000Hzを512等分)
-    float binWidth16k = 8000.0f / 512.0f;
+    // 16kHz領域（0Hz〜8000Hz）のグリッド
+    float binWidth16k = 8000.0f / 512.0f; // 15.625 Hz
     float invBinWidth16k = 1.0f / binWidth16k;
-
-    double nyquistFs = nativeSampleRate * 0.5;
 
     for (int i = 0; i < destSize; ++i)
     {
-        // 1. 現在のホストSR上の物理周波数 f を算出
-        double f = (static_cast<double>(i) / 1024.0) * nyquistFs;
+        // 現在のビンに対応する物理周波数 f (0Hz〜8000Hz)
+        double f = static_cast<double>(i) * binWidth16k;
 
-        // 2. 変調（シフト＆ストレッチ）の逆写像により、元の16kHz領域での周波数 f_orig を得る
+        // 逆写像による元の周波数 f_orig
         double f_orig = f / scaleFactor;
 
         if (f_orig < 0.0)
@@ -37,7 +33,6 @@ void FormantShifter::process(const std::vector<float>& srcEnvelope16k,
             f_orig = 0.0;
         }
 
-        // 3. 16kHz領域（0Hz〜8000Hz）のエンベロープから線形補間
         if (f_orig <= 8000.0)
         {
             float idx = static_cast<float>(f_orig) * invBinWidth16k;
@@ -45,17 +40,14 @@ void FormantShifter::process(const std::vector<float>& srcEnvelope16k,
             int idx1 = std::min(512, idx0 + 1);
             float frac = idx - static_cast<float>(idx0);
 
-            destEnvelopeFs[i] = srcEnvelope16k[idx0] * (1.0f - frac) + srcEnvelope16k[idx1] * frac;
+            destEnvelope16k[i] = srcEnvelope16k[idx0] * (1.0f - frac) + srcEnvelope16k[idx1] * frac;
         }
         else
         {
-            // 8000Hz以上の高域は、声のエネルギーがないため、緩やかにロールオフ（1オクターブあたり約-12dB）を適用
-            // これにより高域の極によるフィルタ不安定化を完全に防ぎます
+            // 8000Hz以上（折り返し境界外）は、急激にロールオフ減衰させる
             double excess = f_orig - 8000.0;
-            float rollOff = std::exp(static_cast<float>(-excess / 1500.0)); // 1500Hzごとに約 -8.6dB 減衰
-            
-            // 最小値（ノイズフロア）として 1e-5f (-100dB) を保証
-            destEnvelopeFs[i] = std::max(1e-5f, srcEnvelope16k[512] * rollOff);
+            float rollOff = std::exp(static_cast<float>(-excess / 1000.0));
+            destEnvelope16k[i] = std::max(1e-5f, srcEnvelope16k[512] * rollOff);
         }
     }
 }

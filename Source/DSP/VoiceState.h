@@ -8,7 +8,7 @@ namespace DSP {
 struct alignas(32) PolyphonicVoiceSoA {
     static constexpr int kWaveTableSize = 2048;
     static constexpr int kWaveTableMask = 2047;
-    static constexpr int kLpcOrder = 24;
+    static constexpr int kLpcOrder = 16;
 
     alignas(32) float phaseIncrL[8] = { 0.0f };
     alignas(32) float phaseIncrR[8] = { 0.0f };

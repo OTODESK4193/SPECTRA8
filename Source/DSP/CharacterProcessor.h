@@ -29,12 +29,12 @@ public:
         character = std::clamp(character, 0.0f, 1.0f);
 
         // 1. 実効サンプリングレート低減 (エイリアシング効果)
-        double minRate = 8000.0;
+        double minRate = 12000.0; // 音切れを防ぐため下限を12kHzに引き上げ
         double targetRate = minRate + (mSampleRate - minRate) * static_cast<double>(character * character);
         targetRate = std::max(minRate, targetRate);
         
         double sampleInterval = mSampleRate / targetRate;
-        sampleInterval = std::max(1.0, sampleInterval); // 1.0サンプル未満にならないようガード
+        sampleInterval = std::max(1.0, sampleInterval);
 
         if (std::isnan(mSampleCounter))
         {
@@ -44,8 +44,8 @@ public:
         mSampleCounter += 1.0;
         if (mSampleCounter >= sampleInterval)
         {
-            mSampleCounter = std::fmod(mSampleCounter, sampleInterval);
-            if (std::isnan(mSampleCounter))
+            mSampleCounter -= sampleInterval;
+            if (mSampleCounter < 0.0 || std::isnan(mSampleCounter))
             {
                 mSampleCounter = 0.0;
             }
@@ -62,7 +62,7 @@ public:
         // 2. ビットクラッシュ (量子化ノイズ)
         if (character < 0.95f)
         {
-            float bits = 4.0f + 24.0f * (character * character); // 4bit 〜 28bit
+            float bits = 8.0f + 20.0f * (character * character); // 8bit 〜 28bit (下限を8bitにして極端な歪みを防止)
             float steps = std::pow(2.0f, bits - 1.0f);
 
             // 左
