@@ -69,14 +69,10 @@ private:
     std::vector<float> mBandCoeffsG;
     std::vector<float> mBandCoeffsK;
     std::vector<float> mBandCoeffsA1;
-    std::vector<float> mBandCoeffsA2;
-
-    // ★フォルマントシフト用にリアルタイムで再計算されるキャリア専用の動的係数バッファ
-    std::vector<float> mCarrierCoeffsG;
-    std::vector<float> mCarrierCoeffsA1;
 
     juce::LinearSmoothedValue<float> mFormantShiftSmoother;
 
+    // リアルタイム安全な事前確保バッファ
     std::vector<float> mDownsampledBuffer;
     std::vector<float> m16kWetBuffer;
     std::vector<float> mWetFsBuffer;

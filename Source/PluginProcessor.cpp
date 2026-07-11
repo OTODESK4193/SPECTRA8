@@ -111,9 +111,6 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mBandCoeffsK.resize(maxBands);
     mBandCoeffsA1.resize(maxBands);
 
-    mCarrierCoeffsG.assign(maxBands, 0.0f);
-    mCarrierCoeffsA1.assign(maxBands, 0.0f);
-
     float fMin = 80.0f;
     float fMax = 7500.0f;
     float mMin = 2595.0f * std::log10(1.0f + fMin / 700.0f);
@@ -137,7 +134,6 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
     mFormantShiftSmoother.reset(16000.0);
 
-    // ★警告修正：コンパイラの型変換の不整合（暗黙のナローイング）を防ぐため明示的にキャスト
     int safeAllocationSize = std::max(samplesPerBlock * 3, 4096);
     mDownsampledBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
     m16kWetBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
@@ -175,8 +171,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     if (srcSampleRate != mStoredSampleRate && srcSampleRate > 0.0)
     {
-        // ⭕ 正しいコード：第1引数にdouble、第2引数にintを明示的にキャストして渡す
-        prepareToPlay(srcSampleRate, static_cast<int>(numSamples));
+        prepareToPlay(srcSampleRate, numSamples);
     }
 
 #define CHECK_NAN(val, msg) \
@@ -300,20 +295,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, 0.0f, 130.0f);
     }
 
-    // ★最重要：平滑化されたフォルマントシフト（半音）からキャリア用の動的フィルターマトリクスを生成
-    // ±24半音の過激な設定でもtanが発散しないよう 7500Hz で鉄壁ガードを維持したまま、元の数式用マッピングを適用
+    // サンプル精度フォルマントシフターの取得
     mFormantShiftSmoother.skip(numSamples);
     float currentFormantShift = mFormantShiftSmoother.getCurrentValue();
-    float formantMultiplier = std::pow(2.0f, currentFormantShift / 12.0f);
-
-    for (int i = 0; i < currentNumBands; ++i)
-    {
-        float shiftedFreq = std::clamp(mBandF0[i] * formantMultiplier, 40.0f, 7500.0f);
-        float g = std::tan(3.14159265f * shiftedFreq / 16000.0f);
-        float k = mBandCoeffsK[i];
-        mCarrierCoeffsG[i] = g;
-        mCarrierCoeffsA1[i] = 1.0f / (1.0f + g * (g + k));
-    }
 
     // 4. 入力音声を 16kHz にダウンサンプリング
     int num16kSamples = 0;
@@ -350,7 +334,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     {
         float inSample = mDownsampledBuffer[sample16k];
 
-        // 5-A. 分析側（モジュレーター）：実績のある「オリジナルの数式形式」へ100%完全復旧
+        // 5-A. 分析側（モジュレーター）：100%確実に音が鳴る実績のあるオリジナル差分式
         for (int i = 0; i < currentNumBands; ++i)
         {
             // --- セクション 1 ---
@@ -407,7 +391,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float sampleL = 0.0f;
         float sampleR = 0.0f;
 
-        // ★引数リストの数を14個へ完全同期し、コンパイルエラーを根絶
+        // ★WET音復活の核心：キャリアフィルターは固定係数のまま処理（発散・相殺を100%防止）
+        // スムージングされた currentFormantShift スカラー値を直接 OscillatorBank へ転送
         mOscillatorBank.processSampleAVX2(
             mDspState,
             activeMask,
@@ -415,12 +400,12 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             noiseMixVec,
             noiseBuffer,
             mBandEnvelopes.data(),
-            0.0f,
+            currentFormantShift,
             currentNumBands,
-            mCarrierCoeffsG.data(),
+            mBandCoeffsG.data(),
             mBandCoeffsK.data(),
-            mCarrierCoeffsA1.data(),
-            mCarrierCoeffsA1.data(), // 14個の引数を満たすためのa2ダミー参照
+            mBandCoeffsA1.data(),
+            mBandCoeffsA1.data(),
             sampleL,
             sampleR
         );

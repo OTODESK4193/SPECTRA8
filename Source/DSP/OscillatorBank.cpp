@@ -41,10 +41,10 @@ namespace DSP {
         __m256 noiseMix,
         __m256 noiseBuffer,
         const float* modulatorEnvelopes,
-        float /*formantShift*/,
+        float formantShift,
         int currentNumBands,
         const float* g_coeffs,
-        const float* /*k_coeffs*/,
+        const float* k_coeffs,
         const float* a1_coeffs,
         const float* /*a2_coeffs*/,
         float& outL,
@@ -52,7 +52,7 @@ namespace DSP {
     {
         const float* tablePtrSaw = mWavetableSaw.data();
 
-        // 1. LEFT オシレーター波形生成 (Wavetable補間)
+        // 1. LEFT オシレーター波形生成
         __m256 phaseL_vec = _mm256_load_ps(state.phaseL);
         __m256i idx0_L_raw = _mm256_cvttps_epi32(phaseL_vec);
         __m256 idx0_L_float = _mm256_cvtepi32_ps(idx0_L_raw);
@@ -69,7 +69,7 @@ namespace DSP {
         __m256 tmp_L = _mm256_fnmadd_ps(t_L, y0_L, y0_L);
         __m256 oscL = _mm256_fmadd_ps(t_L, y1_L, tmp_L);
 
-        // 2. RIGHT オシレーター波生成 (Wavetable補間)
+        // 2. RIGHT オシレーター波生成
         __m256 phaseR_vec = _mm256_load_ps(state.phaseR);
         __m256i idx0_R_raw = _mm256_cvttps_epi32(phaseR_vec);
         __m256 idx0_R_float = _mm256_cvtepi32_ps(idx0_R_raw);
@@ -118,12 +118,11 @@ namespace DSP {
 
                 for (int i = 0; i < activeBands; ++i)
                 {
-                    // ★最重要：音が確実に鳴る「ユーザーオリジナルのフィルター差分方程式」に100%完全復旧
                     float g = g_coeffs[i];
+                    float k = k_coeffs[i];
                     float a1 = a1_coeffs[i];
 
-                    // --- ZDF SVF (LEFT) - 4次直列 (S1 -> S2) ---
-                    // セクション 1
+                    // --- ZDF SVF (LEFT) - 4次直列 (S1 -> S2) オリジナル完全復旧 ---
                     float s1_L_s1 = state.filterS1_S1_L[i][v];
                     float s2_L_s1 = state.filterS1_S2_L[i][v];
                     float v1_L_s1 = a1 * (g * (vL - s2_L_s1) - s1_L_s1);
@@ -133,7 +132,6 @@ namespace DSP {
                     state.filterS1_S1_L[i][v] = 2.0f * y_bp_L_s1 - s1_L_s1;
                     state.filterS1_S2_L[i][v] = 2.0f * y_lp_L_s1 - s2_L_s1;
 
-                    // セクション 2 (S1 -> S2)
                     float s1_L_s2 = state.filterS2_S1_L[i][v];
                     float s2_L_s2 = state.filterS2_S2_L[i][v];
                     float v1_L_s2 = a1 * (g * (y_bp_L_s1 - s2_L_s2) - s1_L_s2);
@@ -143,9 +141,7 @@ namespace DSP {
                     state.filterS2_S1_L[i][v] = 2.0f * y_bp_L_s2 - s1_L_s2;
                     state.filterS2_S2_L[i][v] = 2.0f * y_lp_L_s2 - s2_L_s2;
 
-
-                    // --- ZDF SVF (RIGHT) - 4次直列 (S1 -> S2) ---
-                    // セクション 1
+                    // --- ZDF SVF (RIGHT) - 4次直列 (S1 -> S2) オリジナル完全復旧 ---
                     float s1_R_s1 = state.filterS1_S1_R[i][v];
                     float s2_R_s1 = state.filterS1_S2_R[i][v];
                     float v1_R_s1 = a1 * (g * (vR - s2_R_s1) - s1_R_s1);
@@ -155,7 +151,6 @@ namespace DSP {
                     state.filterS1_S1_R[i][v] = 2.0f * y_bp_R_s1 - s1_R_s1;
                     state.filterS1_S2_R[i][v] = 2.0f * y_lp_R_s1 - s2_R_s1;
 
-                    // セクション 2 (S1 -> S2)
                     float s1_R_s2 = state.filterS2_S1_R[i][v];
                     float s2_R_s2 = state.filterS2_S2_R[i][v];
                     float v1_R_s2 = a1 * (g * (y_bp_R_s1 - s2_R_s2) - s1_R_s2);
@@ -165,8 +160,34 @@ namespace DSP {
                     state.filterS2_S1_R[i][v] = 2.0f * y_bp_R_s2 - s1_R_s2;
                     state.filterS2_S2_R[i][v] = 2.0f * y_lp_R_s2 - s2_R_s2;
 
-                    // 分析側（モジュレーター）の周波数包絡線を直ストレートに適用
-                    float modEnv = modulatorEnvelopes[i];
+                    // ★鉄壁のフォルマントシフト写像アルゴリズム（半音ベースのメル尺度線形スライド）
+                    // shiftがプラス＝高域バンドが低域のエンベロープを読みに行く
+                    float srcIdx = static_cast<float>(i) - formantShift;
+
+                    float modEnv = 0.0f;
+                    // 配列の境界外にアクセスした場合は、張り付き（クランプ）ではなく、
+                    // 「音量を0.0f（無音）に減衰させる」ことで、極端な設定（±24）でも破綻せず、
+                    // フォルマントが綺麗に高域・低域へ抜けていく超自然なボコーディングを達成
+                    if (srcIdx >= 0.0f && srcIdx < static_cast<float>(activeBands - 1))
+                    {
+                        int idx0 = static_cast<int>(srcIdx);
+                        int idx1 = idx0 + 1;
+                        float frac = srcIdx - static_cast<float>(idx0);
+                        modEnv = modulatorEnvelopes[idx0] * (1.0f - frac) + modulatorEnvelopes[idx1] * frac;
+                    }
+                    else if (srcIdx < 0.0f)
+                    {
+                        if (srcIdx > -1.0f) {
+                            modEnv = modulatorEnvelopes[0] * (1.0f + srcIdx); // 緩やかなフェードアウト
+                        }
+                    }
+                    else
+                    {
+                        float overshoot = srcIdx - static_cast<float>(activeBands - 1);
+                        if (overshoot < 1.0f) {
+                            modEnv = modulatorEnvelopes[activeBands - 1] * (1.0f - overshoot);
+                        }
+                    }
 
                     voiceSumL += y_bp_L_s2 * modEnv;
                     voiceSumR += y_bp_R_s2 * modEnv;
@@ -179,7 +200,7 @@ namespace DSP {
 
         __m256 bitMask = _mm256_cmp_ps(activeVoicesMask, _mm256_setzero_ps(), _CMP_GT_OQ);
 
-        // 7. オシレーター位相の更新
+        // オシレーター位相の更新
         __m256 phaseIncrL_vec = _mm256_load_ps(state.phaseIncrL);
         __m256 phaseIncrR_vec = _mm256_load_ps(state.phaseIncrR);
         phaseL_vec = _mm256_add_ps(phaseL_vec, phaseIncrL_vec);
@@ -188,7 +209,6 @@ namespace DSP {
         phaseL_vec = _mm256_and_ps(phaseL_vec, bitMask);
         phaseR_vec = _mm256_and_ps(phaseR_vec, bitMask);
 
-        // ブランクレス位相ラッピング
         __m256 sizeVec = _mm256_set1_ps(static_cast<float>(PolyphonicVoiceSoA::kWaveTableSize));
         __m256 cmpL = _mm256_cmp_ps(phaseL_vec, sizeVec, _CMP_GE_OQ);
         __m256 subL = _mm256_and_ps(cmpL, sizeVec);
