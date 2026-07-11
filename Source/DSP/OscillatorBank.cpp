@@ -63,9 +63,9 @@ namespace DSP {
         float pulseWidth,
         float wavetablePosition,
         const float* g_coeffs,
-        const float* k_coeffs,
+        const float* /*k_coeffs*/,
         const float* a1_coeffs,
-        const float* a2_coeffs,
+        const float* /*a2_coeffs*/,
         float& outL,
         float& outR)
     {
@@ -208,18 +208,18 @@ namespace DSP {
                         // --- ZDF SVF (LEFT) - 4次直列 (S1 -> S2) ---
                         float s1_L_s1 = state.filterS1_S1_L[i][v];
                         float s2_L_s1 = state.filterS1_S2_L[i][v];
-                        float v1_L_s1 = a1 * (s1_L_s1 + g * (vL - s2_L_s1));
+                        float v1_L_s1 = a1 * (g * (vL - s2_L_s1) - s1_L_s1);
                         float y_bp_L_s1 = v1_L_s1;
-                        float y_lp_L_s1 = s2_L_s1 + g * v1_L_s1;
+                        float y_lp_L_s1 = g * v1_L_s1 + s2_L_s1;
 
                         state.filterS1_S1_L[i][v] = 2.0f * y_bp_L_s1 - s1_L_s1;
                         state.filterS1_S2_L[i][v] = 2.0f * y_lp_L_s1 - s2_L_s1;
 
                         float s1_L_s2 = state.filterS2_S1_L[i][v];
                         float s2_L_s2 = state.filterS2_S2_L[i][v];
-                        float v1_L_s2 = a1 * (s1_L_s2 + g * (y_bp_L_s1 - s2_L_s2));
+                        float v1_L_s2 = a1 * (g * (y_bp_L_s1 - s2_L_s2) - s1_L_s2);
                         float y_bp_L_s2 = v1_L_s2;
-                        float y_lp_L_s2 = s2_L_s2 + g * v1_L_s2;
+                        float y_lp_L_s2 = g * v1_L_s2 + s2_L_s2;
 
                         state.filterS2_S1_L[i][v] = 2.0f * y_bp_L_s2 - s1_L_s2;
                         state.filterS2_S2_L[i][v] = 2.0f * y_lp_L_s2 - s2_L_s2;
@@ -228,18 +228,18 @@ namespace DSP {
                         // --- ZDF SVF (RIGHT) - 4次直列 (S1 -> S2) ---
                         float s1_R_s1 = state.filterS1_S1_R[i][v];
                         float s2_R_s1 = state.filterS1_S2_R[i][v];
-                        float v1_R_s1 = a1 * (s1_R_s1 + g * (vR - s2_R_s1));
+                        float v1_R_s1 = a1 * (g * (vR - s2_R_s1) - s1_R_s1);
                         float y_bp_R_s1 = v1_R_s1;
-                        float y_lp_R_s1 = s2_R_s1 + g * v1_R_s1;
+                        float y_lp_R_s1 = g * v1_R_s1 + s2_R_s1;
 
                         state.filterS1_S1_R[i][v] = 2.0f * y_bp_R_s1 - s1_R_s1;
                         state.filterS1_S2_R[i][v] = 2.0f * y_lp_R_s1 - s2_R_s1;
 
                         float s1_R_s2 = state.filterS2_S1_R[i][v];
                         float s2_R_s2 = state.filterS2_S2_R[i][v];
-                        float v1_R_s2 = a1 * (s1_R_s2 + g * (y_bp_R_s1 - s2_R_s2));
+                        float v1_R_s2 = a1 * (g * (y_bp_R_s1 - s2_R_s2) - s1_R_s2);
                         float y_bp_R_s2 = v1_R_s2;
-                        float y_lp_R_s2 = s2_R_s2 + g * v1_R_s2;
+                        float y_lp_R_s2 = g * v1_R_s2 + s2_R_s2;
 
                         state.filterS2_S1_R[i][v] = 2.0f * y_bp_R_s2 - s1_R_s2;
                         state.filterS2_S2_R[i][v] = 2.0f * y_lp_R_s2 - s2_R_s2;
@@ -249,27 +249,7 @@ namespace DSP {
                         float centerBand = static_cast<float>(activeBands - 1) * 0.5f;
                         float srcIdx = centerBand + (static_cast<float>(i) - centerBand) / formantStretch - formantShift;
                         
-                        float modEnv = 0.0f;
-                        if (srcIdx >= 0.0f && srcIdx < static_cast<float>(activeBands - 1))
-                        {
-                            int idx0 = static_cast<int>(srcIdx);
-                            int idx1 = idx0 + 1;
-                            float frac = srcIdx - static_cast<float>(idx0);
-                            modEnv = modulatorEnvelopes[idx0] * (1.0f - frac) + modulatorEnvelopes[idx1] * frac;
-                        }
-                        else if (srcIdx < 0.0f)
-                        {
-                            if (srcIdx > -1.0f) {
-                                modEnv = modulatorEnvelopes[0] * (1.0f + srcIdx);
-                            }
-                        }
-                        else
-                        {
-                            float overshoot = srcIdx - static_cast<float>(activeBands - 1);
-                            if (overshoot < 1.0f) {
-                                modEnv = modulatorEnvelopes[activeBands - 1] * (1.0f - overshoot);
-                            }
-                        }
+                        float modEnv = 1.0f;
 
                         voiceSumL += y_bp_L_s2 * modEnv;
                         voiceSumR += y_bp_R_s2 * modEnv;

@@ -477,6 +477,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                         }
                         lambda /= E;
 
+                        if (std::abs(lambda) >= 0.999f)
+                        {
+                            break;
+                        }
+
                         float next_a[17];
                         next_a[0] = 1.0f;
                         for (int j = 1; j < i; ++j)

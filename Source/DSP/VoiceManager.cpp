@@ -61,7 +61,7 @@ static inline float randomFloat01_scalar(uint32_t& state)
     return *fPtr - 1.0f;
 }
 
-int VoiceManager::allocateVoice(uint8_t note)
+int VoiceManager::allocateVoice(uint8_t /*note*/)
 {
     // 1. Inactive（未使用）ボイスを探す
     for (int i = 0; i < 8; ++i)
