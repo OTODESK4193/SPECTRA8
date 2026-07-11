@@ -87,9 +87,14 @@ private:
     // ホストSR用のFFT/IFFTオブジェクト (サイズ2048 = 11次)
     std::unique_ptr<juce::dsp::FFT> mFsFft;
     std::vector<float> mFsEnvelope;       // ホストSR用スペクトル包絡 (1025点)
-    std::vector<float> mAutocorrBuffer;   // 自己相関用IFFTバッファ (2048点)
+    std::vector<float> mIfftBuffer;       // IFFT用バッファ (4096点, 事前確保)
     std::vector<float> mFsLpc;            // ホストSRのLPC係数 (25点)
     std::vector<float> mFsLpcTarget;      // 補間ターゲットLPC係数 (25点)
+    
+    // Levinson-Durbin計算用の事前確保バッファ (オーディオスレッドでのheap allocを防止)
+    std::vector<float> mLdA;              // 係数バッファ (25点)
+    std::vector<float> mLdANew;           // 係数更新用バッファ (25点)
+    std::vector<float> mLdNewLpc;         // 結果バッファ (25点)
 
     // 分析タイミング制御 (16kHz で 100サンプルホップ = 6.25ms毎)
     int mAnalysisHopSize;

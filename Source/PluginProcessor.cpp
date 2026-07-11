@@ -18,6 +18,7 @@ SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
       mTargetGain(0.0f)
 {
     mAnalysisFft = std::make_unique<juce::dsp::FFT>(10);
+    mFsFft = std::make_unique<juce::dsp::FFT>(11);  // 2048ポイントFFT
 }
 
 SPECTRA8AudioProcessor::~SPECTRA8AudioProcessor()
@@ -126,7 +127,12 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     m16kLpc[0] = 1.0f;
 
     mFsEnvelope.assign(1025, 0.0f);
-    mAutocorrBuffer.assign(2048, 0.0f);
+    mIfftBuffer.assign(4096, 0.0f);
+    
+    // Levinson-Durbin用バッファの事前確保
+    mLdA.assign(25, 0.0f);
+    mLdANew.assign(25, 0.0f);
+    mLdNewLpc.assign(25, 0.0f);
     
     // LPC 初期目標値の設定 (24次中立フィルタ)
     mFsLpc.assign(25, 0.0f);
@@ -339,75 +345,70 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             // (A) スペクトル領域でフォルマント変調＋ホストSRへのマッピング
             mFormantShifter.process(mTeEnvelope, mFsEnvelope, formantShift, formantStretch, getSampleRate());
 
-            // (B) パワースペクトルを構築し、IFFTで自己相関系列を得る
-            std::vector<float> ifftBuffer(4096, 0.0f); // 2048点のFFT用（JUCEは2*fftSize必要）
+            // (B) パワースペクトルを構築し、IFFTで自己相関系列を得る (事前確保バッファを使用)
+            std::fill(mIfftBuffer.begin(), mIfftBuffer.end(), 0.0f);
             
             // DC と Nyquist
-            float pwrDC = mFsEnvelope[0] * mFsEnvelope[0];
-            float pwrNyq = mFsEnvelope[1024] * mFsEnvelope[1024];
-            ifftBuffer[0] = pwrDC;
-            ifftBuffer[1] = pwrNyq;
+            mIfftBuffer[0] = mFsEnvelope[0] * mFsEnvelope[0];
+            mIfftBuffer[1] = mFsEnvelope[1024] * mFsEnvelope[1024];
             
             // 残りのビン（実部にパワー、虚部に0）
             for (int k = 1; k < 1024; ++k)
             {
                 float pwr = mFsEnvelope[k] * mFsEnvelope[k];
-                ifftBuffer[2 * k] = pwr;
-                ifftBuffer[2 * k + 1] = 0.0f;
+                mIfftBuffer[2 * k] = pwr;
+                mIfftBuffer[2 * k + 1] = 0.0f;
             }
             
             // IFFT実行 → 自己相関系列を得る
-            mFsFft->performRealOnlyInverseTransform(ifftBuffer.data());
+            mFsFft->performRealOnlyInverseTransform(mIfftBuffer.data());
             
-            // (C) Levinson-Durbin再帰法による24次LPC係数の算出
-            // ifftBuffer[0..24] が自己相関 R[0]..R[24]
+            // (C) Levinson-Durbin再帰法による24次LPC係数の算出 (事前確保バッファ使用)
             int ldOrder = 24;
-            std::vector<float> newLpc(ldOrder + 1, 0.0f);
-            newLpc[0] = 1.0f;
+            std::fill(mLdNewLpc.begin(), mLdNewLpc.end(), 0.0f);
+            mLdNewLpc[0] = 1.0f;
             float ldGain = 0.0f;
             
-            float R0 = ifftBuffer[0];
-            if (R0 > 1e-10f) // 信号がある場合のみ
+            float R0 = mIfftBuffer[0];
+            if (R0 > 1e-10f)
             {
-                std::vector<float> a(ldOrder + 1, 0.0f);
-                a[0] = 1.0f;
-                float E = ifftBuffer[0];
+                std::fill(mLdA.begin(), mLdA.end(), 0.0f);
+                mLdA[0] = 1.0f;
+                float E = R0;
                 
                 bool ldStable = true;
                 for (int m = 1; m <= ldOrder; ++m)
                 {
-                    // λ = - Σ_{j=0}^{m-1} a[j] * R[m-j]
                     float lambda = 0.0f;
                     for (int j = 0; j < m; ++j)
                     {
-                        lambda += a[j] * ifftBuffer[m - j];
+                        lambda += mLdA[j] * mIfftBuffer[m - j];
                     }
                     
                     if (std::abs(E) < 1e-10f) { ldStable = false; break; }
                     float k_m = -lambda / E;
                     
-                    // |k_m| >= 1 なら不安定（通常起こらないが安全のため）
                     if (std::abs(k_m) >= 1.0f) { ldStable = false; break; }
                     
-                    // 係数の更新
-                    std::vector<float> a_new(ldOrder + 1, 0.0f);
+                    // 係数の更新 (別バッファに書き出してからコピー、インプレース破壊を防止)
+                    std::fill(mLdANew.begin(), mLdANew.end(), 0.0f);
                     for (int j = 0; j <= m; ++j)
                     {
-                        a_new[j] = a[j] + k_m * a[m - j];
+                        mLdANew[j] = mLdA[j] + k_m * mLdA[m - j];
                     }
-                    a = a_new;
+                    std::copy(mLdANew.begin(), mLdANew.begin() + m + 1, mLdA.begin());
                     
                     E = E * (1.0f - k_m * k_m);
                 }
                 
                 if (ldStable && E > 0.0f)
                 {
-                    newLpc = a;
+                    std::copy(mLdA.begin(), mLdA.begin() + ldOrder + 1, mLdNewLpc.begin());
                     ldGain = std::sqrt(E);
                 }
             }
             
-            mFsLpcTarget = newLpc;
+            mFsLpcTarget = mLdNewLpc;
             mTargetGain = ldGain;
 
             CHECK_NAN_VEC(mTeEnvelope, "mTeEnvelope");
