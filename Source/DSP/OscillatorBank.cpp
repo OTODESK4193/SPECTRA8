@@ -56,8 +56,9 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
                                        __m256 noiseBuffer,
                                        const float* modulatorEnvelopes,
                                        float formantShift,
-                                       const float* b0_coeffs,
-                                       const float* b2_coeffs,
+                                       int currentNumBands,
+                                       const float* g_coeffs,
+                                       const float* k_coeffs,
                                        const float* a1_coeffs,
                                        const float* a2_coeffs,
                                        float& outL,
@@ -106,7 +107,7 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
     __m256 excitationR = _mm256_fmadd_ps(oneMinusNoiseMix, oscR, _mm256_mul_ps(noiseMix, noiseBuffer));
 
 
-    // 4. 20バンド・バンドパス・フィルタバンクによる変調とボイス加算
+    // 4. ZDF SVF フィルタバンクによる変調とボイス加算
     float actMask[8];
     float excL[8];
     float excR[8];
@@ -120,6 +121,9 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
     float sumL = 0.0f;
     float sumR = 0.0f;
 
+    // 動的なバンド数 (currentNumBands) に基づく安全ループ
+    int activeBands = std::clamp(currentNumBands, 8, static_cast<int>(PolyphonicVoiceSoA::kNumBands));
+
     for (int v = 0; v < 8; ++v)
     {
         if (actMask[v] > 0.0f)
@@ -130,82 +134,67 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
             float voiceSumL = 0.0f;
             float voiceSumR = 0.0f;
 
-            for (int i = 0; i < PolyphonicVoiceSoA::kNumBands; ++i)
+            for (int i = 0; i < activeBands; ++i)
             {
-                // Biquad フィルタ実行 (LEFT) - 4次直列 (S1 -> S2)
-                // --- セクション 1 ---
-                float xL_s1 = vL;
-                float x1_L_s1 = state.filterS1_X1_L[i][v];
-                float x2_L_s1 = state.filterS1_X2_L[i][v];
-                float y1_L_s1 = state.filterS1_Y1_L[i][v];
-                float y2_L_s1 = state.filterS1_Y2_L[i][v];
+                // --- ZDF SVF (LEFT) - 4次直列 (S1 -> S2) ---
+                // セクション 1
+                float s1_L_s1 = state.filterS1_S1_L[i][v];
+                float s2_L_s1 = state.filterS1_S2_L[i][v];
+                float v1_L_s1 = a1_coeffs[i] * (g_coeffs[i] * (vL - s2_L_s1) - s1_L_s1);
+                float y_bp_L_s1 = v1_L_s1;
+                float v2_L_s1 = g_coeffs[i] * v1_L_s1;
+                float y_lp_L_s1 = v2_L_s1 + s2_L_s1;
 
-                float yL_s1 = b0_coeffs[i] * xL_s1 + b2_coeffs[i] * x2_L_s1 - a1_coeffs[i] * y1_L_s1 - a2_coeffs[i] * y2_L_s1;
-                if (std::isnan(yL_s1) || std::isinf(yL_s1)) yL_s1 = 0.0f;
+                state.filterS1_S1_L[i][v] = 2.0f * y_bp_L_s1 - s1_L_s1;
+                state.filterS1_S2_L[i][v] = 2.0f * y_lp_L_s1 - s2_L_s1;
 
-                state.filterS1_X2_L[i][v] = x1_L_s1;
-                state.filterS1_X1_L[i][v] = xL_s1;
-                state.filterS1_Y2_L[i][v] = y1_L_s1;
-                state.filterS1_Y1_L[i][v] = yL_s1;
+                // セクション 2 (S1 -> S2)
+                float s1_L_s2 = state.filterS2_S1_L[i][v];
+                float s2_L_s2 = state.filterS2_S2_L[i][v];
+                float v1_L_s2 = a1_coeffs[i] * (g_coeffs[i] * (y_bp_L_s1 - s2_L_s2) - s1_L_s2);
+                float y_bp_L_s2 = v1_L_s2;
+                float v2_L_s2 = g_coeffs[i] * v1_L_s2;
+                float y_lp_L_s2 = v2_L_s2 + s2_L_s2;
 
-                // --- セクション 2 ---
-                float xL_s2 = yL_s1;
-                float x1_L_s2 = state.filterS2_X1_L[i][v];
-                float x2_L_s2 = state.filterS2_X2_L[i][v];
-                float y1_L_s2 = state.filterS2_Y1_L[i][v];
-                float y2_L_s2 = state.filterS2_Y2_L[i][v];
-
-                float yL_s2 = b0_coeffs[i] * xL_s2 + b2_coeffs[i] * x2_L_s2 - a1_coeffs[i] * y1_L_s2 - a2_coeffs[i] * y2_L_s2;
-                if (std::isnan(yL_s2) || std::isinf(yL_s2)) yL_s2 = 0.0f;
-
-                state.filterS2_X2_L[i][v] = x1_L_s2;
-                state.filterS2_X1_L[i][v] = xL_s2;
-                state.filterS2_Y2_L[i][v] = y1_L_s2;
-                state.filterS2_Y1_L[i][v] = yL_s2;
+                state.filterS2_S1_L[i][v] = 2.0f * y_bp_L_s2 - s1_L_s2;
+                state.filterS2_S2_L[i][v] = 2.0f * y_lp_L_s2 - s2_L_s2;
 
 
-                // Biquad フィルタ実行 (RIGHT) - 4次直列 (S1 -> S2)
-                // --- セクション 1 ---
-                float xR_s1 = vR;
-                float x1_R_s1 = state.filterS1_X1_R[i][v];
-                float x2_R_s1 = state.filterS1_X2_R[i][v];
-                float y1_R_s1 = state.filterS1_Y1_R[i][v];
-                float y2_R_s1 = state.filterS1_Y2_R[i][v];
+                // --- ZDF SVF (RIGHT) - 4次直列 (S1 -> S2) ---
+                // セクション 1
+                float s1_R_s1 = state.filterS1_S1_R[i][v];
+                float s2_R_s1 = state.filterS1_S2_R[i][v];
+                float v1_R_s1 = a1_coeffs[i] * (g_coeffs[i] * (vR - s2_R_s1) - s1_R_s1);
+                float y_bp_R_s1 = v1_R_s1;
+                float v2_R_s1 = g_coeffs[i] * v1_R_s1;
+                float y_lp_R_s1 = v2_R_s1 + s2_R_s1;
 
-                float yR_s1 = b0_coeffs[i] * xR_s1 + b2_coeffs[i] * x2_R_s1 - a1_coeffs[i] * y1_R_s1 - a2_coeffs[i] * y2_R_s1;
-                if (std::isnan(yR_s1) || std::isinf(yR_s1)) yR_s1 = 0.0f;
+                state.filterS1_S1_R[i][v] = 2.0f * y_bp_R_s1 - s1_R_s1;
+                state.filterS1_S2_R[i][v] = 2.0f * y_lp_R_s1 - s2_R_s1;
 
-                state.filterS1_X2_R[i][v] = x1_R_s1;
-                state.filterS1_X1_R[i][v] = xR_s1;
-                state.filterS1_Y2_R[i][v] = y1_R_s1;
-                state.filterS1_Y1_R[i][v] = yR_s1;
+                // セクション 2 (S1 -> S2)
+                float s1_R_s2 = state.filterS2_S1_R[i][v];
+                float s2_R_s2 = state.filterS2_S2_R[i][v];
+                float v1_R_s2 = a1_coeffs[i] * (g_coeffs[i] * (y_bp_R_s1 - s2_R_s2) - s1_R_s2);
+                float y_bp_R_s2 = v1_R_s2;
+                float v2_R_s2 = g_coeffs[i] * v1_R_s2;
+                float y_lp_R_s2 = v2_R_s2 + s2_R_s2;
 
-                // --- セクション 2 ---
-                float xR_s2 = yR_s1;
-                float x1_R_s2 = state.filterS2_X1_R[i][v];
-                float x2_R_s2 = state.filterS2_X2_R[i][v];
-                float y1_R_s2 = state.filterS2_Y1_R[i][v];
-                float y2_R_s2 = state.filterS2_Y2_R[i][v];
-
-                float yR_s2 = b0_coeffs[i] * xR_s2 + b2_coeffs[i] * x2_R_s2 - a1_coeffs[i] * y1_R_s2 - a2_coeffs[i] * y2_R_s2;
-                if (std::isnan(yR_s2) || std::isinf(yR_s2)) yR_s2 = 0.0f;
-
-                state.filterS2_X2_R[i][v] = x1_R_s2;
-                state.filterS2_X1_R[i][v] = xR_s2;
-                state.filterS2_Y2_R[i][v] = y1_R_s2;
-                state.filterS2_Y1_R[i][v] = yR_s2;
+                state.filterS2_S1_R[i][v] = 2.0f * y_bp_R_s2 - s1_R_s2;
+                state.filterS2_S2_R[i][v] = 2.0f * y_lp_R_s2 - s2_R_s2;
 
 
                 // フォルマントシフト写像
+                // (値が滑らかに補間されているため、極端な値 -24 〜 +24 でも安全ガード)
                 float srcIdx = static_cast<float>(i) - formantShift;
-                srcIdx = std::clamp(srcIdx, 0.0f, static_cast<float>(PolyphonicVoiceSoA::kNumBands - 1));
+                srcIdx = std::clamp(srcIdx, 0.0f, static_cast<float>(activeBands - 1));
                 int idx0 = static_cast<int>(srcIdx);
-                int idx1 = std::min(PolyphonicVoiceSoA::kNumBands - 1, idx0 + 1);
+                int idx1 = std::min(activeBands - 1, idx0 + 1);
                 float frac = srcIdx - idx0;
                 float modEnv = modulatorEnvelopes[idx0] * (1.0f - frac) + modulatorEnvelopes[idx1] * frac;
 
-                voiceSumL += yL_s2 * modEnv;
-                voiceSumR += yR_s2 * modEnv;
+                voiceSumL += y_bp_L_s2 * modEnv;
+                voiceSumR += y_bp_R_s2 * modEnv;
             }
 
             sumL += voiceSumL * voiceEnvelopes[v];

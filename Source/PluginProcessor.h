@@ -64,24 +64,24 @@ private:
     // 分析データバッファ (16kHz領域)
     std::vector<float> mAnalysisInputBuffer; // ダウンサンプルされた16kHzの継続サンプル
     
-    // 20バンド・バンドパス・フィルタバンク用状態変数 (16kHz動作)
-    std::vector<float> mBandEnvelopes;       // 20バンドの現在のエンベロープ
-    std::vector<float> mTargetBandEnvelopes; // 20バンドの目標エンベロープ
+    // 48バンド ZDF SVF 状態変数 (16kHz動作)
+    std::vector<float> mBandEnvelopes;       // 48バンドの現在のエンベロープ
+    std::vector<float> mTargetBandEnvelopes; // 48バンドの目標エンベロープ
     
-    // 分析側のフィルタ履歴 (20バンド用)
-    std::vector<float> mAnalFilterX1;
-    std::vector<float> mAnalFilterX2;
-    std::vector<float> mAnalFilterY1;
-    std::vector<float> mAnalFilterY2;
+    // 分析側のZDF SVF状態変数（48バンド * 各2セクション分）
+    std::vector<float> mAnalFilterS1;
+    std::vector<float> mAnalFilterS2;
 
     // フィルタバンク中心周波数
     std::vector<float> mBandF0;
     
-    // Biquad フィルタ係数配列 (各サイズ20)
-    std::vector<float> mBandCoeffsB0;
-    std::vector<float> mBandCoeffsB2;
+    // ZDF SVF フィルタ係数配列 (最大サイズ48)
+    std::vector<float> mBandCoeffsG;
+    std::vector<float> mBandCoeffsK;
     std::vector<float> mBandCoeffsA1;
     std::vector<float> mBandCoeffsA2;
+
+    juce::LinearSmoothedValue<float> mFormantShiftSmoother;
 
     // 16kHz中間 Wet 音バッファ
     std::vector<float> m16kWetBuffer;

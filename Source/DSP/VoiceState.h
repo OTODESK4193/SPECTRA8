@@ -8,35 +8,25 @@ namespace DSP {
 struct alignas(32) PolyphonicVoiceSoA {
     static constexpr int kWaveTableSize = 2048;
     static constexpr int kWaveTableMask = 2047;
-    static constexpr int kNumBands = 32;
+    static constexpr int kNumBands = 48;
 
     alignas(32) float phaseIncrL[8] = { 0.0f };
     alignas(32) float phaseIncrR[8] = { 0.0f };
     alignas(32) float phaseL[8] = { 0.0f };
     alignas(32) float phaseR[8] = { 0.0f };
 
-    // 32バンド 4次Biquadフィルタ(2セクション直列)の各ボイスごとの履歴
+    // 48バンド 4次ZDF SVF直列フィルタの各ボイスごとの状態変数 (s1, s2)
     // セクション 1 (S1)
-    alignas(32) float filterS1_X1_L[kNumBands][8] = { { 0.0f } };
-    alignas(32) float filterS1_X2_L[kNumBands][8] = { { 0.0f } };
-    alignas(32) float filterS1_Y1_L[kNumBands][8] = { { 0.0f } };
-    alignas(32) float filterS1_Y2_L[kNumBands][8] = { { 0.0f } };
-
-    alignas(32) float filterS1_X1_R[kNumBands][8] = { { 0.0f } };
-    alignas(32) float filterS1_X2_R[kNumBands][8] = { { 0.0f } };
-    alignas(32) float filterS1_Y1_R[kNumBands][8] = { { 0.0f } };
-    alignas(32) float filterS1_Y2_R[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterS1_S1_L[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterS1_S2_L[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterS1_S1_R[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterS1_S2_R[kNumBands][8] = { { 0.0f } };
 
     // セクション 2 (S2)
-    alignas(32) float filterS2_X1_L[kNumBands][8] = { { 0.0f } };
-    alignas(32) float filterS2_X2_L[kNumBands][8] = { { 0.0f } };
-    alignas(32) float filterS2_Y1_L[kNumBands][8] = { { 0.0f } };
-    alignas(32) float filterS2_Y2_L[kNumBands][8] = { { 0.0f } };
-
-    alignas(32) float filterS2_X1_R[kNumBands][8] = { { 0.0f } };
-    alignas(32) float filterS2_X2_R[kNumBands][8] = { { 0.0f } };
-    alignas(32) float filterS2_Y1_R[kNumBands][8] = { { 0.0f } };
-    alignas(32) float filterS2_Y2_R[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterS2_S1_L[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterS2_S2_L[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterS2_S1_R[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterS2_S2_R[kNumBands][8] = { { 0.0f } };
 };
 
 // ボイス管理・変調用状態（アライメント32バイト保証）

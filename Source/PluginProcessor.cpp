@@ -122,54 +122,48 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     // 分析バッファの初期化
     mAnalysisInputBuffer.clear();
     
-    // 32バンド・バンドパス・フィルタバンク用バッファ・係数の初期化 (メル尺度分割)
-    int numBands = 32;
-    mBandEnvelopes.assign(numBands, 0.0f);
-    mTargetBandEnvelopes.assign(numBands, 0.0f);
+    // 48バンド（最大）のZDF SVF用バッファ・係数の初期化
+    int maxBands = DSP::PolyphonicVoiceSoA::kNumBands; // 48
+    mBandEnvelopes.assign(maxBands, 0.0f);
+    mTargetBandEnvelopes.assign(maxBands, 0.0f);
 
-    // 4次BPF分析用に履歴配列サイズを拡張 (32バンド用, 各2セクション分)
-    mAnalFilterX1.assign(numBands * 2, 0.0f);
-    mAnalFilterX2.assign(numBands * 2, 0.0f);
-    mAnalFilterY1.assign(numBands * 2, 0.0f);
-    mAnalFilterY2.assign(numBands * 2, 0.0f);
+    // ZDF SVF状態変数をゼロクリア (48バンド * 各2セクション)
+    mAnalFilterS1.assign(maxBands * 2, 0.0f);
+    mAnalFilterS2.assign(maxBands * 2, 0.0f);
 
-    mBandF0.resize(numBands);
-    mBandCoeffsB0.resize(numBands);
-    mBandCoeffsB2.resize(numBands);
-    mBandCoeffsA1.resize(numBands);
-    mBandCoeffsA2.resize(numBands);
+    mBandF0.resize(maxBands);
+    mBandCoeffsG.resize(maxBands);
+    mBandCoeffsK.resize(maxBands);
+    mBandCoeffsA1.resize(maxBands);
+    mBandCoeffsA2.resize(maxBands);
 
-    // メル尺度 (Mel Scale) に基づく周波数分割 (人間の耳の周波数知覚特性に完全にマッチ)
+    // メル尺度 (Mel Scale) に基づく最大48バンドの周波数マッピング
     float fMin = 80.0f;
     float fMax = 7500.0f;
-    
     float mMin = 2595.0f * std::log10(1.0f + fMin / 700.0f);
     float mMax = 2595.0f * std::log10(1.0f + fMax / 700.0f);
-    
     float Q = 10.0f;
 
-    for (int i = 0; i < numBands; ++i)
+    for (int i = 0; i < maxBands; ++i)
     {
-        float mVal = mMin + (mMax - mMin) * (static_cast<float>(i) / (numBands - 1));
+        float mVal = mMin + (mMax - mMin) * (static_cast<float>(i) / (maxBands - 1));
         float freq = 700.0f * (std::pow(10.0f, mVal / 2595.0f) - 1.0f);
         mBandF0[i] = freq;
 
-        float omega = 2.0f * 3.14159265f * freq / 16000.0f;
-        float sinW = std::sin(omega);
-        float cosW = std::cos(omega);
-        float alpha = sinW / (2.0f * Q);
+        // ZDF SVF バンドパス用係数計算 (TPT構造)
+        float g = std::tan(3.14159265f * freq / 16000.0f);
+        float k = 1.0f / Q;
+        float a1 = 1.0f / (1.0f + g * (g + k));
+        float a2 = g * a1;
 
-        float b0 = sinW / 2.0f;
-        float b2 = -b0;
-        float a0 = 1.0f + alpha;
-        float a1 = -2.0f * cosW;
-        float a2 = 1.0f - alpha;
-
-        mBandCoeffsB0[i] = b0 / a0;
-        mBandCoeffsB2[i] = b2 / a0;
-        mBandCoeffsA1[i] = a1 / a0;
-        mBandCoeffsA2[i] = a2 / a0;
+        mBandCoeffsG[i] = g;
+        mBandCoeffsK[i] = k;
+        mBandCoeffsA1[i] = a1;
+        mBandCoeffsA2[i] = a2;
     }
+
+    // フォルマントシフト用スムーサーのリセット (16kHz基準)
+    mFormantShiftSmoother.reset(16000.0);
 
     m16kWetBuffer.assign(samplesPerBlock, 0.0f);
 
@@ -251,6 +245,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     float formantShift = apvts.getRawParameterValue("formantShift")->load();
     float detuneWidth = apvts.getRawParameterValue("detune")->load();
     float noiseParam = apvts.getRawParameterValue("noise")->load() * 0.01f; // 0.0f 〜 1.0f
+    
+    // 新バンド数パラメータのロード (8 〜 48)
+    int currentNumBands = static_cast<int>(std::clamp(apvts.getRawParameterValue("bandCount")->load(), 8.0f, 48.0f));
+    
+    mFormantShiftSmoother.setTargetValue(formantShift);
 
     float pitchTranspose = apvts.getRawParameterValue("pitch")->load();
     float tracking = apvts.getRawParameterValue("tracking")->load() * 0.01f;
@@ -337,49 +336,40 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     int num16kSamples = static_cast<int>(downsampled.size());
     m16kWetBuffer.resize(num16kSamples);
 
-    int numBands = DSP::PolyphonicVoiceSoA::kNumBands;
+    int maxBands = DSP::PolyphonicVoiceSoA::kNumBands; // 48
 
     for (int sample16k = 0; sample16k < num16kSamples; ++sample16k)
     {
         float inSample = downsampled[sample16k];
 
-        // 5-A. 分析側（モジュレーター）：32バンドの 4次 BPF (2セクション直列) で超急峻な分離を実行
-        for (int i = 0; i < numBands; ++i)
+        // 5-A. 分析側（モジュレーター）：4次直列 ZDF SVF (S1 -> S2) で極めて急峻かつ低歪みに分離
+        for (int i = 0; i < currentNumBands; ++i)
         {
             // --- セクション 1 ---
-            float xL = inSample;
-            float x1_L = mAnalFilterX1[i];
-            float x2_L = mAnalFilterX2[i];
-            float y1_L = mAnalFilterY1[i];
-            float y2_L = mAnalFilterY2[i];
+            float s1_s1 = mAnalFilterS1[i];
+            float s2_s1 = mAnalFilterS2[i];
+            float v1_s1 = mBandCoeffsA1[i] * (mBandCoeffsG[i] * (inSample - s2_s1) - s1_s1);
+            float y_bp_s1 = v1_s1;
+            float v2_s1 = mBandCoeffsG[i] * v1_s1;
+            float y_lp_s1 = v2_s1 + s2_s1;
 
-            float yL_s1 = mBandCoeffsB0[i] * xL + mBandCoeffsB2[i] * x2_L - mBandCoeffsA1[i] * y1_L - mBandCoeffsA2[i] * y2_L;
-            if (std::isnan(yL_s1) || std::isinf(yL_s1)) yL_s1 = 0.0f;
+            mAnalFilterS1[i] = 2.0f * y_bp_s1 - s1_s1;
+            mAnalFilterS2[i] = 2.0f * y_lp_s1 - s2_s1;
 
-            mAnalFilterX2[i] = x1_L;
-            mAnalFilterX1[i] = xL;
-            mAnalFilterY2[i] = y1_L;
-            mAnalFilterY1[i] = yL_s1;
+            // --- セクション 2 (直列接続 S1 -> S2) ---
+            int idx_s2 = i + maxBands;
+            float s1_s2 = mAnalFilterS1[idx_s2];
+            float s2_s2 = mAnalFilterS2[idx_s2];
+            float v1_s2 = mBandCoeffsA1[i] * (mBandCoeffsG[i] * (y_bp_s1 - s2_s2) - s1_s2);
+            float y_bp_s2 = v1_s2;
+            float v2_s2 = mBandCoeffsG[i] * v1_s2;
+            float y_lp_s2 = v2_s2 + s2_s2;
 
-            // --- セクション 2 (直列接続) ---
-            int idx_s2 = i + numBands;
-            float xL_s2 = yL_s1;
-            float x1_L_s2 = mAnalFilterX1[idx_s2];
-            float x2_L_s2 = mAnalFilterX2[idx_s2];
-            float y1_L_s2 = mAnalFilterY1[idx_s2];
-            float y2_L_s2 = mAnalFilterY2[idx_s2];
-
-            float yL_s2 = mBandCoeffsB0[i] * xL_s2 + mBandCoeffsB2[i] * x2_L_s2 - mBandCoeffsA1[i] * y1_L_s2 - mBandCoeffsA2[i] * y2_L_s2;
-            if (std::isnan(yL_s2) || std::isinf(yL_s2)) yL_s2 = 0.0f;
-
-            mAnalFilterX2[idx_s2] = x1_L_s2;
-            mAnalFilterX1[idx_s2] = xL_s2;
-            mAnalFilterY2[idx_s2] = y1_L_s2;
-            mAnalFilterY1[idx_s2] = yL_s2;
+            mAnalFilterS1[idx_s2] = 2.0f * y_bp_s2 - s1_s2;
+            mAnalFilterS2[idx_s2] = 2.0f * y_lp_s2 - s2_s2;
 
             // 整流エンベロープフォロワーの更新
-            // アタックは速く（5ms）、リリースは少し緩やかに（30ms）する非対称特性
-            float env = std::abs(yL_s2);
+            float env = std::abs(y_bp_s2);
             float envCoeff = (env > mTargetBandEnvelopes[i]) ? 0.015f : 0.003f;
             mTargetBandEnvelopes[i] = mTargetBandEnvelopes[i] * (1.0f - envCoeff) + env * envCoeff;
         }
@@ -393,15 +383,16 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mControlRateCounter++;
 
         // 5-C. 動的 V/UV (有声/無声) 判定による子音明瞭度の劇的向上
-        // 高域バンド (16〜31バンド, 約 1.8kHz 〜 7.5kHz) のエネルギー総和と全体の比率を測定
+        // 高域バンド (全体の後半半分) のエネルギー総和と全体の比率を測定
         float lowEnergy = 0.0f;
         float highEnergy = 0.0f;
-        for (int i = 0; i < 16; ++i) lowEnergy += mBandEnvelopes[i];
-        for (int i = 16; i < 32; ++i) highEnergy += mBandEnvelopes[i];
+        int midPoint = currentNumBands / 2;
+        for (int i = 0; i < midPoint; ++i) lowEnergy += mBandEnvelopes[i];
+        for (int i = midPoint; i < currentNumBands; ++i) highEnergy += mBandEnvelopes[i];
 
         float uvRatio = highEnergy / (lowEnergy + highEnergy + 1e-6f);
         // 子音（摩擦音）のときは比率が跳ね上がるので、それをスケーリング
-        float consonantFactor = std::clamp((uvRatio - 0.25f) * 2.5f, 0.0f, 1.0f);
+        float consonantFactor = std::clamp((uvRatio - 0.22f) * 3.0f, 0.0f, 1.0f);
         mCurrentUnvoicedRatio = mCurrentUnvoicedRatio * 0.9f + consonantFactor * 0.1f; // 平滑化
 
         // 5-E. 8ボイス並列キャリア用白色ノイズの生成
@@ -416,7 +407,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float sampleL = 0.0f;
         float sampleR = 0.0f;
 
-        // 5-F. 32バンド・4次直列フィルタバンクによるキャリア変調処理を実行
+        // フォルマントシフトのスムージング処理
+        float smoothedFormant = mFormantShiftSmoother.getNextValue();
+
+        // 5-F. 48バンド・4次直列 ZDF SVF フィルタバンクによるキャリア変調処理を実行
         mOscillatorBank.processSampleAVX2(
             mDspState,
             activeMask,
@@ -424,9 +418,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             noiseMixVec,
             noiseBuffer,
             mBandEnvelopes.data(),
-            formantShift,
-            mBandCoeffsB0.data(),
-            mBandCoeffsB2.data(),
+            smoothedFormant,
+            currentNumBands,
+            mBandCoeffsG.data(),
+            mBandCoeffsK.data(),
             mBandCoeffsA1.data(),
             mBandCoeffsA2.data(),
             sampleL,
