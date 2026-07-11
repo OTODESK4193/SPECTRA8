@@ -63,120 +63,60 @@ namespace DSP {
         float pulseWidth,
         float wavetablePosition,
         const float* g_coeffs,
-        const float* /*k_coeffs*/,
+        const float* k_coeffs,
         const float* a1_coeffs,
-        const float* /*a2_coeffs*/,
+        const float* a2_coeffs,
         float& outL,
         float& outR)
     {
-        __m256 oscL = _mm256_setzero_ps();
-        __m256 oscR = _mm256_setzero_ps();
-
-        __m256 phaseL_vec = _mm256_load_ps(state.phaseL);
-        __m256 phaseR_vec = _mm256_load_ps(state.phaseR);
-
-        if (waveform == 0) // Sawtooth
+        // ----------------------------------------------------
+        // Mode 0: 従来の Filterbank モード (100% オリジナル動作維持)
+        // ----------------------------------------------------
+        if (vocoderMode == 0)
         {
-            const float* tablePtr = mWavetableSaw.data();
+            const float* tablePtrSaw = mWavetableSaw.data();
 
-            // LEFT
+            // 1. LEFT オシレーター波形生成 (Wavetable補間)
+            __m256 phaseL_vec = _mm256_load_ps(state.phaseL);
             __m256i idx0_L_raw = _mm256_cvttps_epi32(phaseL_vec);
             __m256 idx0_L_float = _mm256_cvtepi32_ps(idx0_L_raw);
             __m256 t_L = _mm256_sub_ps(phaseL_vec, idx0_L_float);
+
             __m256i maskVec = _mm256_set1_epi32(PolyphonicVoiceSoA::kWaveTableMask);
             __m256i idx0_L = _mm256_and_si256(idx0_L_raw, maskVec);
             __m256i idx1_L = _mm256_add_epi32(idx0_L, _mm256_set1_epi32(1));
             idx1_L = _mm256_and_si256(idx1_L, maskVec);
-            __m256 y0_L = _mm256_i32gather_ps(tablePtr, idx0_L, 4);
-            __m256 y1_L = _mm256_i32gather_ps(tablePtr, idx1_L, 4);
+
+            __m256 y0_L = _mm256_i32gather_ps(tablePtrSaw, idx0_L, 4);
+            __m256 y1_L = _mm256_i32gather_ps(tablePtrSaw, idx1_L, 4);
+
             __m256 tmp_L = _mm256_fnmadd_ps(t_L, y0_L, y0_L);
-            oscL = _mm256_fmadd_ps(t_L, y1_L, tmp_L);
+            __m256 oscL = _mm256_fmadd_ps(t_L, y1_L, tmp_L);
 
-            // RIGHT
+
+            // 2. RIGHT オシレーター波生成 (Wavetable補間)
+            __m256 phaseR_vec = _mm256_load_ps(state.phaseR);
             __m256i idx0_R_raw = _mm256_cvttps_epi32(phaseR_vec);
             __m256 idx0_R_float = _mm256_cvtepi32_ps(idx0_R_raw);
             __m256 t_R = _mm256_sub_ps(phaseR_vec, idx0_R_float);
+
             __m256i idx0_R = _mm256_and_si256(idx0_R_raw, maskVec);
             __m256i idx1_R = _mm256_add_epi32(idx0_R, _mm256_set1_epi32(1));
             idx1_R = _mm256_and_si256(idx1_R, maskVec);
-            __m256 y0_R = _mm256_i32gather_ps(tablePtr, idx0_R, 4);
-            __m256 y1_R = _mm256_i32gather_ps(tablePtr, idx1_R, 4);
+
+            __m256 y0_R = _mm256_i32gather_ps(tablePtrSaw, idx0_R, 4);
+            __m256 y1_R = _mm256_i32gather_ps(tablePtrSaw, idx1_R, 4);
+
             __m256 tmp_R = _mm256_fnmadd_ps(t_R, y0_R, y0_R);
-            oscR = _mm256_fmadd_ps(t_R, y1_R, tmp_R);
-        }
-        else if (waveform == 1) // Pulse
-        {
-            __m256 thresh = _mm256_set1_ps(pulseWidth * static_cast<float>(PolyphonicVoiceSoA::kWaveTableSize));
-            
-            // LEFT
-            __m256 cmpL = _mm256_cmp_ps(phaseL_vec, thresh, _CMP_LT_OQ);
-            oscL = _mm256_blendv_ps(_mm256_set1_ps(-1.0f), _mm256_set1_ps(1.0f), cmpL);
+            __m256 oscR = _mm256_fmadd_ps(t_R, y1_R, tmp_R);
 
-            // RIGHT
-            __m256 cmpR = _mm256_cmp_ps(phaseR_vec, thresh, _CMP_LT_OQ);
-            oscR = _mm256_blendv_ps(_mm256_set1_ps(-1.0f), _mm256_set1_ps(1.0f), cmpR);
-        }
-        else // Wavetable (waveform == 2)
-        {
-            const float* tableTri = mWavetableTri.data();
-            const float* tableCustom = mCustomWavetable.data();
 
-            __m256 posVec = _mm256_set1_ps(wavetablePosition);
-            __m256 oneMinusPos = _mm256_sub_ps(_mm256_set1_ps(1.0f), posVec);
+            // 3. 有声音(オシレーター)と無声音(ノイズ)のブレンド
+            __m256 oneMinusNoiseMix = _mm256_sub_ps(_mm256_set1_ps(1.0f), noiseMix);
+            __m256 excitationL = _mm256_fmadd_ps(oneMinusNoiseMix, oscL, _mm256_mul_ps(noiseMix, noiseBuffer));
+            __m256 excitationR = _mm256_fmadd_ps(oneMinusNoiseMix, oscR, _mm256_mul_ps(noiseMix, noiseBuffer));
 
-            __m256i maskVec = _mm256_set1_epi32(PolyphonicVoiceSoA::kWaveTableMask);
 
-            // --- LEFT ---
-            __m256i idx0_L_raw = _mm256_cvttps_epi32(phaseL_vec);
-            __m256 idx0_L_float = _mm256_cvtepi32_ps(idx0_L_raw);
-            __m256 t_L = _mm256_sub_ps(phaseL_vec, idx0_L_float);
-            __m256i idx0_L = _mm256_and_si256(idx0_L_raw, maskVec);
-            __m256i idx1_L = _mm256_add_epi32(idx0_L, _mm256_set1_epi32(1));
-            idx1_L = _mm256_and_si256(idx1_L, maskVec);
-
-            __m256 y0_L_tri = _mm256_i32gather_ps(tableTri, idx0_L, 4);
-            __m256 y1_L_tri = _mm256_i32gather_ps(tableTri, idx1_L, 4);
-            __m256 tmp_L_tri = _mm256_fnmadd_ps(t_L, y0_L_tri, y0_L_tri);
-            __m256 oscL_tri = _mm256_fmadd_ps(t_L, y1_L_tri, tmp_L_tri);
-
-            __m256 y0_L_cust = _mm256_i32gather_ps(tableCustom, idx0_L, 4);
-            __m256 y1_L_cust = _mm256_i32gather_ps(tableCustom, idx1_L, 4);
-            __m256 tmp_L_cust = _mm256_fnmadd_ps(t_L, y0_L_cust, y0_L_cust);
-            __m256 oscL_cust = _mm256_fmadd_ps(t_L, y1_L_cust, tmp_L_cust);
-
-            oscL = _mm256_fmadd_ps(oneMinusPos, oscL_tri, _mm256_mul_ps(posVec, oscL_cust));
-
-            // --- RIGHT ---
-            __m256i idx0_R_raw = _mm256_cvttps_epi32(phaseR_vec);
-            __m256 idx0_R_float = _mm256_cvtepi32_ps(idx0_R_raw);
-            __m256 t_R = _mm256_sub_ps(phaseR_vec, idx0_R_float);
-            __m256i idx0_R = _mm256_and_si256(idx0_R_raw, maskVec);
-            __m256i idx1_R = _mm256_add_epi32(idx0_R, _mm256_set1_epi32(1));
-            idx1_R = _mm256_and_si256(idx1_R, maskVec);
-
-            __m256 y0_R_tri = _mm256_i32gather_ps(tableTri, idx0_R, 4);
-            __m256 y1_R_tri = _mm256_i32gather_ps(tableTri, idx1_R, 4);
-            __m256 tmp_R_tri = _mm256_fnmadd_ps(t_R, y0_R_tri, y0_R_tri);
-            __m256 oscR_tri = _mm256_fmadd_ps(t_R, y1_R_tri, tmp_R_tri);
-
-            __m256 y0_R_cust = _mm256_i32gather_ps(tableCustom, idx0_R, 4);
-            __m256 y1_R_cust = _mm256_i32gather_ps(tableCustom, idx1_R, 4);
-            __m256 tmp_R_cust = _mm256_fnmadd_ps(t_R, y0_R_cust, y0_R_cust);
-            __m256 oscR_cust = _mm256_fmadd_ps(t_R, y1_R_cust, tmp_R_cust);
-
-            oscR = _mm256_fmadd_ps(oneMinusPos, oscR_tri, _mm256_mul_ps(posVec, oscR_cust));
-        }
-
-        // 3. 有声音(オシレーター)と無声音(ノイズ)のブレンド
-        __m256 oneMinusNoiseMix = _mm256_sub_ps(_mm256_set1_ps(1.0f), noiseMix);
-        __m256 excitationL = _mm256_fmadd_ps(oneMinusNoiseMix, oscL, _mm256_mul_ps(noiseMix, noiseBuffer));
-        __m256 excitationR = _mm256_fmadd_ps(oneMinusNoiseMix, oscR, _mm256_mul_ps(noiseMix, noiseBuffer));
-
-        float sumL = 0.0f;
-        float sumR = 0.0f;
-
-        if (vocoderMode == 0) // Filterbank Mode (ZDF SVF 48 Bands)
-        {
             // 4. ZDF SVF フィルタバンクによる変調とボイス加算
             alignas(32) float actMask[8];
             alignas(32) float excL[8];
@@ -187,6 +127,9 @@ namespace DSP {
             _mm256_store_ps(excL, excitationL);
             _mm256_store_ps(excR, excitationR);
             _mm256_store_ps(voiceEnvelopes, envelopes);
+
+            float sumL = 0.0f;
+            float sumR = 0.0f;
 
             int activeBands = std::clamp(currentNumBands, 8, static_cast<int>(PolyphonicVoiceSoA::kNumBands));
 
@@ -203,53 +146,57 @@ namespace DSP {
                     for (int i = 0; i < activeBands; ++i)
                     {
                         float g = g_coeffs[i];
-                        float a1 = a1_coeffs[i];
+                        float a1 = a1_coeffs[i]; // 1.0f / (1.0f + g * (g + k))
 
-                        // --- ZDF SVF (LEFT) - 4次直列 (S1 -> S2) ---
+                        // --- ZDF SVF (LEFT) - 4次直列 (S1 -> S2) 正確なVA構造へ修正 ---
                         float s1_L_s1 = state.filterS1_S1_L[i][v];
                         float s2_L_s1 = state.filterS1_S2_L[i][v];
-                        float v1_L_s1 = a1 * (g * (vL - s2_L_s1) - s1_L_s1);
+                        float v1_L_s1 = a1 * (s1_L_s1 + g * (vL - s2_L_s1));
                         float y_bp_L_s1 = v1_L_s1;
-                        float y_lp_L_s1 = g * v1_L_s1 + s2_L_s1;
+                        float y_lp_L_s1 = s2_L_s1 + g * v1_L_s1;
 
                         state.filterS1_S1_L[i][v] = 2.0f * y_bp_L_s1 - s1_L_s1;
                         state.filterS1_S2_L[i][v] = 2.0f * y_lp_L_s1 - s2_L_s1;
 
+                        // セクション 2 (S1 -> S2)
                         float s1_L_s2 = state.filterS2_S1_L[i][v];
                         float s2_L_s2 = state.filterS2_S2_L[i][v];
-                        float v1_L_s2 = a1 * (g * (y_bp_L_s1 - s2_L_s2) - s1_L_s2);
+                        float v1_L_s2 = a1 * (s1_L_s2 + g * (y_bp_L_s1 - s2_L_s2));
                         float y_bp_L_s2 = v1_L_s2;
-                        float y_lp_L_s2 = g * v1_L_s2 + s2_L_s2;
+                        float y_lp_L_s2 = s2_L_s2 + g * v1_L_s2;
 
                         state.filterS2_S1_L[i][v] = 2.0f * y_bp_L_s2 - s1_L_s2;
                         state.filterS2_S2_L[i][v] = 2.0f * y_lp_L_s2 - s2_L_s2;
 
 
-                        // --- ZDF SVF (RIGHT) - 4次直列 (S1 -> S2) ---
+                        // --- ZDF SVF (RIGHT) - 4次直列 (S1 -> S2) 正確なVA構造へ修正 ---
                         float s1_R_s1 = state.filterS1_S1_R[i][v];
                         float s2_R_s1 = state.filterS1_S2_R[i][v];
-                        float v1_R_s1 = a1 * (g * (vR - s2_R_s1) - s1_R_s1);
+                        float v1_R_s1 = a1 * (s1_R_s1 + g * (vR - s2_R_s1));
                         float y_bp_R_s1 = v1_R_s1;
-                        float y_lp_R_s1 = g * v1_R_s1 + s2_R_s1;
+                        float y_lp_R_s1 = s2_R_s1 + g * v1_R_s1;
 
                         state.filterS1_S1_R[i][v] = 2.0f * y_bp_R_s1 - s1_R_s1;
                         state.filterS1_S2_R[i][v] = 2.0f * y_lp_R_s1 - s2_R_s1;
 
+                        // セクション 2 (S1 -> S2)
                         float s1_R_s2 = state.filterS2_S1_R[i][v];
                         float s2_R_s2 = state.filterS2_S2_R[i][v];
-                        float v1_R_s2 = a1 * (g * (y_bp_R_s1 - s2_R_s2) - s1_R_s2);
+                        float v1_R_s2 = a1 * (s1_R_s2 + g * (y_bp_R_s1 - s2_R_s2));
                         float y_bp_R_s2 = v1_R_s2;
-                        float y_lp_R_s2 = g * v1_R_s2 + s2_R_s2;
+                        float y_lp_R_s2 = s2_R_s2 + g * v1_R_s2;
 
                         state.filterS2_S1_R[i][v] = 2.0f * y_bp_R_s2 - s1_R_s2;
                         state.filterS2_S2_R[i][v] = 2.0f * y_lp_R_s2 - s2_R_s2;
 
 
-                        // フォルマントシフト＆ストレッチ写像
-                        float centerBand = static_cast<float>(activeBands - 1) * 0.5f;
-                        float srcIdx = centerBand + (static_cast<float>(i) - centerBand) / formantStretch - formantShift;
-                        
-                        float modEnv = 1.0f;
+                        // フォルマントシフト写像 (以前音が鳴っていた元の実装)
+                        float srcIdx = static_cast<float>(i) - formantShift;
+                        srcIdx = std::clamp(srcIdx, 0.0f, static_cast<float>(activeBands - 1));
+                        int idx0 = static_cast<int>(srcIdx);
+                        int idx1 = std::min(activeBands - 1, idx0 + 1);
+                        float frac = srcIdx - idx0;
+                        float modEnv = modulatorEnvelopes[idx0] * (1.0f - frac) + modulatorEnvelopes[idx1] * frac;
 
                         voiceSumL += y_bp_L_s2 * modEnv;
                         voiceSumR += y_bp_R_s2 * modEnv;
@@ -259,9 +206,77 @@ namespace DSP {
                     sumR += voiceSumR * voiceEnvelopes[v];
                 }
             }
+
+            __m256 bitMask = _mm256_cmp_ps(activeVoicesMask, _mm256_setzero_ps(), _CMP_GT_OQ);
+
+            // 7. オシレーター位相の更新
+            __m256 phaseIncrL_vec = _mm256_load_ps(state.phaseIncrL);
+            __m256 phaseIncrR_vec = _mm256_load_ps(state.phaseIncrR);
+            phaseL_vec = _mm256_add_ps(phaseL_vec, phaseIncrL_vec);
+            phaseR_vec = _mm256_add_ps(phaseR_vec, phaseIncrR_vec);
+
+            phaseL_vec = _mm256_and_ps(phaseL_vec, bitMask);
+            phaseR_vec = _mm256_and_ps(phaseR_vec, bitMask);
+
+            // ブランクレス位相ラッピング
+            __m256 sizeVec = _mm256_set1_ps(static_cast<float>(PolyphonicVoiceSoA::kWaveTableSize));
+            __m256 cmpL = _mm256_cmp_ps(phaseL_vec, sizeVec, _CMP_GE_OQ);
+            __m256 subL = _mm256_and_ps(cmpL, sizeVec);
+            phaseL_vec = _mm256_sub_ps(phaseL_vec, subL);
+
+            __m256 cmpR = _mm256_cmp_ps(phaseR_vec, sizeVec, _CMP_GE_OQ);
+            __m256 subR = _mm256_and_ps(cmpR, sizeVec);
+            phaseR_vec = _mm256_sub_ps(phaseR_vec, subR);
+
+            _mm256_store_ps(state.phaseL, phaseL_vec);
+            _mm256_store_ps(state.phaseR, phaseR_vec);
+
+            // 前回の-48dB改善値：音量を通常範囲にするためスケーリングを掛ける (ゲイン減衰 * 0.012f)
+            outL = sumL * 0.012f;
+            outR = sumR * 0.012f;
         }
-        else // LPCMode (16th order voice-parallel LPC synthesis)
+        // ----------------------------------------------------
+        // Mode 1: 新しい LPC モード (LPC分析・合成)
+        // ----------------------------------------------------
+        else
         {
+            // --- 1. キャリア波形生成 (モード選択をサポート) ---
+            const float* tablePtr = mWavetableSaw.data();
+            if (waveform == 1)      tablePtr = mWavetablePulse.data();
+            else if (waveform == 2) tablePtr = mCustomWavetable.data();
+
+            // LEFT
+            __m256 phaseL_vec = _mm256_load_ps(state.phaseL);
+            __m256i idx0_L_raw = _mm256_cvttps_epi32(phaseL_vec);
+            __m256 idx0_L_float = _mm256_cvtepi32_ps(idx0_L_raw);
+            __m256 t_L = _mm256_sub_ps(phaseL_vec, idx0_L_float);
+            __m256i maskVec = _mm256_set1_epi32(PolyphonicVoiceSoA::kWaveTableMask);
+            __m256i idx0_L = _mm256_and_si256(idx0_L_raw, maskVec);
+            __m256i idx1_L = _mm256_add_epi32(idx0_L, _mm256_set1_epi32(1));
+            idx1_L = _mm256_and_si256(idx1_L, maskVec);
+            __m256 y0_L = _mm256_i32gather_ps(tablePtr, idx0_L, 4);
+            __m256 y1_L = _mm256_i32gather_ps(tablePtr, idx1_L, 4);
+            __m256 tmp_L = _mm256_fnmadd_ps(t_L, y0_L, y0_L);
+            __m256 oscL = _mm256_fmadd_ps(t_L, y1_L, tmp_L);
+
+            // RIGHT
+            __m256 phaseR_vec = _mm256_load_ps(state.phaseR);
+            __m256i idx0_R_raw = _mm256_cvttps_epi32(phaseR_vec);
+            __m256 idx0_R_float = _mm256_cvtepi32_ps(idx0_R_raw);
+            __m256 t_R = _mm256_sub_ps(phaseR_vec, idx0_R_float);
+            __m256i idx0_R = _mm256_and_si256(idx0_R_raw, maskVec);
+            __m256i idx1_R = _mm256_add_epi32(idx0_R, _mm256_set1_epi32(1));
+            idx1_R = _mm256_and_si256(idx1_R, maskVec);
+            __m256 y0_R = _mm256_i32gather_ps(tablePtr, idx0_R, 4);
+            __m256 y1_R = _mm256_i32gather_ps(tablePtr, idx1_R, 4);
+            __m256 tmp_R = _mm256_fnmadd_ps(t_R, y0_R, y0_R);
+            __m256 oscR = _mm256_fmadd_ps(t_R, y1_R, tmp_R);
+
+            // --- 2. 有声/無声ブレンド ---
+            __m256 oneMinusNoiseMix = _mm256_sub_ps(_mm256_set1_ps(1.0f), noiseMix);
+            __m256 excitationL = _mm256_fmadd_ps(oneMinusNoiseMix, oscL, _mm256_mul_ps(noiseMix, noiseBuffer));
+            __m256 excitationR = _mm256_fmadd_ps(oneMinusNoiseMix, oscR, _mm256_mul_ps(noiseMix, noiseBuffer));
+
             __m256 yL = excitationL;
             __m256 yR = excitationR;
 
@@ -294,37 +309,37 @@ namespace DSP {
             outVoiceR = _mm256_and_ps(outVoiceR, activeVoicesMask);
 
             // 全ボイスの和を計算
-            sumL = SimdUtils::horizontalSum(outVoiceL);
-            sumR = SimdUtils::horizontalSum(outVoiceR);
+            float sumL = SimdUtils::horizontalSum(outVoiceL);
+            float sumR = SimdUtils::horizontalSum(outVoiceR);
+
+            __m256 bitMask = _mm256_cmp_ps(activeVoicesMask, _mm256_setzero_ps(), _CMP_GT_OQ);
+
+            // オシレーター位相の更新
+            __m256 phaseIncrL_vec = _mm256_load_ps(state.phaseIncrL);
+            __m256 phaseIncrR_vec = _mm256_load_ps(state.phaseIncrR);
+            phaseL_vec = _mm256_add_ps(phaseL_vec, phaseIncrL_vec);
+            phaseR_vec = _mm256_add_ps(phaseR_vec, phaseIncrR_vec);
+
+            phaseL_vec = _mm256_and_ps(phaseL_vec, bitMask);
+            phaseR_vec = _mm256_and_ps(phaseR_vec, bitMask);
+
+            // ブランクレス位相ラッピング
+            __m256 sizeVec = _mm256_set1_ps(static_cast<float>(PolyphonicVoiceSoA::kWaveTableSize));
+            __m256 cmpL = _mm256_cmp_ps(phaseL_vec, sizeVec, _CMP_GE_OQ);
+            __m256 subL = _mm256_and_ps(cmpL, sizeVec);
+            phaseL_vec = _mm256_sub_ps(phaseL_vec, subL);
+
+            __m256 cmpR = _mm256_cmp_ps(phaseR_vec, sizeVec, _CMP_GE_OQ);
+            __m256 subR = _mm256_and_ps(cmpR, sizeVec);
+            phaseR_vec = _mm256_sub_ps(phaseR_vec, subR);
+
+            _mm256_store_ps(state.phaseL, phaseL_vec);
+            _mm256_store_ps(state.phaseR, phaseR_vec);
+
+            // LPCモードの出力スケーリング
+            outL = sumL * 0.012f;
+            outR = sumR * 0.012f;
         }
-
-        __m256 bitMask = _mm256_cmp_ps(activeVoicesMask, _mm256_setzero_ps(), _CMP_GT_OQ);
-
-        // 7. オシレーター位相の更新
-        __m256 phaseIncrL_vec = _mm256_load_ps(state.phaseIncrL);
-        __m256 phaseIncrR_vec = _mm256_load_ps(state.phaseIncrR);
-        phaseL_vec = _mm256_add_ps(phaseL_vec, phaseIncrL_vec);
-        phaseR_vec = _mm256_add_ps(phaseR_vec, phaseIncrR_vec);
-
-        phaseL_vec = _mm256_and_ps(phaseL_vec, bitMask);
-        phaseR_vec = _mm256_and_ps(phaseR_vec, bitMask);
-
-        // ブランクレス位相ラッピング
-        __m256 sizeVec = _mm256_set1_ps(static_cast<float>(PolyphonicVoiceSoA::kWaveTableSize));
-        __m256 cmpL = _mm256_cmp_ps(phaseL_vec, sizeVec, _CMP_GE_OQ);
-        __m256 subL = _mm256_and_ps(cmpL, sizeVec);
-        phaseL_vec = _mm256_sub_ps(phaseL_vec, subL);
-
-        __m256 cmpR = _mm256_cmp_ps(phaseR_vec, sizeVec, _CMP_GE_OQ);
-        __m256 subR = _mm256_and_ps(cmpR, sizeVec);
-        phaseR_vec = _mm256_sub_ps(phaseR_vec, subR);
-
-        _mm256_store_ps(state.phaseL, phaseL_vec);
-        _mm256_store_ps(state.phaseR, phaseR_vec);
-
-        // WET音量を通常範囲にするため適切なスケーリングを掛ける (ゲイン減衰 * 0.012f)
-        outL = sumL * 0.012f;
-        outR = sumR * 0.012f;
     }
 
 } // namespace DSP

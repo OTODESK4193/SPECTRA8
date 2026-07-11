@@ -6,7 +6,7 @@
 
 SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
     : AudioProcessor(BusesProperties()
-        .withInput("Input", juce::AudioChannelSet::mono(), true)
+        .withInput("Input", juce::AudioChannelSet::stereo(), true)
         .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
     apvts(*this, nullptr, "Parameters", createParameterLayout()),
     mMidiQueue(1024),
@@ -170,6 +170,7 @@ void SPECTRA8AudioProcessor::releaseResources()
 bool SPECTRA8AudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
     if (layouts.getMainInputChannelSet() != juce::AudioChannelSet::mono() &&
+        layouts.getMainInputChannelSet() != juce::AudioChannelSet::stereo() &&
         layouts.getMainInputChannelSet() != juce::AudioChannelSet::disabled())
         return false;
 
