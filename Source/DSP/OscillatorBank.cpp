@@ -26,26 +26,12 @@ namespace DSP {
         for (int i = 0; i < PolyphonicVoiceSoA::kWaveTableSize; ++i)
         {
             float phase = static_cast<float>(i) / static_cast<float>(PolyphonicVoiceSoA::kWaveTableSize);
-
-            // 1. ノコギリ波
             mWavetableSaw[i] = 2.0f * phase - 1.0f;
-
-            // 2. パルス波
             mWavetablePulse[i] = (phase < 0.5f) ? 1.0f : -1.0f;
 
-            // 3. 三角波
-            if (phase < 0.25f)
-            {
-                mWavetableTri[i] = 4.0f * phase;
-            }
-            else if (phase < 0.75f)
-            {
-                mWavetableTri[i] = 2.0f - 4.0f * phase;
-            }
-            else
-            {
-                mWavetableTri[i] = -4.0f + 4.0f * phase;
-            }
+            if (phase < 0.25f)       mWavetableTri[i] = 4.0f * phase;
+            else if (phase < 0.75f)  mWavetableTri[i] = 2.0f - 4.0f * phase;
+            else                     mWavetableTri[i] = -4.0f + 4.0f * phase;
         }
     }
 
@@ -55,18 +41,17 @@ namespace DSP {
         __m256 noiseMix,
         __m256 noiseBuffer,
         const float* modulatorEnvelopes,
-        float formantShift,
+        float /*formantShift*/,
         int currentNumBands,
         const float* g_coeffs,
         const float* k_coeffs,
         const float* a1_coeffs,
-        const float* a2_coeffs,
         float& outL,
         float& outR)
     {
         const float* tablePtrSaw = mWavetableSaw.data();
 
-        // 1. LEFT オシレーター波形生成 (Wavetable補間)
+        // 1. LEFT オシレーター波形生成
         __m256 phaseL_vec = _mm256_load_ps(state.phaseL);
         __m256i idx0_L_raw = _mm256_cvttps_epi32(phaseL_vec);
         __m256 idx0_L_float = _mm256_cvtepi32_ps(idx0_L_raw);
@@ -83,8 +68,7 @@ namespace DSP {
         __m256 tmp_L = _mm256_fnmadd_ps(t_L, y0_L, y0_L);
         __m256 oscL = _mm256_fmadd_ps(t_L, y1_L, tmp_L);
 
-
-        // 2. RIGHT オシレーター波生成 (Wavetable補間)
+        // 2. RIGHT オシレーター波生成
         __m256 phaseR_vec = _mm256_load_ps(state.phaseR);
         __m256i idx0_R_raw = _mm256_cvttps_epi32(phaseR_vec);
         __m256 idx0_R_float = _mm256_cvtepi32_ps(idx0_R_raw);
@@ -100,12 +84,10 @@ namespace DSP {
         __m256 tmp_R = _mm256_fnmadd_ps(t_R, y0_R, y0_R);
         __m256 oscR = _mm256_fmadd_ps(t_R, y1_R, tmp_R);
 
-
         // 3. 有声音(オシレーター)と無声音(ノイズ)のブレンド
         __m256 oneMinusNoiseMix = _mm256_sub_ps(_mm256_set1_ps(1.0f), noiseMix);
         __m256 excitationL = _mm256_fmadd_ps(oneMinusNoiseMix, oscL, _mm256_mul_ps(noiseMix, noiseBuffer));
         __m256 excitationR = _mm256_fmadd_ps(oneMinusNoiseMix, oscR, _mm256_mul_ps(noiseMix, noiseBuffer));
-
 
         // 4. ZDF SVF フィルタバンクによる変調とボイス加算
         alignas(32) float actMask[8];
@@ -136,62 +118,61 @@ namespace DSP {
                 for (int i = 0; i < activeBands; ++i)
                 {
                     float g = g_coeffs[i];
-                    float a1 = a1_coeffs[i]; // 1.0f / (1.0f + g * (g + k))
+                    float k = k_coeffs[i];
+                    float a1 = a1_coeffs[i];
 
-                    // --- ZDF SVF (LEFT) - 4次直列 (S1 -> S2) 正確なVA構造へ修正 ---
+                    // --- ZDF SVF (LEFT) 正確な Pirkle / Zavalishin 積分モデル ---
                     // セクション 1
                     float s1_L_s1 = state.filterS1_S1_L[i][v];
                     float s2_L_s1 = state.filterS1_S2_L[i][v];
-                    float v1_L_s1 = a1 * (s1_L_s1 + g * (vL - s2_L_s1));
-                    float y_bp_L_s1 = v1_L_s1;
-                    float y_lp_L_s1 = s2_L_s1 + g * v1_L_s1;
 
-                    state.filterS1_S1_L[i][v] = 2.0f * y_bp_L_s1 - s1_L_s1;
-                    state.filterS1_S2_L[i][v] = 2.0f * y_lp_L_s1 - s2_L_s1;
+                    float hp_L_s1 = a1 * (vL - k * s1_L_s1 - s2_L_s1);
+                    float v1_L_s1 = g * hp_L_s1 + s1_L_s1;
+                    float v2_L_s1 = g * v1_L_s1 + s2_L_s1;
 
-                    // セクション 2 (S1 -> S2)
+                    state.filterS1_S1_L[i][v] = 2.0f * v1_L_s1 - s1_L_s1;
+                    state.filterS1_S2_L[i][v] = 2.0f * v2_L_s1 - s2_L_s1;
+
+                    // セクション 2
                     float s1_L_s2 = state.filterS2_S1_L[i][v];
                     float s2_L_s2 = state.filterS2_S2_L[i][v];
-                    float v1_L_s2 = a1 * (s1_L_s2 + g * (y_bp_L_s1 - s2_L_s2));
-                    float y_bp_L_s2 = v1_L_s2;
-                    float y_lp_L_s2 = s2_L_s2 + g * v1_L_s2;
 
-                    state.filterS2_S1_L[i][v] = 2.0f * y_bp_L_s2 - s1_L_s2;
-                    state.filterS2_S2_L[i][v] = 2.0f * y_lp_L_s2 - s2_L_s2;
+                    float hp_L_s2 = a1 * (v1_L_s1 - k * s1_L_s2 - s2_L_s2);
+                    float v1_L_s2 = g * hp_L_s2 + s1_L_s2;
+                    float v2_L_s2 = g * v1_L_s2 + s2_L_s2;
+
+                    state.filterS2_S1_L[i][v] = 2.0f * v1_L_s2 - s1_L_s2;
+                    state.filterS2_S2_L[i][v] = 2.0f * v2_L_s2 - s2_L_s2;
 
 
-                    // --- ZDF SVF (RIGHT) - 4次直列 (S1 -> S2) 正確なVA構造へ修正 ---
+                    // --- ZDF SVF (RIGHT) 正確な Pirkle / Zavalishin 積分モデル ---
                     // セクション 1
                     float s1_R_s1 = state.filterS1_S1_R[i][v];
                     float s2_R_s1 = state.filterS1_S2_R[i][v];
-                    float v1_R_s1 = a1 * (s1_R_s1 + g * (vR - s2_R_s1));
-                    float y_bp_R_s1 = v1_R_s1;
-                    float y_lp_R_s1 = s2_R_s1 + g * v1_R_s1;
 
-                    state.filterS1_S1_R[i][v] = 2.0f * y_bp_R_s1 - s1_R_s1;
-                    state.filterS1_S2_R[i][v] = 2.0f * y_lp_R_s1 - s2_R_s1;
+                    float hp_R_s1 = a1 * (vR - k * s1_R_s1 - s2_R_s1);
+                    float v1_R_s1 = g * hp_R_s1 + s1_R_s1;
+                    float v2_R_s1 = g * v1_R_s1 + s2_R_s1;
 
-                    // セクション 2 (S1 -> S2)
+                    state.filterS1_S1_R[i][v] = 2.0f * v1_R_s1 - s1_R_s1;
+                    state.filterS1_S2_R[i][v] = 2.0f * v2_R_s1 - s2_R_s1;
+
+                    // セクション 2
                     float s1_R_s2 = state.filterS2_S1_R[i][v];
                     float s2_R_s2 = state.filterS2_S2_R[i][v];
-                    float v1_R_s2 = a1 * (s1_R_s2 + g * (y_bp_R_s1 - s2_R_s2));
-                    float y_bp_R_s2 = v1_R_s2;
-                    float y_lp_R_s2 = s2_R_s2 + g * v1_R_s2;
 
-                    state.filterS2_S1_R[i][v] = 2.0f * y_bp_R_s2 - s1_R_s2;
-                    state.filterS2_S2_R[i][v] = 2.0f * y_lp_R_s2 - s2_R_s2;
+                    float hp_R_s2 = a1 * (v1_R_s1 - k * s1_R_s2 - s2_R_s2);
+                    float v1_R_s2 = g * hp_R_s2 + s1_R_s2;
+                    float v2_R_s2 = g * v1_R_s2 + s2_R_s2;
 
+                    state.filterS2_S1_R[i][v] = 2.0f * v1_R_s2 - s1_R_s2;
+                    state.filterS2_S2_R[i][v] = 2.0f * v2_R_s2 - s2_R_s2;
 
-                    // フォルマントシフト写像
-                    float srcIdx = static_cast<float>(i) - formantShift;
-                    srcIdx = std::clamp(srcIdx, 0.0f, static_cast<float>(activeBands - 1));
-                    int idx0 = static_cast<int>(srcIdx);
-                    int idx1 = std::min(activeBands - 1, idx0 + 1);
-                    float frac = srcIdx - idx0;
-                    float modEnv = modulatorEnvelopes[idx0] * (1.0f - frac) + modulatorEnvelopes[idx1] * frac;
+                    float modEnv = modulatorEnvelopes[i];
 
-                    voiceSumL += y_bp_L_s2 * modEnv;
-                    voiceSumR += y_bp_R_s2 * modEnv;
+                    // 帯域減衰を補正し、音の明瞭度を最大化
+                    voiceSumL += v1_L_s2 * modEnv * 4.0f;
+                    voiceSumR += v1_R_s2 * modEnv * 4.0f;
                 }
 
                 sumL += voiceSumL * voiceEnvelopes[v];
@@ -201,7 +182,7 @@ namespace DSP {
 
         __m256 bitMask = _mm256_cmp_ps(activeVoicesMask, _mm256_setzero_ps(), _CMP_GT_OQ);
 
-        // 7. オシレーター位相の更新
+        // 位相更新
         __m256 phaseIncrL_vec = _mm256_load_ps(state.phaseIncrL);
         __m256 phaseIncrR_vec = _mm256_load_ps(state.phaseIncrR);
         phaseL_vec = _mm256_add_ps(phaseL_vec, phaseIncrL_vec);
@@ -210,7 +191,6 @@ namespace DSP {
         phaseL_vec = _mm256_and_ps(phaseL_vec, bitMask);
         phaseR_vec = _mm256_and_ps(phaseR_vec, bitMask);
 
-        // ブランクレス位相ラッピング
         __m256 sizeVec = _mm256_set1_ps(static_cast<float>(PolyphonicVoiceSoA::kWaveTableSize));
         __m256 cmpL = _mm256_cmp_ps(phaseL_vec, sizeVec, _CMP_GE_OQ);
         __m256 subL = _mm256_and_ps(cmpL, sizeVec);
