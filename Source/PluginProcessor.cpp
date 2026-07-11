@@ -109,6 +109,9 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mTelpcIntegrator.setup(10); // fftOrder=10 -> FFTSize=1024
 
     mMidiQueue.clear();
+    mMidiActiveMode = false;
+    mInputEnvelope = 0.0f;
+    mCurrentF0 = 150.0f;
 
     // 状態構造体のクリア
     mDspState = DSP::PolyphonicVoiceSoA();
@@ -170,6 +173,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         event.sampleOffset = static_cast<uint32_t>(metadata.samplePosition);
         if (msg.isNoteOn())
         {
+            mMidiActiveMode = true;
             event.type = DSP::NoteEvent::NoteOn;
             event.note = static_cast<uint8_t>(msg.getNoteNumber());
             event.velocity = static_cast<uint8_t>(msg.getVelocity());
@@ -203,8 +207,36 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     float outputDb = apvts.getRawParameterValue("outputLevel")->load();
     float outputGain = std::pow(10.0f, outputDb / 20.0f);
 
-    // 3. MIDIキューをボイスマネージャーに同期
-    mVoiceManager.processMidiEvents(mMidiQueue);
+    // 3. MIDIキューまたはオートモードの同期、および入力音量追従エンベロープ
+    if (numInputs > 0 && numSamples > 0)
+    {
+        const float* inputL = buffer.getReadPointer(0);
+        float sumAbs = 0.0f;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            sumAbs += std::abs(inputL[i]);
+        }
+        float avgAbs = sumAbs / static_cast<float>(numSamples);
+        float coeff = (avgAbs > mInputEnvelope) ? 0.05f : 0.005f; // 非対称アタック/リリース平滑化
+        mInputEnvelope = mInputEnvelope * (1.0f - coeff) + avgAbs * coeff;
+    }
+
+    if (mMidiActiveMode)
+    {
+        mVoiceManager.processMidiEvents(mMidiQueue, mDspState);
+        mVoiceManager.updateVoices(attack, decay, sustain, release);
+    }
+    else
+    {
+        // オート・ピッチトラッキングモード (ボイス0を常時発音、入力ピッチと音量を追従)
+        mVoiceManager.setVoiceActive(0, true);
+        for (int i = 1; i < 8; ++i)
+        {
+            mVoiceManager.setVoiceActive(i, false);
+        }
+        mVoiceManager.setVoiceFrequency(0, mCurrentF0);
+        mVoiceManager.setVoiceEnvelope(0, std::min(1.0f, mInputEnvelope * 4.0f));
+    }
 
     // 4. 入力音声を 16kHz にダウンサンプリング (分析パス)
     std::vector<float> downsampled;
@@ -229,9 +261,13 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
             // ピッチ検出
             float f0 = mPitchDetector.detectPitch(mAnalysisFrame.data(), static_cast<int>(mAnalysisFrame.size()), 16000.0f);
+            if (f0 > 50.0f && f0 < 800.0f)
+            {
+                mCurrentF0 = f0;
+            }
 
             // 振幅包絡抽出 (True Envelope)
-            mTrueEnvelope.estimate(mAnalysisFrame.data(), static_cast<int>(mAnalysisFrame.size()), f0, mTeEnvelope, 16000.0f);
+            mTrueEnvelope.estimate(mAnalysisFrame.data(), static_cast<int>(mAnalysisFrame.size()), mCurrentF0, mTeEnvelope, 16000.0f);
 
             // Barkフィルタバンクによる低域補償
             // 自己相関のために実数FFTを準備

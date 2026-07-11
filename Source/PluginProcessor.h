@@ -107,5 +107,9 @@ private:
     float mCurrentGain;
     float mTargetGain;
 
+    bool mMidiActiveMode = false;
+    float mInputEnvelope = 0.0f;
+    float mCurrentF0 = 150.0f;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessor)
 };
