@@ -15,7 +15,6 @@ namespace DSP {
 
         void setup(double sampleRate);
 
-<<<<<<< HEAD
     // 8ボイス並列のオシレーターおよびLPC合成フィルタを一括処理する (AVX2 SIMD)
     // state: PolyphonicVoiceSoA 状態構造体への参照
     // activeVoicesMask: 各ボイスのアクティブ状態フラグ (1.0f = ON, 0.0f = OFF) 8個パックされた __m256
@@ -31,11 +30,11 @@ namespace DSP {
                             const float* modulatorEnvelopes,
                             float formantShift,
                             float formantStretch,
+                            int vocoderMode,
                             int currentNumBands,
                             int waveform,
                             float pulseWidth,
                             float wavetablePosition,
-                            int vocoderMode,
                             const float* g_coeffs,
                             const float* k_coeffs,
                             const float* a1_coeffs,
@@ -64,32 +63,5 @@ private:
     alignas(32) std::vector<float> mWavetableTri;
     alignas(32) std::vector<float> mCustomWavetable;
 };
-=======
-        // 8ボイス並列のオシレーターおよびフィルターバンクを一括処理する (AVX2 SIMD)
-        void processSampleAVX2(PolyphonicVoiceSoA& state,
-            __m256 activeVoicesMask,
-            __m256 envelopes,
-            __m256 noiseMix,
-            __m256 noiseBuffer,
-            const float* modulatorEnvelopes,
-            float formantShift,
-            int currentNumBands,
-            const float* g_coeffs,
-            const float* k_coeffs,
-            const float* a1_coeffs,
-            const float* a2_coeffs,
-            float& outL,
-            float& outR);
-
-    private:
-        void generateWavetables();
-
-        double mSampleRate;
->>>>>>> 2e6b08f481ac220ae5201dda4c162eeef3cb3fc5
-
-        alignas(32) std::vector<float> mWavetableSaw;
-        alignas(32) std::vector<float> mWavetablePulse;
-        alignas(32) std::vector<float> mWavetableTri;
-    };
 
 } // namespace DSP

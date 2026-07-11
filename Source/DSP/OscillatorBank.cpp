@@ -57,6 +57,7 @@ namespace DSP {
         const float* modulatorEnvelopes,
         float formantShift,
         float formantStretch,
+        int vocoderMode,
         int currentNumBands,
         int waveform,
         float pulseWidth,
@@ -64,26 +65,12 @@ namespace DSP {
         const float* g_coeffs,
         const float* k_coeffs,
         const float* a1_coeffs,
-        const float* /*a2_coeffs*/,
+        const float* a2_coeffs,
         float& outL,
         float& outR)
     {
         __m256 oscL = _mm256_setzero_ps();
         __m256 oscR = _mm256_setzero_ps();
-
-<<<<<<< HEAD
-        __m256 phaseL_vec = _mm256_load_ps(state.phaseL);
-=======
-        // 1. LEFT オシレーター波形生成
-        __m256 phaseL_vec = _mm256_load_ps(state.phaseL);
-        __m256i idx0_L_raw = _mm256_cvttps_epi32(phaseL_vec);
-        __m256 idx0_L_float = _mm256_cvtepi32_ps(idx0_L_raw);
-        __m256 t_L = _mm256_sub_ps(phaseL_vec, idx0_L_float);
-
-        __m256i maskVec = _mm256_set1_epi32(PolyphonicVoiceSoA::kWaveTableMask);
-        __m256i idx0_L = _mm256_and_si256(idx0_L_raw, maskVec);
-        __m256i idx1_L = _mm256_add_epi32(idx0_L, _mm256_set1_epi32(1));
-        idx1_L = _mm256_and_si256(idx1_L, maskVec);
 
         __m256 phaseL_vec = _mm256_load_ps(state.phaseL);
         __m256 phaseR_vec = _mm256_load_ps(state.phaseR);

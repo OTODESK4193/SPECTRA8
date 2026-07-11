@@ -146,7 +146,7 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
         mBandCoeffsA1[i] = a1;
     }
 
-    mFormantShiftSmoother.reset(16000.0);
+    mFormantShiftSmoother.reset(16000);
 
     int safeAllocationSize = std::max(samplesPerBlock * 3, 4096);
     mDownsampledBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
@@ -360,6 +360,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 num16kSamples++;
             }
 
+            timeAccum += step;
+        }
         mDownsampleTimeAccum = timeAccum - static_cast<double>(numSamples);
     }
 
@@ -554,7 +556,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mBandCoeffsG.data(),
             mBandCoeffsK.data(),
             mBandCoeffsA1.data(),
-            mBandCoeffsA2.data(),
+            mBandCoeffsA1.data(),
             sampleL,
             sampleR
         );
