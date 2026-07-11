@@ -16,8 +16,8 @@ namespace DSP {
         // 初期化とWavetableの生成
         void setup(double sampleRate);
 
-        // 8ボイス並列のオシレーターおよびLPC合成フィルターを一括処理する (AVX2 SIMD)
-        // ★数理モデル刷新に伴い、引数を13個に完全統一（a2_coeffsを削除）
+        // 8ボイス並列のオシレーターおよびフィルターバンクを一括処理する (AVX2 SIMD)
+        // ★差分検証に基づき、a2_coeffs を含む元の「14個の引数リスト」へ完全先祖返りさせて不整合を破壊
         void processSampleAVX2(PolyphonicVoiceSoA& state,
             __m256 activeVoicesMask,
             __m256 envelopes,
@@ -29,6 +29,7 @@ namespace DSP {
             const float* g_coeffs,
             const float* k_coeffs,
             const float* a1_coeffs,
+            const float* a2_coeffs,
             float& outL,
             float& outR);
 

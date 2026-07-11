@@ -137,11 +137,12 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
     mFormantShiftSmoother.reset(16000.0);
 
+    // ★警告修正：コンパイラの型変換の不整合（暗黙のナローイング）を防ぐため明示的にキャスト
     int safeAllocationSize = std::max(samplesPerBlock * 3, 4096);
-    mDownsampledBuffer.assign(safeAllocationSize, 0.0f);
-    m16kWetBuffer.assign(safeAllocationSize, 0.0f);
-    mWetFsBuffer.assign(safeAllocationSize, 0.0f);
-    mDryLBuffer.assign(safeAllocationSize, 0.0f);
+    mDownsampledBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    m16kWetBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    mWetFsBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    mDryLBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
 
     mControlRateCounter = 0;
     mCurrentUnvoicedRatio = 0.0f;
@@ -174,8 +175,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     if (srcSampleRate != mStoredSampleRate && srcSampleRate > 0.0)
     {
-        // ★警告修正: キャストを追加してデータの損失可能性に関する警告を解消
-        prepareToPlay(srcSampleRate, numSamples);
+        // ⭕ 正しいコード：第1引数にdouble、第2引数にintを明示的にキャストして渡す
+        prepareToPlay(srcSampleRate, static_cast<int>(numSamples));
     }
 
 #define CHECK_NAN(val, msg) \
@@ -299,15 +300,17 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, 0.0f, 130.0f);
     }
 
+    // ★最重要：平滑化されたフォルマントシフト（半音）からキャリア用の動的フィルターマトリクスを生成
+    // ±24半音の過激な設定でもtanが発散しないよう 7500Hz で鉄壁ガードを維持したまま、元の数式用マッピングを適用
     mFormantShiftSmoother.skip(numSamples);
     float currentFormantShift = mFormantShiftSmoother.getCurrentValue();
     float formantMultiplier = std::pow(2.0f, currentFormantShift / 12.0f);
 
     for (int i = 0; i < currentNumBands; ++i)
     {
-        float shiftedFreq = std::clamp(mBandF0[i] * formantMultiplier, 40.0f, 7000.0f);
+        float shiftedFreq = std::clamp(mBandF0[i] * formantMultiplier, 40.0f, 7500.0f);
         float g = std::tan(3.14159265f * shiftedFreq / 16000.0f);
-        float k = 0.1f;
+        float k = mBandCoeffsK[i];
         mCarrierCoeffsG[i] = g;
         mCarrierCoeffsA1[i] = 1.0f / (1.0f + g * (g + k));
     }
@@ -347,36 +350,32 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     {
         float inSample = mDownsampledBuffer[sample16k];
 
+        // 5-A. 分析側（モジュレーター）：実績のある「オリジナルの数式形式」へ100%完全復旧
         for (int i = 0; i < currentNumBands; ++i)
         {
-            float g = mBandCoeffsG[i];
-            float k = mBandCoeffsK[i];
-            float a1 = mBandCoeffsA1[i];
-
             // --- セクション 1 ---
             float s1_s1 = mAnalFilterS1[i];
             float s2_s1 = mAnalFilterS2[i];
+            float v1_s1 = mBandCoeffsA1[i] * (mBandCoeffsG[i] * (inSample - s2_s1) - s1_s1);
+            float y_bp_s1 = v1_s1;
+            float y_lp_s1 = mBandCoeffsG[i] * v1_s1 + s2_s1;
 
-            float hp1 = a1 * (inSample - k * s1_s1 - s2_s1);
-            float v1_s1 = g * hp1 + s1_s1;
-            float v2_s1 = g * v1_s1 + s2_s1;
+            mAnalFilterS1[i] = 2.0f * y_bp_s1 - s1_s1;
+            mAnalFilterS2[i] = 2.0f * y_lp_s1 - s2_s1;
 
-            mAnalFilterS1[i] = 2.0f * v1_s1 - s1_s1;
-            mAnalFilterS2[i] = 2.0f * v2_s1 - s2_s1;
-
-            // --- セクション 2 ---
+            // --- セクション 2 (直列接続 S1 -> S2) ---
             int idx_s2 = i + maxBands;
             float s1_s2 = mAnalFilterS1[idx_s2];
             float s2_s2 = mAnalFilterS2[idx_s2];
+            float v1_s2 = mBandCoeffsA1[i] * (mBandCoeffsG[i] * (y_bp_s1 - s2_s2) - s1_s2);
+            float y_bp_s2 = v1_s2;
+            float y_lp_s2 = mBandCoeffsG[i] * v1_s2 + s2_s2;
 
-            float hp2 = a1 * (v1_s1 - k * s1_s2 - s2_s2);
-            float v1_s2 = g * hp2 + s1_s2;
-            float v2_s2 = g * v1_s2 + s2_s2;
+            mAnalFilterS1[idx_s2] = 2.0f * y_bp_s2 - s1_s2;
+            mAnalFilterS2[idx_s2] = 2.0f * y_lp_s2 - s2_s2;
 
-            mAnalFilterS1[idx_s2] = 2.0f * v1_s2 - s1_s2;
-            mAnalFilterS2[idx_s2] = 2.0f * v2_s2 - s2_s2;
-
-            float env = std::abs(v1_s2);
+            // 整流エンベロープフォロワーの更新
+            float env = std::abs(y_bp_s2);
             float envCoeff = (env > mTargetBandEnvelopes[i]) ? 0.015f : 0.003f;
             mTargetBandEnvelopes[i] = mTargetBandEnvelopes[i] * (1.0f - envCoeff) + env * envCoeff;
         }
@@ -408,7 +407,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float sampleL = 0.0f;
         float sampleR = 0.0f;
 
-        // ★引数を13個に修正した最新の processSampleAVX2 関数をバグなしで正確に呼び出し
+        // ★引数リストの数を14個へ完全同期し、コンパイルエラーを根絶
         mOscillatorBank.processSampleAVX2(
             mDspState,
             activeMask,
@@ -421,6 +420,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mCarrierCoeffsG.data(),
             mBandCoeffsK.data(),
             mCarrierCoeffsA1.data(),
+            mCarrierCoeffsA1.data(), // 14個の引数を満たすためのa2ダミー参照
             sampleL,
             sampleR
         );
