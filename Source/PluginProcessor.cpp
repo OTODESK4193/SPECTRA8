@@ -373,42 +373,53 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             // IFFT実行 → 自己相関系列を得る
             mFsFft->performRealOnlyInverseTransform(mIfftBuffer.data());
             
+            // 逆FFTのスケーリング適用 (1/N)
+            float invN = 1.0f / 2048.0f;
+            for (int i = 0; i < 2048; ++i)
+            {
+                mIfftBuffer[i] *= invN;
+            }
+            
             // (C) Levinson-Durbin再帰法による24次LPC係数の算出 (事前確保バッファ使用)
             int ldOrder = 24;
             std::fill(mLdNewLpc.begin(), mLdNewLpc.end(), 0.0f);
             mLdNewLpc[0] = 1.0f;
             float ldGain = 0.0f;
             
-            float R0 = mIfftBuffer[0];
-            if (R0 > 1e-10f)
+            float E = mIfftBuffer[0];
+            if (E > 1e-10f)
             {
                 std::fill(mLdA.begin(), mLdA.end(), 0.0f);
-                mLdA[0] = 1.0f;
-                float E = R0;
+                mLdA[0] = 1.0f; // a_prev
                 
                 bool ldStable = true;
-                for (int m = 1; m <= ldOrder; ++m)
+                for (int i = 1; i <= ldOrder; ++i)
                 {
-                    float lambda = 0.0f;
-                    for (int j = 0; j < m; ++j)
+                    float sum = 0.0f;
+                    for (int j = 1; j < i; ++j)
                     {
-                        lambda += mLdA[j] * mIfftBuffer[m - j];
+                        sum += mLdA[j] * mIfftBuffer[i - j];
                     }
                     
-                    if (std::abs(E) < 1e-10f) { ldStable = false; break; }
-                    float k_m = -lambda / E;
+                    float lambda = (mIfftBuffer[i] - sum) / E;
                     
-                    if (std::abs(k_m) >= 1.0f) { ldStable = false; break; }
+                    if (std::abs(lambda) >= 1.0f)
+                    {
+                        ldStable = false;
+                        break;
+                    }
                     
-                    // 係数の更新 (別バッファに書き出してからコピー、インプレース破壊を防止)
+                    // 係数の更新 (mLdANew = a_curr)
                     std::fill(mLdANew.begin(), mLdANew.end(), 0.0f);
-                    for (int j = 0; j <= m; ++j)
+                    mLdANew[0] = 1.0f;
+                    for (int j = 1; j < i; ++j)
                     {
-                        mLdANew[j] = mLdA[j] + k_m * mLdA[m - j];
+                        mLdANew[j] = mLdA[j] - lambda * mLdA[i - j];
                     }
-                    std::copy(mLdANew.begin(), mLdANew.begin() + m + 1, mLdA.begin());
+                    mLdANew[i] = -lambda;
                     
-                    E = E * (1.0f - k_m * k_m);
+                    std::copy(mLdANew.begin(), mLdANew.begin() + i + 1, mLdA.begin());
+                    E = E * (1.0f - lambda * lambda);
                 }
                 
                 if (ldStable && E > 0.0f)
@@ -418,8 +429,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 }
             }
             
-            mFsLpcTarget = mLdNewLpc;
-            mTargetGain = ldGain;
+            if (ldGain > 0.0f)
+            {
+                mFsLpcTarget = mLdNewLpc;
+                mTargetGain = ldGain;
+            }
 
             CHECK_NAN_VEC(mTeEnvelope, "mTeEnvelope");
             CHECK_NAN_VEC(mFsEnvelope, "mFsEnvelope");

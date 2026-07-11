@@ -9,8 +9,8 @@ MainPanel::MainPanel(juce::AudioProcessorValueTreeState& state)
     addDial("character", "CHARACTER");
     addDial("frameRate", "FRAME RATE");
     addDial("lpcOrder", "LPC ORDER");
-    addDial("formantShift", "FORMANT SHIFT");
-    addDial("formantStretch", "FORMANT STRETCH");
+    addDial("formantShift", "FMT SHIFT");
+    addDial("formantStretch", "FMT STRETCH");
     addDial("tracking", "TRACKING");
 
     // 2. ノブの追加 (オシレーターセクション)
@@ -168,18 +168,19 @@ void MainPanel::resized()
     mModeCombo.setBounds(650, 75, 120, 24);
 
     // Dials 6, 7 (Wavetable Pos, Pulse Width)
+    int oscDialSize = 58;
     mDials[6].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonPink);
-    mDials[6].slider->setBounds(520, 135, dialSize, dialSize + 16);
+    mDials[6].slider->setBounds(520, 115, oscDialSize, oscDialSize + 16);
     
     mDials[7].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonPink);
-    mDials[7].slider->setBounds(660, 135, dialSize, dialSize + 16);
+    mDials[7].slider->setBounds(660, 115, oscDialSize, oscDialSize + 16);
 
     // Dials 8, 9 (Detune, Noise Mix)
     mDials[8].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonPink);
-    mDials[8].slider->setBounds(520, 215, dialSize, dialSize + 16);
+    mDials[8].slider->setBounds(520, 205, oscDialSize, oscDialSize + 16);
     
     mDials[9].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonPink);
-    mDials[9].slider->setBounds(660, 215, dialSize, dialSize + 16);
+    mDials[9].slider->setBounds(660, 205, oscDialSize, oscDialSize + 16);
 
     // ADSR / Volume (Dials 10〜15)
     // 横一列に6個配置
