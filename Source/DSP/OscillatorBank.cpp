@@ -132,38 +132,71 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
 
             for (int i = 0; i < PolyphonicVoiceSoA::kNumBands; ++i)
             {
-                // Biquad フィルタ実行 (LEFT)
-                float xL = vL;
-                float x1_L = state.filterX1_L[i][v];
-                float x2_L = state.filterX2_L[i][v];
-                float bpY1_L = state.filterY1_L[i][v];
-                float bpY2_L = state.filterY2_L[i][v];
+                // Biquad フィルタ実行 (LEFT) - 4次直列 (S1 -> S2)
+                // --- セクション 1 ---
+                float xL_s1 = vL;
+                float x1_L_s1 = state.filterS1_X1_L[i][v];
+                float x2_L_s1 = state.filterS1_X2_L[i][v];
+                float y1_L_s1 = state.filterS1_Y1_L[i][v];
+                float y2_L_s1 = state.filterS1_Y2_L[i][v];
 
-                float yL = b0_coeffs[i] * xL + b2_coeffs[i] * x2_L - a1_coeffs[i] * bpY1_L - a2_coeffs[i] * bpY2_L;
-                if (std::isnan(yL) || std::isinf(yL)) yL = 0.0f;
+                float yL_s1 = b0_coeffs[i] * xL_s1 + b2_coeffs[i] * x2_L_s1 - a1_coeffs[i] * y1_L_s1 - a2_coeffs[i] * y2_L_s1;
+                if (std::isnan(yL_s1) || std::isinf(yL_s1)) yL_s1 = 0.0f;
 
-                state.filterX2_L[i][v] = x1_L;
-                state.filterX1_L[i][v] = xL;
-                state.filterY2_L[i][v] = bpY1_L;
-                state.filterY1_L[i][v] = yL;
+                state.filterS1_X2_L[i][v] = x1_L_s1;
+                state.filterS1_X1_L[i][v] = xL_s1;
+                state.filterS1_Y2_L[i][v] = y1_L_s1;
+                state.filterS1_Y1_L[i][v] = yL_s1;
 
-                // Biquad フィルタ実行 (RIGHT)
-                float xR = vR;
-                float x1_R = state.filterX1_R[i][v];
-                float x2_R = state.filterX2_R[i][v];
-                float bpY1_R = state.filterY1_R[i][v];
-                float bpY2_R = state.filterY2_R[i][v];
+                // --- セクション 2 ---
+                float xL_s2 = yL_s1;
+                float x1_L_s2 = state.filterS2_X1_L[i][v];
+                float x2_L_s2 = state.filterS2_X2_L[i][v];
+                float y1_L_s2 = state.filterS2_Y1_L[i][v];
+                float y2_L_s2 = state.filterS2_Y2_L[i][v];
 
-                float yR = b0_coeffs[i] * xR + b2_coeffs[i] * x2_R - a1_coeffs[i] * bpY1_R - a2_coeffs[i] * bpY2_R;
-                if (std::isnan(yR) || std::isinf(yR)) yR = 0.0f;
+                float yL_s2 = b0_coeffs[i] * xL_s2 + b2_coeffs[i] * x2_L_s2 - a1_coeffs[i] * y1_L_s2 - a2_coeffs[i] * y2_L_s2;
+                if (std::isnan(yL_s2) || std::isinf(yL_s2)) yL_s2 = 0.0f;
 
-                state.filterX2_R[i][v] = x1_R;
-                state.filterX1_R[i][v] = xR;
-                state.filterY2_R[i][v] = bpY1_R;
-                state.filterY1_R[i][v] = yR;
+                state.filterS2_X2_L[i][v] = x1_L_s2;
+                state.filterS2_X1_L[i][v] = xL_s2;
+                state.filterS2_Y2_L[i][v] = y1_L_s2;
+                state.filterS2_Y1_L[i][v] = yL_s2;
+
+
+                // Biquad フィルタ実行 (RIGHT) - 4次直列 (S1 -> S2)
+                // --- セクション 1 ---
+                float xR_s1 = vR;
+                float x1_R_s1 = state.filterS1_X1_R[i][v];
+                float x2_R_s1 = state.filterS1_X2_R[i][v];
+                float y1_R_s1 = state.filterS1_Y1_R[i][v];
+                float y2_R_s1 = state.filterS1_Y2_R[i][v];
+
+                float yR_s1 = b0_coeffs[i] * xR_s1 + b2_coeffs[i] * x2_R_s1 - a1_coeffs[i] * y1_R_s1 - a2_coeffs[i] * y2_R_s1;
+                if (std::isnan(yR_s1) || std::isinf(yR_s1)) yR_s1 = 0.0f;
+
+                state.filterS1_X2_R[i][v] = x1_R_s1;
+                state.filterS1_X1_R[i][v] = xR_s1;
+                state.filterS1_Y2_R[i][v] = y1_R_s1;
+                state.filterS1_Y1_R[i][v] = yR_s1;
+
+                // --- セクション 2 ---
+                float xR_s2 = yR_s1;
+                float x1_R_s2 = state.filterS2_X1_R[i][v];
+                float x2_R_s2 = state.filterS2_X2_R[i][v];
+                float y1_R_s2 = state.filterS2_Y1_R[i][v];
+                float y2_R_s2 = state.filterS2_Y2_R[i][v];
+
+                float yR_s2 = b0_coeffs[i] * xR_s2 + b2_coeffs[i] * x2_R_s2 - a1_coeffs[i] * y1_R_s2 - a2_coeffs[i] * y2_R_s2;
+                if (std::isnan(yR_s2) || std::isinf(yR_s2)) yR_s2 = 0.0f;
+
+                state.filterS2_X2_R[i][v] = x1_R_s2;
+                state.filterS2_X1_R[i][v] = xR_s2;
+                state.filterS2_Y2_R[i][v] = y1_R_s2;
+                state.filterS2_Y1_R[i][v] = yR_s2;
+
 
                 // フォルマントシフト写像
-                // (formantShift パラメータに応じてマッピングするインデックスをずらす)
                 float srcIdx = static_cast<float>(i) - formantShift;
                 srcIdx = std::clamp(srcIdx, 0.0f, static_cast<float>(PolyphonicVoiceSoA::kNumBands - 1));
                 int idx0 = static_cast<int>(srcIdx);
@@ -171,8 +204,8 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
                 float frac = srcIdx - idx0;
                 float modEnv = modulatorEnvelopes[idx0] * (1.0f - frac) + modulatorEnvelopes[idx1] * frac;
 
-                voiceSumL += yL * modEnv;
-                voiceSumR += yR * modEnv;
+                voiceSumL += yL_s2 * modEnv;
+                voiceSumR += yR_s2 * modEnv;
             }
 
             sumL += voiceSumL * voiceEnvelopes[v];

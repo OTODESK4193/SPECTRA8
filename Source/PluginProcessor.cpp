@@ -122,15 +122,16 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     // 分析バッファの初期化
     mAnalysisInputBuffer.clear();
     
-    // 20バンド・バンドパス・フィルタバンク用バッファ・係数の初期化
-    int numBands = 20;
+    // 32バンド・バンドパス・フィルタバンク用バッファ・係数の初期化 (メル尺度分割)
+    int numBands = 32;
     mBandEnvelopes.assign(numBands, 0.0f);
     mTargetBandEnvelopes.assign(numBands, 0.0f);
 
-    mAnalFilterX1.assign(numBands, 0.0f);
-    mAnalFilterX2.assign(numBands, 0.0f);
-    mAnalFilterY1.assign(numBands, 0.0f);
-    mAnalFilterY2.assign(numBands, 0.0f);
+    // 4次BPF分析用に履歴配列サイズを拡張 (32バンド用, 各2セクション分)
+    mAnalFilterX1.assign(numBands * 2, 0.0f);
+    mAnalFilterX2.assign(numBands * 2, 0.0f);
+    mAnalFilterY1.assign(numBands * 2, 0.0f);
+    mAnalFilterY2.assign(numBands * 2, 0.0f);
 
     mBandF0.resize(numBands);
     mBandCoeffsB0.resize(numBands);
@@ -138,13 +139,19 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mBandCoeffsA1.resize(numBands);
     mBandCoeffsA2.resize(numBands);
 
+    // メル尺度 (Mel Scale) に基づく周波数分割 (人間の耳の周波数知覚特性に完全にマッチ)
     float fMin = 80.0f;
-    float fMax = 7000.0f; // 16kHzのナイキスト周波数8000Hz以下に収める
-    float Q = 8.0f;       // 音量が滑らかにつながるように設定
+    float fMax = 7500.0f;
+    
+    float mMin = 2595.0f * std::log10(1.0f + fMin / 700.0f);
+    float mMax = 2595.0f * std::log10(1.0f + fMax / 700.0f);
+    
+    float Q = 10.0f;
 
     for (int i = 0; i < numBands; ++i)
     {
-        float freq = fMin * std::pow(fMax / fMin, static_cast<float>(i) / (numBands - 1));
+        float mVal = mMin + (mMax - mMin) * (static_cast<float>(i) / (numBands - 1));
+        float freq = 700.0f * (std::pow(10.0f, mVal / 2595.0f) - 1.0f);
         mBandF0[i] = freq;
 
         float omega = 2.0f * 3.14159265f * freq / 16000.0f;
@@ -293,12 +300,13 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float envVolume = std::clamp(mInputEnvelope * 4.0f, 0.0f, 1.0f);
         mVoiceManager.setVoiceEnvelope(0, envVolume);
         
-        float baseF0 = 150.0f; // C3ベースのデフォルトピッチ
-        float freq0 = baseF0 + (mCurrentF0 - baseF0) * tracking;
-        float finalF0 = freq0 * std::pow(2.0f, pitchTranspose / 12.0f);
-
+        // ピッチ検出は使用せず、C3 (130Hz) 固定ピッチで完璧なロボットボイスを生成
+        float finalF0 = 130.0f * std::pow(2.0f, pitchTranspose / 12.0f);
         mVoiceManager.setVoiceFrequency(0, finalF0);
     }
+
+    // ボコーダー合成用にフラットなピッチで SoA 状態を同期 (ブロックごとに1回だけ同期してADSRの速さを適正化)
+    mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, tracking, 130.0f);
 
     // 4. 入力音声を 16kHz にダウンサンプリング (ホストサンプリングレートから 16kHz への直接線形リサンプラー)
     std::vector<float> downsampled;
@@ -329,33 +337,51 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     int num16kSamples = static_cast<int>(downsampled.size());
     m16kWetBuffer.resize(num16kSamples);
 
-    int numBands = 20;
+    int numBands = DSP::PolyphonicVoiceSoA::kNumBands;
 
     for (int sample16k = 0; sample16k < num16kSamples; ++sample16k)
     {
         float inSample = downsampled[sample16k];
 
-        // 5-A. 分析側（モジュレーター）：20バンドの Biquad BPF を通してエンベロープを検出
+        // 5-A. 分析側（モジュレーター）：32バンドの 4次 BPF (2セクション直列) で超急峻な分離を実行
         for (int i = 0; i < numBands; ++i)
         {
-            float x = inSample;
-            float x1 = mAnalFilterX1[i];
-            float x2 = mAnalFilterX2[i];
-            float y1 = mAnalFilterY1[i];
-            float y2 = mAnalFilterY2[i];
+            // --- セクション 1 ---
+            float xL = inSample;
+            float x1_L = mAnalFilterX1[i];
+            float x2_L = mAnalFilterX2[i];
+            float y1_L = mAnalFilterY1[i];
+            float y2_L = mAnalFilterY2[i];
 
-            // Biquad フィルタ実行
-            float y = mBandCoeffsB0[i] * x + mBandCoeffsB2[i] * x2 - mBandCoeffsA1[i] * y1 - mBandCoeffsA2[i] * y2;
-            if (std::isnan(y) || std::isinf(y)) y = 0.0f;
+            float yL_s1 = mBandCoeffsB0[i] * xL + mBandCoeffsB2[i] * x2_L - mBandCoeffsA1[i] * y1_L - mBandCoeffsA2[i] * y2_L;
+            if (std::isnan(yL_s1) || std::isinf(yL_s1)) yL_s1 = 0.0f;
 
-            mAnalFilterX2[i] = x1;
-            mAnalFilterX1[i] = x;
-            mAnalFilterY2[i] = y1;
-            mAnalFilterY1[i] = y;
+            mAnalFilterX2[i] = x1_L;
+            mAnalFilterX1[i] = xL;
+            mAnalFilterY2[i] = y1_L;
+            mAnalFilterY1[i] = yL_s1;
 
-            // 整流エンベロープフォロワーの平滑化更新
-            float envCoeff = 0.008f; // 平滑化の応答時定数 (カットオフ約25Hz)
-            mTargetBandEnvelopes[i] = mTargetBandEnvelopes[i] * (1.0f - envCoeff) + std::abs(y) * envCoeff;
+            // --- セクション 2 (直列接続) ---
+            int idx_s2 = i + numBands;
+            float xL_s2 = yL_s1;
+            float x1_L_s2 = mAnalFilterX1[idx_s2];
+            float x2_L_s2 = mAnalFilterX2[idx_s2];
+            float y1_L_s2 = mAnalFilterY1[idx_s2];
+            float y2_L_s2 = mAnalFilterY2[idx_s2];
+
+            float yL_s2 = mBandCoeffsB0[i] * xL_s2 + mBandCoeffsB2[i] * x2_L_s2 - mBandCoeffsA1[i] * y1_L_s2 - mBandCoeffsA2[i] * y2_L_s2;
+            if (std::isnan(yL_s2) || std::isinf(yL_s2)) yL_s2 = 0.0f;
+
+            mAnalFilterX2[idx_s2] = x1_L_s2;
+            mAnalFilterX1[idx_s2] = xL_s2;
+            mAnalFilterY2[idx_s2] = y1_L_s2;
+            mAnalFilterY1[idx_s2] = yL_s2;
+
+            // 整流エンベロープフォロワーの更新
+            // アタックは速く（5ms）、リリースは少し緩やかに（30ms）する非対称特性
+            float env = std::abs(yL_s2);
+            float envCoeff = (env > mTargetBandEnvelopes[i]) ? 0.015f : 0.003f;
+            mTargetBandEnvelopes[i] = mTargetBandEnvelopes[i] * (1.0f - envCoeff) + env * envCoeff;
         }
 
         // 5-B. コントロールレート（32サンプル毎）でのエンベロープ更新
@@ -366,43 +392,31 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         }
         mControlRateCounter++;
 
-        // 5-C. ボイス状態の更新 (16kHz基準)
-        if (isMidiMode)
-        {
-            mVoiceManager.updateVoices(attack, decay, sustain, release);
-        }
-        else
-        {
-            // オート・ピッチトラッキングモード (声の入力がある時だけボイス0を発音)
-            bool hasInput = (mInputEnvelope > 0.0005f);
-            mVoiceManager.setVoiceActive(0, hasInput);
-            for (int i = 1; i < 8; ++i)
-            {
-                mVoiceManager.setVoiceActive(i, false);
-            }
-            float envVolume = std::clamp(mInputEnvelope * 4.0f, 0.0f, 1.0f);
-            mVoiceManager.setVoiceEnvelope(0, envVolume);
-            
-            // ピッチ検出は使用せず、C3 (130Hz) 固定ピッチで完璧なロボットボイスを生成
-            float finalF0 = 130.0f * std::pow(2.0f, pitchTranspose / 12.0f);
-            mVoiceManager.setVoiceFrequency(0, finalF0);
-        }
+        // 5-C. 動的 V/UV (有声/無声) 判定による子音明瞭度の劇的向上
+        // 高域バンド (16〜31バンド, 約 1.8kHz 〜 7.5kHz) のエネルギー総和と全体の比率を測定
+        float lowEnergy = 0.0f;
+        float highEnergy = 0.0f;
+        for (int i = 0; i < 16; ++i) lowEnergy += mBandEnvelopes[i];
+        for (int i = 16; i < 32; ++i) highEnergy += mBandEnvelopes[i];
 
-        // ボコーダー合成用にフラットなピッチで SoA 状態を同期
-        mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, tracking, 130.0f);
+        float uvRatio = highEnergy / (lowEnergy + highEnergy + 1e-6f);
+        // 子音（摩擦音）のときは比率が跳ね上がるので、それをスケーリング
+        float consonantFactor = std::clamp((uvRatio - 0.25f) * 2.5f, 0.0f, 1.0f);
+        mCurrentUnvoicedRatio = mCurrentUnvoicedRatio * 0.9f + consonantFactor * 0.1f; // 平滑化
 
-        // 5-D. 8ボイス並列キャリア用白色ノイズの生成
+        // 5-E. 8ボイス並列キャリア用白色ノイズの生成
         __m256 noiseBuffer = mNoiseGenerator.nextBlockAVX2();
         __m256 activeMask = mVoiceManager.getActiveVoicesMask();
         __m256 mixEnvelopes = mVoiceManager.getVoiceEnvelopes();
 
-        // ノイズの比率は UI の noiseParam をそのまま使用
-        __m256 noiseMixVec = _mm256_set1_ps(noiseParam);
+        // リアルタイム検出された無声度 (mCurrentUnvoicedRatio) に応じて、ノイズ比率を動的に大幅に上昇させる (子音の抜けを改善)
+        float dynNoiseMix = std::clamp(noiseParam + (1.0f - noiseParam) * mCurrentUnvoicedRatio * 1.5f, 0.0f, 1.0f);
+        __m256 noiseMixVec = _mm256_set1_ps(dynNoiseMix);
 
         float sampleL = 0.0f;
         float sampleR = 0.0f;
 
-        // 5-E. 20バンド・バンドパス・フィルタバンクによるキャリア変調処理を実行
+        // 5-F. 32バンド・4次直列フィルタバンクによるキャリア変調処理を実行
         mOscillatorBank.processSampleAVX2(
             mDspState,
             activeMask,

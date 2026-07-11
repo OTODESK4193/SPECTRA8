@@ -147,18 +147,28 @@ void VoiceManager::processMidiEvents(MidiQueue& midiQueue, PolyphonicVoiceSoA& d
                 dspState.phaseL[idx] = randomFloat01_scalar(mVoiceBlock.xorState[idx]) * 2048.0f;
                 dspState.phaseR[idx] = randomFloat01_scalar(mVoiceBlock.xorState[idx]) * 2048.0f;
 
-                // BPFフィルタバンクの各バンド履歴のゼロクリア
+                // 32バンド 4次BPF直列フィルタ履歴のゼロクリア
                 for (int b = 0; b < PolyphonicVoiceSoA::kNumBands; ++b)
                 {
-                    dspState.filterX1_L[b][idx] = 0.0f;
-                    dspState.filterX2_L[b][idx] = 0.0f;
-                    dspState.filterY1_L[b][idx] = 0.0f;
-                    dspState.filterY2_L[b][idx] = 0.0f;
+                    dspState.filterS1_X1_L[b][idx] = 0.0f;
+                    dspState.filterS1_X2_L[b][idx] = 0.0f;
+                    dspState.filterS1_Y1_L[b][idx] = 0.0f;
+                    dspState.filterS1_Y2_L[b][idx] = 0.0f;
 
-                    dspState.filterX1_R[b][idx] = 0.0f;
-                    dspState.filterX2_R[b][idx] = 0.0f;
-                    dspState.filterY1_R[b][idx] = 0.0f;
-                    dspState.filterY2_R[b][idx] = 0.0f;
+                    dspState.filterS1_X1_R[b][idx] = 0.0f;
+                    dspState.filterS1_X2_R[b][idx] = 0.0f;
+                    dspState.filterS1_Y1_R[b][idx] = 0.0f;
+                    dspState.filterS1_Y2_R[b][idx] = 0.0f;
+
+                    dspState.filterS2_X1_L[b][idx] = 0.0f;
+                    dspState.filterS2_X2_L[b][idx] = 0.0f;
+                    dspState.filterS2_Y1_L[b][idx] = 0.0f;
+                    dspState.filterS2_Y2_L[b][idx] = 0.0f;
+
+                    dspState.filterS2_X1_R[b][idx] = 0.0f;
+                    dspState.filterS2_X2_R[b][idx] = 0.0f;
+                    dspState.filterS2_Y1_R[b][idx] = 0.0f;
+                    dspState.filterS2_Y2_R[b][idx] = 0.0f;
                 }
             }
         }
