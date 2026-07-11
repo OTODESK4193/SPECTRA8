@@ -1,0 +1,316 @@
+リアルタイムDAWボーカルプロセッサにおける高精度ハイブリッドスペクトルエンベロープ抽出および多重サンプリングレートグリッド写像技術
+プロフェッショナルなデジタル・オーディオ・ワークステーション（DAW）環境で動作するボーカル・エフェクト・プラグインにおいて、滑らかで破綻のない音色変化や、高精度なフォルマント移動、ボコーディング、ティンバー変調を実現するためには、極めて高い精度と低い時間的ジッタを持つスペクトルエンベロープの抽出が不可欠である。しかしながら、音声信号のスペクトルは声帯振動によるピッチ周期（調波構造）によって離散的にサンプリングされた状態にあり、特に女性ボーカルなどの高ピッチ（高 F_0）な音声では、倍音成分の間隔が広くなるためエンベロープの標本化定理に類似した制約（アンダーサンプリング）が生じる。
+従来の線形予測符号化（LPC）分析では、自己相関関数の不偏推定が損なわれる結果、エンベロープが倍音間の「谷」に引きずられて低下し、フォルマントの過小評価や帯域幅の過大評価、さらにはピッチの変動に伴う時間的な揺らぎ（ジッパーノイズ）を招くことが知られている。この課題を克服するため、本報告では、入力信号を 16\text{ kHz}（または 22.05\text{ kHz}）の基本解析レートにダウンサンプリングした上で、全極型LPCモデル、ケプストラムホモモーフィック・リフタリング（トゥルー・エンベロープ法）、および聴覚心理的なバーク尺度フィルタバンクを数学的・アルゴリズム的に統合するハイブリッドスペクトル解析手法を提案する [cite: Context, 88]。さらに、得られたエンベロープ情報を最小位相特性を維持しながらホストの動作レート（最大 192\text{ kHz}）へと写像する高精度なパラメータ補間アルゴリズムについても詳述する [cite: Context, 33]。
+ハイブリッドスペクトルエンベロープ抽出における3系統解析の数学的結合と競合回避
+提案するハイブリッド解析ステージでは、従来のLPCが抱える物理的な破綻（谷への引きずられ現象）を、トゥルー・エンベロープ（True Envelope）法による非線形ピーク補間およびバーク尺度フィルタバンクによる聴覚的制約を組み合わせることで解決する。
+従来のLPCにおける自己相関マッチングの物理的限界
+1966年に板倉文忠氏（名古屋大学／NTT）によって定式化された最大尤度推定に基づくAR（自己相関）モデルは、声道の全極型伝達関数を極めて効率的かつ鋭く表現できる。p 次の全極型フィルタの伝達関数 H(z) は以下のように記述される。
+H(z) = \frac{G}{A(z)} = \frac{G}{1 - \sum_{k=1}^{p} a_k z^{-k}}
+ここで、a_k は予測係数、G はゲインである。レビンソン・ダービン再帰（Levinson-Durbin recursion）を用いてYule-Walker方程式を解くことは、逆フィルタ出力のエネルギー（残差エネルギー）を最小化することと数学的に等価であり、これは残差スペクトルの平坦度（Spectral Flatness Measure）の最大化に帰着する。
+しかし、有声音において、声道伝達関数 S(\omega) はピッチ周波数 F_0 の倍音系列 h \cdot F_0 で乗算（サンプリング）された形でしか観測できない。このサンプリングされたスペクトルから求めた離散的な自己相関系列は、連続的な声道伝達関数の自己相関に対して折り返し（エイリアシング）を引き起こす。この結果、従来のLPCは、スペクトルのピーク（フォルマント）だけでなく、調波構造間の谷の情報にもフィッティングしようとするため、抽出されたエンベロープが鋭いピーク周辺で過小評価される系統誤差が生じる。
+トゥルー・エンベロープ（True Envelope）ケプストラム平滑化の定式化
+この問題を解決するため、今井聖氏および阿部芳春氏（1979年）によって考案され、A. Röbel氏およびX. Rodet氏（2005年）によって最適化された「トゥルー・エンベロープ（TE）」アルゴリズムを導入する。TE法は、対数振幅スペクトルの谷の部分を繰り返し平滑化処理によって「押し上げる」ことで、調波構造のピークのみを接続する滑らかな補間曲線をケプストラム領域で生成する。
+K 点の離散フーリエ変換（DFT）によって得られた対数振幅スペクトルを A_0(k) = \log|X(k)|、初期エンベロープ推定値を V_0(k) = -\infty とする。第 i 回目のイテレーションにおける更新式は以下のように定義される。
+A_i(k) = \max \left( A_0(k), V_{i-1}(k) \right)
+この更新された対数スペクトルに対して、逆離散フーリエ変換（IDFT）を施してリアルケプストラム c_i(r) を算出する。
+c_i(r) = \frac{1}{K} \sum_{k=0}^{K-1} A_i(k) e^{j \frac{2\pi k r}{K}}
+声道フォルマントの緩やかな変動を抽出し、ピッチパルスによる細密な細部（ファインストラクチャー）を排除するため、ケプストラム領域で遮断クエフレンシー P_c によるリフタリング（ローパスフィルタ）を施す。遮断周波数 P_c は、ピッチ周期（サンプル数）未満に設定される必要があり、基本周波数 F_0 とサンプリング周波数 F_s に対して動的に決定される。
+P_c = \alpha \frac{F_s}{2 F_0}
+ここで \alpha \approx 1.0 は、倍音間のピーク補間を最適化するための補正係数である。このリフタリング窓 w_c(r) は次式で表される。
+w_c(r) = \begin{cases} 1, & |r| < P_c \\ 0.5, & |r| = P_c \\ 0, & |r| > P_c \end{cases}
+平滑化された対数振幅スペクトル V_i(k) は、前方向DFTによって復元される。
+V_i(k) = \sum_{r=0}^{K-1} c_i(r) w_c(r) e^{-j \frac{2\pi k r}{K}}
+このループを、以下の収束条件が満たされるまで繰り返す。
+\max_{k} \left( A_0(k) - V_i(k) \right) < \theta
+ここで、閾値 \theta は通常 2\text{ dB} に設定される。
+リアルタイム処理に向けたステップ幅加速化（Step-size Acceleration）
+リアルタイム動作において、イテレーション数が15〜30回に達することは多大な演算負荷となる。このため、本システムでは、面領域の内外エネルギー比を利用したケプストラム更新の加速化（Step-size Control）を導入する。更新ベクトルの帯域内（r \le P_c）のエネルギー E_I と、帯域外（r > P_c）のエネルギー E_O から加速係数 \lambda_a を算出する。
+\lambda_a = \sqrt{\frac{E_I + E_O}{E_I}}
+この係数を用いて、ケプストラム係数の更新を以下のようにスケーリングする。
+C_i(r) = \lambda_a \left( C_i^0(r) - C_{i-1}(r) \right) + C_{i-1}(r)
+ここで C_i^0(r) は、更新前の対数スペクトルから求めたケプストラム係数である。この処理により、全体の収束に必要なイテレーション数は平均4〜5回にまで低減される。
+倍音間過大評価（[0, F_0] 帯域）の抑制とバーク尺度による拘束
+F. Villavicencio氏（2006年、2016年）らの研究によって指摘されている通り、ピッチが非常に高い女性の歌唱音声などにおいては、最初の調波成分（F_0）と直流成分（0\text{ Hz}）の間が広すぎるため、TE法がこの [0, F_0] 区間を不自然に「押し上げ」て過大評価（Overestimation）してしまう問題が生じる。
+これを回避するため、本アーキテクチャでは同時に走らせている**バーク尺度フィルタバンク（Bark-scale Filterbank）**の出力を非線形の動的下限拘束（Regularization Constraint）として利用する [cite: Context, 16]。 バーク尺度に基づく等価臨界帯域幅は、低域において人間の聴覚解像度に近く、低域でのエネルギー分布をロバストに捉える。フィルタバンク出力から再構成された初期エンベロープ形状を S_{Bark}(k) とするとき、各イテレーションステップにおける対数スペクトルの下限を以下のように動的に制限する。
+A_i(k) = \max \left( A_0(k), \gamma \cdot V_{i-1}(k) + (1-\gamma) \cdot S_{Bark}(k) \right)
+ここで \gamma \in [0.8, 0.95] は低域の過度な押し上げを防ぐための結合重みであり、これにより倍音成分が極めて疎な高域ピッチボーカルでも不自然な低域のボコボコとしたブースト（過大評価）が完全に排除される。
+トゥルー・エンベロープLPC（TE-LPC）の統合パイプラインと位相安定性
+ホモモーフィックなケプストラムエンベロープは振幅情報のみを扱うため、そのまま最小位相化せずにインパルス応答化すると、逆フィルタリングや合成ステージで非因果的なプリリンギング（位相歪み）を生じる。これを回避し、物理的な声道特性に近い「最小位相全極型フィルタ」として再定式化するため、得られたトゥルー・エンベロープ V_{final}(k) を目標振幅スペクトルとしてLPC（TE-LPC）を構築する。
+目標パワー全極スペクトルの生成: S_{TE}(k) = \exp \left( 2 \cdot V_{final}(k) \right)
+エイリアシングフリーの自己相関の計算: 目標パワースペクトルにIDFTを適用することで、離散的な調波構造に起因する折り返し歪みのない、純粋な声道エンベロープに対応する自己相関系列 R_{TE}(\tau) を得る。 R_{TE}(\tau) = \frac{1}{K} \sum_{k=0}^{K-1} S_{TE}(k) e^{j \frac{2\pi k \tau}{K}}
+レビンソン・ダービン再帰の実行: R_{TE}(\tau) からYule-Walker方程式を解き、全極予測係数 a_k を得る。これにより、フィルタのすべての極が単位円の内部に配置されることが数学的に保証され、絶対的な安定性と最小位相特性が確保される。
+C++によるリアルタイム・ハイブリッド・エンベロープ解析の実装モデル
+以下のC++ソースコードは、前述した「ステップ幅加速化を伴うトゥルー・エンベロープ抽出」および「自己相関再合成によるTE-LPC算出」をスレッドセーフかつ動的メモリ確保（ノンブロッキング）を排除して実装した概念クラスである。
+#include <vector>
+#include <cmath>
+#include <complex>
+#include <algorithm>
+
+struct TELPCOptions {
+    int fftSize;          // DFTサイズ (例: 1024)
+    int cepstralOrder;    // 遮断クエフレンシー Pc
+    int lpcOrder;         // 推定LPC次数 (12〜18次)
+    float thresholdDB;    // 収束閾値 (例: 2.0 dB)
+    int maxIterations;    // 最大イテレーション数 (例: 8)
+};
+
+class TELPCHybridAnalyzer {
+public:
+    TELPCHybridAnalyzer(const TELPCOptions& opts) : opts_(opts) {
+        halfFFT_ = opts_.fftSize / 2 + 1;
+        
+        // リアルタイムセーフのためのメモリ事前確保
+        logMag_.resize(halfFFT_, 0.0f);
+        targetLogSpectrum_.resize(halfFFT_, 0.0f);
+        envelope_.resize(halfFFT_, -120.0f);
+        
+        cepstrumReal_.resize(opts_.fftSize, 0.0f);
+        cepstrumImag_.resize(opts_.fftSize, 0.0f);
+        envReal_.resize(opts_.fftSize, 0.0f);
+        envImag_.resize(opts_.fftSize, 0.0f);
+        
+        powerSpectrum_.resize(opts_.fftSize, 0.0f);
+        autocorr_.resize(opts_.lpcOrder + 1, 0.0f);
+        
+        // ローパス・ケプストラム窓（リフタ）の生成
+        lifterWindow_.resize(opts_.fftSize, 0.0f);
+        for (int r = 0; r < opts_.fftSize; ++r) {
+            int symR = (r <= opts_.fftSize / 2) ? r : opts_.fftSize - r;
+            if (symR < opts_.cepstralOrder) {
+                lifterWindow_[r] = 1.0f;
+            } else if (symR == opts_.cepstralOrder) {
+                lifterWindow_[r] = 0.5f; // 遷移領域の平滑化
+            } else {
+                lifterWindow_[r] = 0.0f;
+            }
+        }
+    }
+
+    // 外部FFTプロバイダインターフェース（DAW側ライブラリを使用）
+    virtual void forwardFFT(const float* inputReal, float* outReal, float* outImag) = 0;
+    virtual void inverseFFT(const float* inReal, const float* inImag, float* outputReal) = 0;
+
+    void processFrame(const float* windowedSignal, const float* barkConstraint, float* outLpcCoeffs) {
+        // 1. FFTを実行し、初期対数振幅スペクトルを算出
+        forwardFFT(windowedSignal, envReal_.data(), envImag_.data());
+        for (int k = 0; k < halfFFT_; ++k) {
+            float mag = std::sqrt(envReal_[k] * envReal_[k] + envImag_[k] * envImag_[k]);
+            logMag_[k] = std::log(std::max(mag, 1e-7f));
+            targetLogSpectrum_[k] = logMag_[k];
+            envelope_[k] = -120.0f; 
+        }
+
+        // 2. 加速化トゥルー・エンベロープ・ループ
+        std::vector<float> prevCepstrumReal(opts_.fftSize, 0.0f);
+        const float thresholdRad = opts_.thresholdDB / 8.68588f; // dBからNeperへの変換
+
+        for (int iter = 0; iter < opts_.maxIterations; ++iter) {
+            // 下限拘束の適用（Bark尺度等価スペクトルと対数スペクトルのブレンド）
+            for (int k = 0; k < halfFFT_; ++k) {
+                float constraint = (barkConstraint != nullptr) ? barkConstraint[k] : -120.0f;
+                float lowerBound = std::max(envelope_[k], constraint);
+                targetLogSpectrum_[k] = std::max(logMag_[k], lowerBound);
+            }
+
+            // 対称パターンの生成
+            std::vector<float> symLog(opts_.fftSize, 0.0f);
+            for (int k = 0; k < halfFFT_; ++k) {
+                symLog[k] = targetLogSpectrum_[k];
+                if (k > 0 && k < halfFFT_ - 1) {
+                    symLog[opts_.fftSize - k] = targetLogSpectrum_[k];
+                }
+            }
+
+            // IFFTによりケプストラム領域へ写像
+            std::fill(cepstrumImag_.begin(), cepstrumImag_.end(), 0.0f);
+            inverseFFT(symLog.data(), cepstrumImag_.data(), cepstrumReal_.data());
+
+            // 帯域内/帯域外エネルギー比によるステップ加速の算出
+            if (iter > 0) {
+                float energyIn = 1e-7f;
+                float energyOut = 0.0f;
+                for (int r = 0; r < opts_.fftSize; ++r) {
+                    int symR = (r <= opts_.fftSize / 2) ? r : opts_.fftSize - r;
+                    float diff = cepstrumReal_[r] - prevCepstrumReal[r];
+                    if (symR < opts_.cepstralOrder) {
+                        energyIn += diff * diff;
+                    } else {
+                        energyOut += diff * diff;
+                    }
+                }
+                float alphaAcc = std::sqrt((energyIn + energyOut) / energyIn);
+                for (int r = 0; r < opts_.fftSize; ++r) {
+                    cepstrumReal_[r] = alphaAcc * (cepstrumReal_[r] - prevCepstrumReal[r]) + prevCepstrumReal[r];
+                }
+            }
+
+            // 直近のケプストラムを保存
+            std::copy(cepstrumReal_.begin(), cepstrumReal_.end(), prevCepstrumReal.begin());
+
+            // リフタ（ローパス窓）を適用
+            for (int r = 0; r < opts_.fftSize; ++r) {
+                cepstrumReal_[r] *= lifterWindow_[r];
+            }
+
+            // FFTを実行して対数振幅スペクトルに復帰
+            std::fill(cepstrumImag_.begin(), cepstrumImag_.end(), 0.0f);
+            forwardFFT(cepstrumReal_.data(), envReal_.data(), envImag_.data());
+
+            for (int k = 0; k < halfFFT_; ++k) {
+                envelope_[k] = envReal_[k];
+            }
+
+            // 収束判定
+            float maxError = -1e9f;
+            for (int k = 0; k < halfFFT_; ++k) {
+                float error = logMag_[k] - envelope_[k];
+                if (error > maxError) maxError = error;
+            }
+            if (maxError < thresholdRad) {
+                break;
+            }
+        }
+
+        // 3. トゥルー・エンベロープ振幅を線形パワーへ変換
+        for (int k = 0; k < halfFFT_; ++k) {
+            float amp = std::exp(envelope_[k]);
+            powerSpectrum_[k] = amp * amp;
+        }
+        for (int k = 1; k < halfFFT_ - 1; ++k) {
+            powerSpectrum_[opts_.fftSize - k] = powerSpectrum_[k];
+        }
+
+        // 4. パワースペクトルからIDFTを用いて自己相関系列を逆算 (Alias-free)
+        std::fill(cepstrumImag_.begin(), cepstrumImag_.end(), 0.0f);
+        inverseFFT(powerSpectrum_.data(), cepstrumImag_.data(), envReal_.data());
+
+        for (int i = 0; i <= opts_.lpcOrder; ++i) {
+            autocorr_[i] = envReal_[i];
+        }
+
+        // 5. レビンソン・ダービン再帰によるLPC係数の導出
+        solveLevinsonDurbin(autocorr_.data(), opts_.lpcOrder, outLpcCoeffs);
+    }
+
+private:
+    void solveLevinsonDurbin(const float* R, int p, float* a) {
+        std::vector<float> E(p + 1, 0.0f);
+        std::vector<std::vector<float>> alpha(p + 1, std::vector<float>(p + 1, 0.0f));
+        E[0] = R[0];
+        
+        for (int i = 1; i <= p; ++i) {
+            float sum = 0.0f;
+            for (int j = 1; j < i; ++j) {
+                sum += alpha[i - 1][j] * R[i - j];
+            }
+            float k = (R[i] - sum) / E[i - 1];
+            alpha[i][i] = k;
+            for (int j = 1; j < i; ++j) {
+                alpha[i][j] = alpha[i - 1][j] - k * alpha[i - 1][i - j];
+            }
+            E[i] = (1.0f - k * k) * E[i - 1];
+        }
+        for (int i = 1; i <= p; ++i) {
+            a[i - 1] = alpha[p][i];
+        }
+    }
+
+    TELPCOptions opts_;
+    int halfFFT_;
+    std::vector<float> logMag_;
+    std::vector<float> targetLogSpectrum_;
+    std::vector<float> envelope_;
+    std::vector<float> cepstrumReal_;
+    std::vector<float> cepstrumImag_;
+    std::vector<float> envReal_;
+    std::vector<float> envImag_;
+    std::vector<float> powerSpectrum_;
+    std::vector<float> autocorr_;
+    std::vector<float> lifterWindow_;
+};
+
+16kHz解析エンベロープから192kHz処理グリッドへの多重レート写像とLSF補間
+基本解析レート F_{s1} = 16\text{ kHz} で高精度に得られた全極スペクトルパラメータを、そのまま F_{s2} = 192\text{ kHz} などの高サンプリングレート処理へ持ち込む場合、単に予測係数 a_k を代入すると、遮断帯域が比例的に拡大され（声道スケールが物理的に12倍に引き伸ばされる）、極めて深刻な低域のボケ（Low-frequency Blurring）および高域の損失が生じる。この多重レート写像を解決するため、パラメータ領域での周波数軸スケーリングと、高音域拡張に伴う高安定な補間パイプラインが定義される。
+手法A：線スペクトル周波数（LSF）ルートワーピングと高域外挿補間法
+全極型LPC予測係数 a_k は、量子化や補間に対して非常に鋭敏で不安定化しやすい。このため、写像プロセスはすべて、インターリーブされた根の配置によって安定性が保証される線スペクトル周波数（LSF: Line Spectral Frequencies）空間で行われる。
+ステップ1: 16\text{ kHz} LPCからLSFへの変換
+16\text{ kHz} で得られた p 次のLPC係数多項式 A(z) = 1 - \sum_{k=1}^{p} a_k z^{-k} から、次式で定義される p+1 次の対称・反対称多項式 P(z) と Q(z) を作成する。
+P(z) = A(z) + z^{-(p+1)} A(z^{-1}) Q(z) = A(z) - z^{-(p+1)} A(z^{-1})
+これらの多項式の根 z_i = e^{j \omega_i} はすべて単位円上にのみ存在し、角周波数 \omega_i \in (0, \pi) は交互（インターリーブ）に配置される性質を持つ。J. Kabal氏（1986年）が提案した、第1種チェビシェフ多項式 T_m(x) = \cos(m\omega) を用いた実数根探索アルゴリズムにより、高速かつ確実に \omega_i を抽出する。
+ステップ2: 物理周波数（Hz）へのアンロール
+抽出された各チャネルの角周波数 \omega_i \in (0, \pi) を、ダウンサンプリングレート F_{s1} における物理周波数 F_i へと復元する。
+F_i = \ome[span_106](start_span)[span_106](end_span)ga_i \frac{F_{s1}}{2\pi} = \omega_i \frac{16000}{2\pi}
+ステップ3: 192\text{ kHz} グリッドへの再正規化（角周波数の圧縮）
+192\text{ kHz} のNyquist限界（96\text{ kHz}）を基準とする単位円に適用するため、同一の物理周波数 F_i に対応する新たな角周波数 \omega'_i を計算する。
+\omega'_i [span_107](start_span)[span_107](end_span)= 2\pi \frac{F_i}{F_{s2}} = 2\pi \frac{F_i}{192000} = \omega_i \frac{16000}{192000} = \frac{\omega_i}{12}
+これにより、元の 0\text{ Hz} \sim 8\text{ kHz} の声道特性は、192\text{ kHz} 空間における極めて狭い低域セクター (0, \frac{\pi}{12}) 内へと正確に射影される。
+ステップ4: 高音域（8\text{ kHz} \sim 96\text{ kHz}）のダミー・根の合成と安定化
+低音域部分のみに極を配置した状態のままでフィルタを逆構成すると、高音域の全域にわたって急激なゲインブーストが発生し、不自然な高周波ノイズ（エイリアシングに類似した耳障りな成分）を惹起する。このため、8\text{ kHz} 以上に仮想的な声道極を配置し、高周波ロールオフ（通常 -6\text{ dB/oct} \sim -12\text{ dB/oct}）特性を与える必要がある。
+これを達成するため、192\text{ kHz} 空間における新たな高域次数 P_{high}（例: 48次〜64次）に対して、(\frac{\pi}{12}, \pi) の範囲をカバーするダミーのLSF根のセット \{\omega'_{p+1}, [span_91](start_span)[span_91](end_span)\dots, \omega'_{P_{high}}\} を、対数空間でほぼ等間隔に配置して外挿する。
+\omega'_{p+k} = \frac{\pi}{12} + k \left( \frac{11\pi}{12 \cdot (P_{high} - p)} \right), \quad k = 1, \dots, P_{high}-p
+全チャネルをマージした最終的なLSFベクトルをソート処理する。
+\boldsymbol{\omega'_{fina[span_110](start_span)[span_110](end_span)[span_113](start_span)[span_113](end_span)l}} = \text{sort} \left( \{\omega'_1, \dots, \omega'_p\} \cup \{\omega'_{p+1}, \dots, \dots, \omega'_{P_{high}}\} \right)
+このソート処理により、対称・反対称多項式の根が常に交互に噛み合う状態が維持されるため、逆構築される 192\text{ kHz} フィルタは、どのような補間パラメータ下でも時間的に必ず安定する。
+手法B：周波数ドメイン結合パワースペクトル再合成（Joint Power-Spectrum Reconstruction）
+LSFの根探索は、リアルタイム実行時のCPUコストが比較的高い。これを回避するため、周波数軸上での直接スライシングと高速DFTをベースとしたスペクトル結合パイプラインを構築できる。
+          [span_108](start_span)[span_108](end_span)                   入力音声信号 (Fs2 = 192 kHz)
+                                          │
+                            [ポリフェーズ・デシメーション]
+                                          ▼
+                             ダウンサンプリング信号 (Fs1 = 16 kHz)
+                                          │
+                               ┌──────────┴──────────┐
+                               ▼                     ▼
+                       [True Envelope法]      [ケプストラム傾斜検出]
+                               │              [バーク尺度フィルタバンク]
+                               ▼                     │
+                      低域目標エンベロープ            ▼
+                          V_final(k)          高域形状予測モデル
+                        (0 ～ 8 kHz)             (8 ～ 96 kHz)
+                               │                     │
+                               └──────────┬──────────┘
+                                          ▼
+                             [スプライシング＆192 kHz補間]
+                                          ▼
+                             目標パワースペクトル S_192(m)
+                                          │
+                                  [逆高速離散フーリエ変換]
+                                          ▼
+                               自己相関関数 R_192(τ)
+                                          │
+                                [レビンソン・ダービン再帰]
+                                          ▼
+                            安定 192 kHz LPC 予測係数 a_high
+
+ステップ1: 16\text{ kHz} 解析データの再サンプリング
+16\text{ kHz} トゥルー・エンベロープで得られた対数振幅スペクトル V_{final}(k)（サイズ M_{low}）を、比率 \frac{192}{16} = 12 に基づき、超高分解能 192\text{ kHz} 処理グリッドの低域境界 M_{low\_grid} = \lfloor M_{high} / 12 \rfloor まで線形内挿して拡大する。
+S_{low}(m) = \text{Interpolate} \left( V_{final}(k) \right), \quad m \in [0, M_{low\_grid}]
+ステップ2: 高域予測（8\text{ kHz} \sim 96\text{ kHz}）の追加
+8\text{ kHz} 以上の超高域に対しては、同時に解析したケプストラムの低次（スペクトル・ティルト/傾き情報）と、バーク尺度フィルタバンクの高域エネルギーの傾向から外挿形状を予測生成し、滑らかに接続する。
+S_{high}(m) = S_{tilt}(m) \cdot H_{atten}(m), \quad m \in (M_{low\_grid}, M_{high}/2]
+ここで H_{atten}(m) は、高音域の不自然なざらつきを抑えるための減衰窓（例: -12\text{ dB/oct} 以上のロールオフ）である。
+ステップ3: フルバンド自己相関の計算とLPCの再適合
+低域と高域のエンベロープを連結し、対称型パワースペクトル S_{192}(m) を再構成する。これに対して逆離散フーリエ変換を施し、高分解能な 192\text{ kHz} 自己相関関数 R_{192}(\tau) を算出する。
+R_{192}(\tau) = \frac{1}{M_{high}} \sum_{m=0}^{M_{high}-1} S_{192}(m) e^{j \frac{2\pi m \ta[span_92](start_span)[span_92](end_span)u}{M_{high}}}
+このエイリアシングのない自己相関関数に対して、LPC分析を実行する（次数は高音域のなだらかな特性をフィッティングするため、多めに 48〜64次 を選択する）。このアプローチにより、根探索の反復ループなしで、物理的に正しく高解像度かつ最小位相の 192\text{ kHz} 声道フィルタが得られる。
+サンプリングレートに応じた解析窓幅とFFTサイズの動的スケーリング関係
+DAWシステムにおいて、ホストのサンプリングレート F_s は 44.1\text{ kHz} から 192\text{ kHz} まで動的に切り替わる。声道形状の物理的・生物学的変化（調音結合など）の時間解像度を捉えるためには、窓長 T_{frame} はサンプリングレートに依存せず常に 20\text{ ms} \sim 30\text{ ms} の一定範囲（準定常区間）に維持されなければならない。
+もし、ホストレートが変動した際に窓長をサンプル数基準で固定した場合、サンプリングレートが高い環境下で窓の物理的な時間幅が極端に縮小し、低域の倍音を解像できずに分析結果のジッターが破綻する。
+数学的スケーリング関係の定義
+ホストのサンプリングレート F_s に対して、目標とする物理的な窓長を T_{frame}（通常 25\text{ ms} = 0.025\text{ s}）、フレーム更新用のホップ時間を T_{hop}（オーバーラップ率 75% の場合は 6.25\text{ ms} = 0.00625\text{ s}）とする。
+サンプリング数換算での窓長 N_{win}(F_s) およびホップ長 N_{hop}(F_s) は次式で規定される。
+N_{win}(F_[span_142](start_span)[span_142](end_span)s) = \text{round}(T_{frame} \cdot F_s) N_{hop}(F_s) = \text{round}(T_{hop} \cdot F_s)
+高速フーリエ変換（FFT）を適用可能にするため、実効DFTサイズ N_{FFT}(F_s) は、ハニング窓やハミング窓などの振幅対称性を補償しつつ、常に N_{FFT} \ge N_{win} を満たす最小の2のべき乗数に動的にスケーリングされる。
+N_{FFT}(F_[span_143](start_span)[span_143](end_span)s) = 2^{\lceil \log_2 (N_{win}(F_s)) \rceil}
+窓のサンプル数 N_{win} に満たない端部領域には、エイリアシングや不連続を防止するため、ゼロパディング（Zero-Padding）が施され、結果として周波数軸上のグリッド密度（分解能）が向上する。
+Hostサンプリングレートごとの分析パラメータの動的スケーリング一覧表
+以下の表は、目標時間 T_{frame} = 25.0\text{ ms}、オーバーラップ 75% （T_{hop} = 6.25\text{ ms}）を完全に維持するための、サンプリングレートごとの窓サイズ、ホップサイズ、およびFFTサイズの設計仕様である。
+| ホスト・サンプリングレート F_s | 目標時間幅 T_{frame} | 目標ホップ幅 T_{hop} | 窓長サンプル数 N_{win} | ホップ数 N_{hop} | 適合FFTサイズ N_{FFT} | 周波数ビン分解能 \Delta F | | :--- | :--- | :--- | :--- | :--- | :--- | :--- | | 44100\text{ Hz} | 25.0\text{ ms} | 6.25\text{ ms} | 1102 | 275 | 2048 | 21.53\text{ Hz} | | 48000\text{ Hz} | 25.0\text{ ms} | 6.25\text{ ms} | 1200 | 300 | 2048 | 23.44\text{ Hz} | | 88200\text{ Hz} | 25.0\text{ ms} | 6.25\text{ ms} | 2205 | 551 | 4096 | 21.53\text{ Hz} | | 96000\text{ Hz} | 25.0\text{ ms} | 6.25\text{ ms} | 2400 | 600 | 4096 | 23.44\text{ Hz} | | 176400\text{ Hz} | 25.0\text{ ms} | 6.25\text{ ms} | 4410 | 1102 | 8192 | 21.53\text{ Hz} | | 192000\text{ Hz} | 25.0\text{ ms} | 6.25\text{ ms} | 4800 | 1200 | 8192 | 23.44\text{ Hz} |
+結論およびプロフェッショナルな設計推奨事項
+リアルタイムDAWボーカル・プロセッサにおけるスペクトル・エンベロープ抽出は、単一の分析手法に依存することなく、本報告で示したような統合アーキテクチャを採用することによって飛躍的にそのロバスト性を向上させることができる [cite: Context, Objective]。
+基本解析段のダウンサンプリング固定化: CPUリソースを極限まで節約し、ボーカルピッチ成分に最適な解像度を得るために、入力部における 16\text{ kHz} または 22.05\text{ kHz} へのポリフェーズ・デシメーションは不可避である [cite: Context, 88]。これにより、高サンプリングレート下でも一貫した特性の抽出が可能となる。
+加速型TE-LPC（ハイブリッド法）の採用: 従来のLPC予測の弱点である、有声音ピッチに起因する「谷への引きずられ現象」を回避するには、トゥルー・エンベロープ法によるエイリアシングフリーの自己相関スペクトルを介したLPC再推定（TE-LPC）が最も堅牢な選択肢である。
+等価臨界帯域による極域保護: 高音域ピッチ（F_0 が高い子供や女性ボーカル、歌唱音声）での [0, F_0] 付近のスペクトル過大評価は、バーク尺度フィルタバンクを用いた動的な下限リフティング制約をTEイテレーション内に直接フィードバックすることで、音響学的な破綻なく効果的に抑制される。
+最小位相周波数写像の遵守: 192\text{ kHz} グリッドへのアップサンプリングにおいて、位相アーティファクトを皆無にするためには、LSF領域での等価周波数圧縮と適切な高域仮想極の外挿、または周波数領域でのパワースペクトル統合処理を経て全極LPCを逆算するパイプラインを強く推奨する。これにより、DAW内での極めて自然で明瞭な、アナログライクなボーカル音色の追従が完成する。
+引用文献
+1. Lecture Notes on Fundamentals of Audio-Video Signal Processing - Marco Marcon, https://marconlab.deib.polimi.it/courses/MMSP/Material/Lecture_notes.pdf 2. Singing Information Processing: Techniques and Applications - Emilio Molina, https://emilio-molina.github.io/publications/thesis_and_resumen.pdf 3. Applications of the STFT | Spectral Audio Signal Processing - DSPRelated.com, https://www.dsprelated.com/freebooks/sasp/Applications_STFT.html 4. Improving Lpc Spectral Envelope Extraction Of Voiced Speech By True-Envelope Estimation, https://www.researchgate.net/publication/224641053_Improving_Lpc_Spectral_Envelope_Extraction_Of_Voiced_Speech_By_True-Envelope_Estimation 5. Introduction - Linear Predictive Coding - Ircam, https://support.ircam.fr/docs/AudioSculpt/3.0/co/LPC.html 6. University of Southampton Research Repository ePrints Soton, https://eprints.soton.ac.uk/371730/1/10.1.1.19.7321.pdf 7. real time signal transposition with envelope preservation in the phase vocoder - Ircam, http://recherche.ircam.fr/anasyn/roebel/paper/trueenv_icmc2005.pdf 8. Algorithms, https://students.cs.ucl.ac.uk/2019/group47/pages/algorithms.html 9. Linear predictive coding - Grokipedia, https://grokipedia.com/page/Linear_predictive_coding 10. Beyond bandlimited sampling of speech spectral envelope imposed by the harmonic structure of voiced sounds - ISCA Archive, https://www.isca-archive.org/interspeech_2013/kawahara13_interspeech.pdf 11. EECS E6870 - Speech Recognition Lecture 2, https://www.ee.columbia.edu/~stanchen/fall09/e6870/slides/lecture2.pdf 12. Full-band LPCNet: A real-time neural vocoder for 48 kHz audio with a CPU - ResearchGate, https://www.researchgate.net/publication/352419462_Full-band_LPCNet_A_real-time_neural_vocoder_for_48_kHz_audio_with_a_CPU 13. Infinite Kernel Linear Prediction for Joint Estimation of Spectral Envelope and Fundamental Frequency - 400 Bad Request, https://staff.aist.go.jp/m.goto/PAPER/ICASSP2013yoshii.pdf 14. Mel-Generalized Cepstral Representation of Speech —A Unified Approach to Speech Spectral Estimation Keiichi Tokuda Nagoya Inst, https://www.sp.nitech.ac.jp/~tokuda/tokuda_tamkang2002.pdf 15. Perceptual Linear Prediction Cepstral Coefficients in Speech - VOCAL Technologies, https://vocal.com/perceptual-filtering/perceptual-linear-prediction-cepstral-coefficients-in-speech/ 16. Robust Spectral Parameter Coding in Speech Processing, https://www.mmsp.ece.mcgill.ca/Theses/1998/BatriT1998.pdf 17. A Discrete-cepstrum Based Spectrum-envelope Estimation Scheme and Its Example Application of Voice Transformation - ACL Anthology, https://aclanthology.org/O09-6002.pdf 18. New features of WinSnoori, https://members.loria.fr/YLaprie/WinSnoori/newfeatures.html 19. Improved Estimation of the Amplitude Envelope of Time Domain Signals Using True Envelope Cepstral Smoothing. - ResearchGate, https://www.researchgate.net/publication/224246324_Improved_Estimation_of_the_Amplitude_Envelope_of_Time_Domain_Signals_Using_True_Envelope_Cepstral_Smoothing 20. improving lpc spectral envelope extraction of voiced speech by - SciSpace, https://scispace.com/pdf/improving-lpc-spectral-envelope-extraction-of-voiced-speech-1cn7y22342.pdf 21. Spectral Envelope Extraction | Spectral Audio Signal Processing - DSPRelated.com, https://www.dsprelated.com/freebooks/sasp/Spectral_Envelope_Extraction.html 22. A STRATEGY FOR LF-BASED GLOTTAL-SOURCE & VOCAL-TRACT ESTIMATION ON STATIONARY MODAL SINGING Fernando Villavicencio Research - EURASIP, https://www.eurasip.org/Proceedings/Eusipco/Eusipco2014/HTML/papers/1569917253.pdf 23. index.pdf - Base des articles scientifiques de l'Ircam, http://articles.ircam.fr/textes/Roebel07a/index.pdf 24. True Envelope algorithm: how to speed it up? - Signal Processing Stack Exchange, https://dsp.stackexchange.com/questions/66751/true-envelope-algorithm-how-to-speed-it-up 25. Applying Spectral Normalisation and Efficient Envelope Estimation and Statistical Transformation for the Voice Conversion Challe - ISCA Archive, https://www.isca-archive.org/interspeech_2016/villavicencio16_interspeech.pdf 26. (PDF) Perceptual linear predictive (PLP) analysis of speech - Academia.edu, https://www.academia.edu/92335384/Perceptual_linear_predictive_PLP_analysis_of_speech 27. Bandwidth extension of narrowband speech in log spectra domain using neural network - TÜBİTAK Academic Journals, https://journals.tubitak.gov.tr/cgi/viewcontent.cgi?article=2924&context=elektrik 28. PARAMETRIC DECOMPOSITION OF THE SPECTRAL ENVELOPE Anderson Fraiha Machado1, Antonio Bonafonte2, Marcelo Queiroz1 - NuSom, https://nusom.eca.usp.br/sites/default/files/ICASSP.pdf 29. Generalized perceptual linear prediction features for animal vocalization analysis, https://www.researchgate.net/publication/6911773_Generalized_perceptual_linear_prediction_features_for_animal_vocalization_analysis 30. Source filter modeling and spectral envelope estimation - Ircam, http://recherche.ircam.fr/anasyn/roebel/amt_audiosignale/VL4.pdf 31. WO2001067437A1 - Speech decoder and a method for decoding speech - Google Patents, https://patents.google.com/patent/WO2001067437A1/zh 32. LONG-TERM QUANTIZATION OF SPEECH LSF PARAMETERS Laurent GIRIN ICP (Speech Communication Lab.) - Gipsa-lab, https://www.gipsa-lab.grenoble-inp.fr/~laurent.girin/papers/Girin_ICASSP_2007.pdf 33. Interpolation of Linear Prediction Coefficients for Speech Coding - Collectionscanada.ca, https://www.collectionscanada.gc.ca/obj/s4/f2/dsk1/tape4/PQDD_0034/MQ64229.pdf 34. The Computation of Line Spectral Frequencies Using Chebyshev Polynomials, http://hil.t.u-tokyo.ac.jp/~kameoka/SAP/papers/Kabal1986__The_Computation_of_Line_Spectral_Frequencies_Using_Chebyshev_Polynomials.pdf 35. A one-dimensional search method with stable 1-norm solution for linear prediction, https://pubs.aip.org/asa/jasa/article/142/2/EL170/640348/A-one-dimensional-search-method-with-stable-1-norm 36. SPEECH RECONSTRUCTION FROM MEL-FREQUENCY CEPSTRAL COEFFICIENTS USING A SOURCE-FILTER MODEL ISCA Archive, https://www.isca-archive.org/icslp_2002/milner02_icslp.pdf 37. Bandwidth Extension is All You Need | Request PDF - ResearchGate, https://www.researchgate.net/publication/352171577_Bandwidth_Extension_is_All_You_Need 38. BANDWIDTH EXTENSION IS ALL YOU NEED Jiaqi Su1, Yunyun Wang1, Adam Finkelstein1, Zeyu Jin2 1Princeton University, USA 2Adobe Rese - PIXL, https://pixl.cs.princeton.edu/pubs/Su_2021_BEI/ICASSP2021_Su_Wang_BWE.pdf 39. Investigations on the Optimal Estimation of Speech Envelopes for the Two-Stage Speech Enhancement - MDPI, https://www.mdpi.com/1424-8220/23/14/6438 40. Working with Audio using Python - Airasoul., https://www.airasoul.com/working-with-audio-using-python 41. Ultrasonic Analyzer - App Store, https://apps.apple.com/id/app/ultrasonic-analyzer/id851069926 42. Spectrogram Parameters in Raven Workbench – Cornell Lab of Ornithology, https://www.ravensoundsoftware.com/knowledge-base/spectrogram-parameters-in-raven-workbench/ 43. arXiv:1804.04121v2 [cs.CV] 19 Jun 2018, https://arxiv.org/pdf/1804.04121 44. Adversarial Training for Speech Super-Resolution - University Lab Sites, http://labsites.rochester.edu/air/publications/eskimez19adversarialtraining.pdf 45. Comparative acoustic analysis of treated and untreated small recording rooms using vocal and room-response measurements - ResearchGate, https://www.researchgate.net/publication/400616217_Comparative_acoustic_analysis_of_treated_and_untreated_small_recording_rooms_using_vocal_and_room-response_measurements

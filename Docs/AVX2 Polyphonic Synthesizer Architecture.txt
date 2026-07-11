@@ -1,0 +1,386 @@
+AVX2最適化シンセサイザーにおけるリアルタイム安全なロックフリー・ボイスマネージャーとSIMD変調マトリックスの設計手法
+1. AVX2に最適化されたSoAメモリ構造とアライメント設計
+デジタル信号処理（DSP）のスループットを最大化するためには、プロセッサの実行ポートとメモリ配置を完全に一致させることが極めて重要である。IntelのAVX2命令セットは256ビットのベクトルレジスタをターゲットとしており、単精度浮動小数点数（32ビット）を同時に8要素処理することが可能である。一般的なオブジェクト指向プログラミングで用いられる「構造体の配列（AoS: Array of Structures）」では、各ボイスの状態（位相、周波数、エンベロープ値など）がメモリ上に連続して配置される。しかし、このレイアウトで8ボイスを並列処理しようとすると、レジスタへの展開時に不連続なメモリアドレスからデータを収集するギャザー（Gather）操作やレジスタのシャッフルが必要になり、メモリバスの帯域幅を浪費する原因となる。
+これに対して、「配列の構造体（SoA: Structure of Arrays）」レイアウトは、全ボイスの同一パラメータ（すべてのLチャンネル初期位相や、すべてのゲート状態など）をメモリ上の連続する領域にグループ化する。この設計により、単一の32バイト整列ロード命令（_mm256_load_ps）を用いて、8ボイス分のパラメータを最小のクロックサイクルでAVX2レジスタに直接ロードすることが可能となる。本設計において、SoAブロック全体の先頭アドレスおよび各メンバ配列は、必ず32バイト境界にアライメント調整されていなければならない。C++17以降では、過剰アライメントされた動的メモリ確保（std::align_val_t(32)を用いたnew演算子）が標準サポートされており、ヒープ上においてもアライメント制限を満たした安全なデータ配置が可能である。
+以下に、8ボイスシンセサイザーのための32バイトにアライメントされたSoAメモリブロックの構造体設計を示す。
+#pragma once
+
+#include <immintrin.h>
+#include <cstdint>
+
+// 32バイトアライメントされた8ボイス用のSoAメモリブロック
+struct alignas(32) VoiceSoABlock {
+    // 左右の位相アキュムレータ
+    float phaseL[8];
+    float phaseR[8];
+    
+    // 左右の位相増分（周波数依存値）
+    float phaseIncL[8];
+    float phaseIncR[8];
+    
+    // 超並列デチューン用係数
+    float detuneCoeffL[8];
+    float detuneCoeffR[8];
+
+    // ボイス固有の制御状態
+    float noteNo[8];
+    float gate[8];
+    float age[8]; // サンプルまたはブロック単位で増加する経過時間
+    
+    // トリガー・ランダムソース（ノートオン時に一度だけキャプチャされる値）
+    float triggerRand[8];
+
+    // 変調マトリックスによって書き込まれるパラメータ
+    float wavetableIndex[8];
+    float formantShift[8];
+    float detuneWidth[8];
+};
+
+2. リアルタイム安全な「最古優先（Oldest-First）」ボイススティーリングとロックフリー制御ロジック
+リアルタイムオーディオ処理スレッドは極めて厳格な時間的制約の下で動作しており、OSのスケジューラから割り当てられた時間内に処理を完了できない場合、バッファのドロップアウト（音切れ）を引き起こす。そのため、オーディオスレッド内での動的なメモリ確保、システムコール、および相互排他（ミューテックスやセマフォ）によるスレッドのブロックは完全に排除されなければならない。
+ボイスの割り当て状態は、「Inactive（未使用）」、「Active (Gate Open)（発音中かつキーオン）」、「Released (Gate Closed)（キーオフ後のリリースフェーズ）」の3つの状態を遷移する。9番目のノートオンが発生した場合、システムは以下の優先順位に従ってボイスを選択し、再割り当てを行う。
+第一に、現在未使用であるボイスが存在するか走査する。第二に、未使用ボイスが存在しない場合、リリース状態にあるボイスの中から最もエンベロープ出力エネルギーが低く、無音に近いボイスを選択する。第三に、すべてのボイスが発音中（ゲートがアクティブ）である場合、「最古優先（Oldest-First）」アルゴリズムに基づき、経過時間（age）が最も長いボイスを強制的にスティーリング（強奪）する。スティーリングされたボイスは、即座に以前の発音状態を停止（フェードアウトまたはクリック防止処理を実行）され、新しいノートナンバーと周波数情報が書き込まれる。
+非リアルタイム動作スレッド（GUIやMIDIスレッド）から、リアルタイムオーディオスレッドへのノートイベント転送には、ロックフリーかつウェイトフリーな単一プロデューサ・単一コンシューマ（SPSC: Single Producer Single Consumer）リングバッファを使用する。キャッシュラインの偽共有（False Sharing）によるCPU性能低下を防ぐため、プロデューサとコンシューマの管理インデックスはalignas(64)を用いて物理的に異なるキャッシュラインに隔離される。また、リングバッファのインデックスラッピング時の剰余演算（%）は重い算術命令を伴うため、バッファ容量を2のべき乗に制限した上でビットマスク演算（& (Capacity - 1)）を適用し、オーバーヘッドを極小化する。
+以下に、アロケーションフリーかつロックフリーで動作するボイス割り当てロジックの実装を示す。
+#pragma once
+
+#include <atomic>
+#include <array>
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
+struct NoteEvent {
+    enum Type : uint32_t { NoteOn, NoteOff } type;
+    uint8_t note;
+    uint8_t velocity;
+};
+
+// リアルタイムセーフなSPSCリングバッファ（スレッド間通信用）
+class RealTimeMidiQueue {
+public:
+    explicit RealTimeMidiQueue(size_t capacity) : capacityMask(capacity - 1) {
+        // 容量は2のべき乗に制限される必要がある
+        buffer.resize(capacity);
+        writeIndex.store(0, std::memory_order_relaxed);
+        readIndex.store(0, std::memory_order_relaxed);
+    }
+
+    bool tryPush(const NoteEvent& event) {
+        const size_t currWrite = writeIndex.load(std::memory_order_relaxed);
+        const size_t currRead = readIndex.load(std::memory_order_acquire);
+        if (((currWrite + 1) & capacityMask) == currRead) {
+            return false; // キューフル
+        }
+        buffer[currWrite] = event;
+        writeIndex.store((currWrite + 1) & capacityMask, std::memory_order_release);
+        return true;
+    }
+
+    bool tryPop(NoteEvent& event) {
+        const size_t currRead = readIndex.load(std::memory_order_relaxed);
+        const size_t currWrite = writeIndex.load(std::memory_order_acquire);
+        if (currRead == currWrite) {
+            return false; // キューが空
+        }
+        event = buffer[currRead];
+        readIndex.store((currRead + 1) & capacityMask, std::memory_order_release);
+        return true;
+    }
+
+private:
+    std::vector<NoteEvent> buffer;
+    size_t capacityMask;
+    
+    // 偽共有を防ぐため、インデックスを異なるキャッシュライン（64バイト境界）に配置
+    alignas(64) std::atomic<size_t> writeIndex;
+    alignas(64) std::atomic<size_t> readIndex;
+};
+
+class VoiceManager {
+public:
+    VoiceManager() {
+        for (int i = 0; i < 8; ++i) {
+            mSoA.noteNo[i] = -1.0f;
+            mSoA.gate[i] = 0.0f;
+            mSoA.age[i] = 0.0f;
+            mSoA.phaseL[i] = 0.0f;
+            mSoA.phaseR[i] = 0.0f;
+            mSoA.triggerRand[i] = 0.0f;
+            mVoiceActiveState[i] = false;
+        }
+    }
+
+    void processIncomingEvents(RealTimeMidiQueue& queue, float sampleRate) {
+        NoteEvent event;
+        while (queue.tryPop(event)) {
+            if (event.type == NoteEvent::NoteOn) {
+                triggerNoteOn(event.note, event.velocity, sampleRate);
+            } else if (event.type == NoteEvent::NoteOff) {
+                triggerNoteOff(event.note);
+            }
+        }
+    }
+
+    void incrementVoiceAges(uint32_t numSamples) {
+        for (int i = 0; i < 8; ++i) {
+            if (mVoiceActiveState[i]) {
+                mSoA.age[i] += static_cast<float>(numSamples);
+            }
+        }
+    }
+
+    VoiceSoABlock& getSoABlock() { return mSoA; }
+
+private:
+    VoiceSoABlock mSoA;
+    std::array<bool, 8> mVoiceActiveState;
+    
+    // AVX2 擬似乱数生成用のベクトルシード値（セクション3で詳述）
+    __m256i mPrngState = _mm256_set_epi32(123456789, 987654321, 456789123, 321654987,
+                                          159357246, 852963741, 753159852, 951357456);
+
+    void triggerNoteOn(uint8_t note, uint8_t velocity, float sampleRate) {
+        int targetVoiceIdx = -1;
+
+        // ステップ1：未使用（Inactive）のボイスを走査
+        for (int i = 0; i < 8; ++i) {
+            if (!mVoiceActiveState[i]) {
+                targetVoiceIdx = i;
+                break;
+            }
+        }
+
+        // ステップ2：リリース状態（Gate Closed かつ Active）の中から最古（最も経過時間の長いボイス）を走査
+        if (targetVoiceIdx == -1) {
+            float maxReleaseAge = -1.0f;
+            for (int i = 0; i < 8; ++i) {
+                if (mSoA.gate[i] == 0.0f && mVoiceActiveState[i]) {
+                    if (mSoA.age[i] > maxReleaseAge) {
+                        maxReleaseAge = mSoA.age[i];
+                        targetVoiceIdx = i;
+                    }
+                }
+            }
+        }
+
+        // ステップ3：発音中のボイスしか存在しない場合、最古優先（Oldest-First）でスティーリング
+        if (targetVoiceIdx == -1) {
+            float maxActiveAge = -1.0f;
+            for (int i = 0; i < 8; ++i) {
+                if (mSoA.age[i] > maxActiveAge) {
+                    maxActiveAge = mSoA.age[i];
+                    targetVoiceIdx = i;
+                }
+            }
+        }
+
+        // 割り当てられたボイスの状態を初期化（アロケーションなし）
+        if (targetVoiceIdx != -1) {
+            // 急激な値の変化によるクリックノイズを防止するための初期化処理
+            killVoiceDSPState(targetVoiceIdx);
+
+            mSoA.noteNo[targetVoiceIdx] = static_cast<float>(note);
+            mSoA.gate[targetVoiceIdx] = 1.0f;
+            mSoA.age[targetVoiceIdx] = 0.0f;
+            mVoiceActiveState[targetVoiceIdx] = true;
+
+            // 位相・デチューン初期化とTrigger Random生成を一括実行
+            initializeVoicePhasesAndDetunes(targetVoiceIdx, note, sampleRate);
+        }
+    }
+
+    void triggerNoteOff(uint8_t note) {
+        for (int i = 0; i < 8; ++i) {
+            if (mVoiceActiveState[i] && std::abs(mSoA.noteNo[i] - static_cast<float>(note)) < 0.1f) {
+                mSoA.gate[i] = 0.0f; // ゲートクローズ。これによりエンベロープはリリースフェーズへ移行
+            }
+        }
+    }
+
+    void killVoiceDSPState(int index) {
+        mSoA.phaseL[index] = 0.0f;
+        mSoA.phaseR[index] = 0.0f;
+        mSoA.triggerRand[index] = 0.0f;
+        mVoiceActiveState[index] = false;
+    }
+
+    void initializeVoicePhasesAndDetunes(int index, uint8_t note, float sampleRate);
+};
+
+3. SIMD対応32ビットXorshiftと高速IEEE-754変換による位相同期回避
+スーパージグソー（Super-Saw）のような厚みのあるステレオ音色を合成する場合、すべてのボイスが同一の初期位相で発音を開始すると、過渡応答における激しい相殺や特定の周波数ピーク（フェージング現象）が発生する。これを防ぐため、ノートオンの瞬間にLおよびRチャンネルの初期位相（phaseL, phaseR）を完全にランダム化し、さらに周波数に対しても微小なデチューン量（\pm\Delta f）を付与する必要がある。リアルタイム・安全性が保証されたオーディオスレッドにおいて、std::randやstd::mt19937といったC++標準ライブラリの擬似乱数生成器を使用することは不適切である。これらは内部に同期ロックを含んでいるか、あるいは過剰な演算コストを伴い、最悪値（Worst-case）の実行レイテンシを予測困難にするためである。
+この要件を満たすため、George Marsaglia氏によって提案された高速かつ非常に軽量な「32ビットXorshift」アルゴリズムを採用する。Xorshiftは、シフト演算とビット排他的論理和（XOR）のみで構成されており、SIMDベクトルレジスタ内での並列実行に極めて高い親和性を示す。生成された符号なし32ビット整数を$[0.0f, 1.0f)$の単精度浮動小数点数に高速変換する手法として、IEEE-754単精度浮動小数点数のフォーマット構造を利用した「仮数部注入ビットトリック（Mantissa Injection Bit-Trick）」を実装する。
+具体的には、ランダムな32ビット整数の下位23ビットを抽出し、それを浮動小数点数の仮数部（Mantissa）へとマスクする。次に、指数部（Exponent）にバイアス値1.0f（16進表現で0x3F800000）を結合させることで、[1.0f, 2.0f)$の範囲を指す浮動小数点データを生成する[span_63](start_span)[span_63](end_span)[span_67](start_span)[span_67](end_span)。最後に、このデータから定数$1.0fを減算（_mm256_sub_ps）することにより、FPUによる高価な浮動小数点除算命令を一切使用せず、わずか数命令で$[0.0f, 1.0f)$の一様乱数ベクトルを生成することが可能となる。
+ノートオン時には、この乱数発生器から生成された値を用いてボイス固有の「Trigger Random」値を確定し、SoA構造内の triggerRand 配列に永続化する。この値は、次にノートオンが呼び出されるまで変化せず、ブロック処理ごとの変調マトリックスにおいて、ボイス固有の定数モジュレーションソースとして継続的に利用される。
+以下に、Xorshiftおよび仮数部ビットトリックを統合した、ノートオン時の高速アライメント初期化の実装を示す。
+void VoiceManager::initializeVoicePhasesAndDetunes(int index, uint8_t note, float sampleRate) {
+    // 1. AVX2レジスタを用いたXorshift32ベクトル状態遷移
+    __m256i x = mPrngState;
+    x = _mm256_xor_si256(x, _mm256_slli_epi32(x, 13));
+    x = _mm256_xor_si256(x, _mm256_srli_epi32(x, 17));
+    x = _mm256_xor_si256(x, _mm256_slli_epi32(x, 5));
+    mPrngState = x; // 内部シードの状態を更新
+
+    // 2. [0.0f, 1.0f) 範囲の一様乱数ベクトルへ変換するビットトリック
+    __m256i mantissaMask = _mm256_set1_epi32(0x007FFFFF); // 仮数部23ビット分
+    __m256i exponentOne  = _mm256_set1_epi32(0x3F800000); // 指数部「1.0」のバイアス
+    
+    __m256i mantissaBits = _mm256_and_si256(x, mantissaMask);
+    __m256i floatBits    = _mm256_or_si256(mantissaBits, exponentOne);
+    
+    // キャストにより [1.0f, 2.0f) の浮動小数点ベクトルを作成
+    __m256 rawFloats     = _mm256_castsi256_ps(floatBits);
+    // 1.0fを引いて [0.0f, 1.0f) 範囲を決定
+    __m256 zeroToOne     = _mm256_sub_ps(rawFloats, _mm256_set1_ps(1.0f));
+
+    // メモリ安全なローカルスタック配列に一時格納（32バイトアライメント保証）
+    alignas(32) float randValues[8];
+    _mm256_store_ps(randValues, zeroToOne);
+
+    // ボイス個別のL/R位相を抽出してランダム化（[0, 2π]）
+    float randL = randValues[index % 8];
+    float randR = randValues[(index + 1) % 8];
+    mSoA.phaseL[index] = randL * 2.0f * 3.1415926535f;
+    mSoA.phaseR[index] = randR * 2.0f * 3.1415926535f;
+
+    // トリガー・ランダムソースを保存（変調マトリックスにおいてモジュレータとして継続利用）
+    float randTrigger = randValues[(index + 2) % 8];
+    mSoA.triggerRand[index] = randTrigger;
+
+    // 3. デチューン係数の算出（±5セントの範囲、双極性乱数 [-1.0f, 1.0f] から導出）
+    float bipolarRand = (randValues[(index + 3) % 8] * 2.0f) - 1.0f;
+    float centsOffset = bipolarRand * 5.0f;
+    
+    // セントから周波数比への変換係数を適用
+    float detuneFactorL = std::pow(2.0f, -centsOffset / 1200.0f);
+    float detuneFactorR = std::pow(2.0f, centsOffset / 1200.0f);
+    mSoA.detuneCoeffL[index] = detuneFactorL;
+    mSoA.detuneCoeffR[index] = detuneFactorR;
+
+    // MIDIノートから基本周波数の算出
+    float freqBase = 440.0f * std::pow(2.0f, (static_cast<float>(note) - 69.0f) / 12.0f);
+    float basePhaseInc = freqBase / sampleRate;
+
+    // 位相インクリメント量をSoAに書き込み
+    mSoA.phaseIncL[index] = basePhaseInc * detuneFactorL;
+    mSoA.phaseIncR[index] = basePhaseInc * detuneFactorR;
+}
+
+4. ブロックレートSIMD変調マトリックスとSoAへのデータ転送設計
+変調処理をオーディオサンプル単位（サンプルレート）で実行することは、演算負荷を著しく増大させるため、実用的なシンセサイザーの多くでは制御信号用の「ブロックレート」（通常32サンプルまたは64サンプル周期）を導入して変調値を更新する。各ボイスが所有するADSRエンベロープ出力、LFO出力、およびノートオン時に固定されたTrigger Random値は、それぞれが8要素のアライメント調整された配列（ModulationSourceBlock）として保持される。
+変調マトリックスの計算は、ボイスごと（0〜7チャンネル）の並列処理として記述され、AVX2の「積和演算（FMA: Fused Multiply-Add）」命令である_mm256_fmadd_psを用いて一括処理される。ベースとなる物理パラメータに対して、ソース信号ベクトルとスケーリング係数（変調深度）の積を次々と積算する。変調結果は最終的に、AVX2のストア命令によって32バイト境界で整列されたSoAのターゲットレジスタ（ウェーブテーブル・インデックス、フォーマント・シフト、デチューン幅）へ直接書き出される（メモリブラスティング）。このプロセスにより、メモリの書き込みバッファが最適化され、キャッシュミスを回避しつつ、次のDSPレンダリングループへと変調パラメータを即座に適用させることが可能になる。
+V_{\text{modulated}}[i] = V_{\text{base}} + \sum_{m=1}^{M} W_{m} \times S_{m}[i]
+ここで、$V_{\text{base}}$は対象パラメータの基礎値、W_{m}$は変調ソース$mに対するマトリックス設定上のスケーリング係数、S_{m}[i]$はボイス$iにおける変調ソース出力値を表す。
+以下に、AVX2 FMAを最大限に駆使した高速変調処理クラスの実装を示す。
+#pragma once
+
+#include <immintrin.h>
+
+// 32バイト整列されたブロックレート変調ソースのバッファ
+struct alignas(32) ModulationSourceBlock {
+    float adsr1[8];      // ボイス0〜7のADSR 1出力
+    float lfo1[8];       // ボイス0〜7のLFO 1出力
+    float triggerRand[8];// ボイス0〜7のノートオン時トリガーランダム固定値
+};
+
+// パラメータベース値および変調マトリックス内の各スケーリング係数
+struct ModulationMatrixConfig {
+    float baseWavetableIndex;
+    float adsr1_to_Wavetable;
+    float lfo1_to_Wavetable;
+
+    float baseFormantShift;
+    float adsr1_to_Formant;
+    float lfo1_to_Formant;
+
+    float baseDetuneWidth;
+    float adsr1_to_DetuneWidth;
+    float triggerRand_to_DetuneWidth;
+};
+
+class VectorModulationProcessor {
+public:
+    void processModulationMatrix(const ModulationSourceBlock& sources, 
+                                 const ModulationMatrixConfig& config, 
+                                 VoiceSoABlock& destinationSoA) {
+        // 各種ソースベクトルのロード
+        __m256 adsr1Reg      = _mm256_load_ps(sources.adsr1);
+        __m256 lfo1Reg       = _mm256_load_ps(sources.lfo1);
+        __m256 trigRandReg   = _mm256_load_ps(sources.triggerRand);
+
+        // --- ターゲット 1: Wavetable Index 変調 ---
+        __m256 baseWT        = _mm256_set1_ps(config.baseWavetableIndex);
+        __m256 wtAdsrCoeff   = _mm256_set1_ps(config.adsr1_to_Wavetable);
+        __m256 wtLfoCoeff    = _mm256_set1_ps(config.lfo1_to_Wavetable);
+
+        // 積和演算: modulatedWT = baseWT + (adsr1 * wtAdsrCoeff) + (lfo1 * wtLfoCoeff)
+        __m256 modulatedWT   = _mm256_fmadd_ps(adsr1Reg, wtAdsrCoeff, baseWT);
+        modulatedWT          = _mm256_fmadd_ps(lfo1Reg, wtLfoCoeff, modulatedWT);
+
+        // ウェーブテーブルインデックスを安全な範囲 [0.0f, 1.0f] にクランプ
+        modulatedWT          = _mm256_max_ps(_mm256_setzero_ps(), 
+                               _mm256_min_ps(modulatedWT, _mm256_set1_ps(1.0f)));
+
+        // 結果をSoAパラメータにストア
+        _mm256_store_ps(destinationSoA.wavetableIndex, modulatedWT);
+
+
+        // --- ターゲット 2: Formant Shift 変調 ---
+        __m256 baseFormant   = _mm256_set1_ps(config.baseFormantShift);
+        __m256 formAdsrCoeff = _mm256_set1_ps(config.adsr1_to_Formant);
+        __m256 formLfoCoeff  = _mm256_set1_ps(config.lfo1_to_Formant);
+
+        __m256 modulatedForm = _mm256_fmadd_ps(adsr1Reg, formAdsrCoeff, baseFormant);
+        modulatedForm        = _mm256_fmadd_ps(lfo1Reg, formLfoCoeff, modulatedForm);
+
+        _mm256_store_ps(destinationSoA.formantShift, modulatedForm);
+
+
+        // --- ターゲット 3: Detune Width 変調 ---
+        __m256 baseDetune    = _mm256_set1_ps(config.baseDetuneWidth);
+        __m256 detAdsrCoeff  = _mm256_set1_ps(config.adsr1_to_DetuneWidth);
+        __m256 detTrigCoeff  = _mm256_set1_ps(config.triggerRand_to_DetuneWidth);
+
+        __m256 modulatedDet  = _mm256_fmadd_ps(adsr1Reg, detAdsrCoeff, baseDetune);
+        modulatedDet         = _mm256_fmadd_ps(trigRandReg, detTrigCoeff, modulatedDet);
+
+        // デチューン幅がマイナス値にならないよう制限
+        modulatedDet         = _mm256_max_ps(_mm256_setzero_ps(), modulatedDet);
+
+        _mm256_store_ps(destinationSoA.detuneWidth, modulatedDet);
+    }
+};
+
+5. 統合アーキテクチャの制御フロー設計
+本システムの完全なライフサイクル制御フローは、一連のウェイトフリー処理を同期して並列実行する。非リアルタイムスレッドとリアルタイムオーディオスレッドの境界線は、MIDI転送用のSPSCリングバッファのみで定義され、DSPエンジンにおける他の競合状態は排除される。
+【非リアルタイム・スレッド (GUI/HOST MIDI)】
+       │
+       ▼ [NoteOn / NoteOff イベント発生]
+ [RealTimeMidiQueue.tryPush()]
+       │
+───────┼──────────────────────────────────────── (スレッド境界境界)[span_83](start_span)[span_83](end_span)
+       ▼
+【リアルタイム・オーディオ処理スレッド】
+ [AudioProc[span_45](start_span)[span_45](end_span)[span_47](start_span)[span_47](end_span)essorRenderBlock()]
+       │
+       ├── 1. MidiQueueからイベントを全消費してボイスの有効・無効状態を設定 
+       │ [span_82](start_span)[span_82](end_span)     │
+       │      └── 9番目のキーオン発生時：
+       │             ・ 最古優先 (Oldest-First) スティーリングを適用 
+       │             ・ 位相ランダム化とデチューン係数算出 (AVX2-PRNG) 
+       │             ・ Trigger Random 値を SoA の triggerRand 配列へ永続化[span_84](start_span)[span_84](end_span)
+       │
+       ├── 2. ボイスの経過時間 (age) を加算
+       │
+       ├── 3. 各ボイスのADSRやLFOのブロック処理を実行、ソースバッファへ書き込み[span_85](start_span)[span_85](end_span)[span_86](start_span)[span_86](end_span)
+       │
+       ├── 4. VectorModul[span_52](start_span)[span_52](end_span)ationProcessor による FMA[span_42](start_span)[span_42](end_span) 加算一括処理
+       │      └── 変調結果を SoA ターゲット領域へ直接ブラスティング 
+       │
+       └── 5. AVX2によるコアDSPレンダリング（Wavetable走査、フィルタリング等）
+    [span_76](start_span)[span_76](end_span)[span_78](start_span)[span_78](end_span)          └── SoA上の完全にアラインされたデータ構造を直接レジスタロードして並列演算 
+
+歴史的に、ポリフォニック・シンセサイザーのボイス割り当てアルゴリズムは、双方向連結リストや動的なオブジェクト生成などの複雑なデータ構造に依存することが多かった。しかし、これらはオーディオスレッド内でのロック競合やスレッド枯渇を誘発するリスクを内包していた。現代のリアルタイムDSP基準は、高効率でデータ指向型の連続実行モデルへの完全なパラダイムシフトを要求している。制御層をSIMDフレンドリーなSoA（構造体配列）コンテナに移行することにより、将来的なコードの再設計を伴うことなく、AVX-512やそれ以降の超並列演算アーキテクチャへとスケールアップ可能な、堅牢なポリフォニック描画エンジンを構築することが可能となる。
+引用文献
+1. [1806.05713] SIMD Vectorization for the Lennard-Jones Potential with AVX2 and AVX-512 instructions - arXiv, https://arxiv.org/abs/1806.05713 2. Modern synth architecture SIMD + Multithreading - DSP and Plugin Development Forum, https://www.kvraudio.com/forum/viewtopic.php?t=586455 3. SoA vs AoS: Data Layout Optimization - Abhik Sarkar, https://www.abhik.ai/concepts/systems/soa-vs-aos 4. From Relational Verification to SIMD Loop Synthesis - The IMDEA Software Institute, https://software.imdea.org/~marron/selectpubs/SimdSynth.pdf 5. Moving Data - Algorithmica, https://en.algorithmica.org/hpc/simd/moving/ 6. Usage of alignas in template argument of std::vector - Stack Overflow, https://stackoverflow.com/questions/72019875/usage-of-alignas-in-template-argument-of-stdvector 7. How to solve the 32-byte-alignment issue for AVX load/store operations? - Stack Overflow, https://stackoverflow.com/questions/32612190/how-to-solve-the-32-byte-alignment-issue-for-avx-load-store-operations 8. Wait-Free Programming From Scratch | by Jatin Chowdhury - Medium, https://jatinchowdhury18.medium.com/wait-free-programming-from-scratch-5ac6a65c23c4 9. Using locks in real-time audio processing, safely, https://timur.audio/using-locks-in-real-time-audio-processing-safely 10. How to use multithreading so each synth voice renders on a different CPU thread/core?, https://forum.juce.com/t/how-to-use-multithreading-so-each-synth-voice-renders-on-a-different-cpu-thread-core/45664 11. Making Audio Plugins Part 16: Polyphony Part I - Martin Finke's Blog, https://www.martin-finke.de/articles/audio-plugins-016-polyphony/ 12. Vintage Toy Synthesiser | Hackaday.io, https://hackaday.io/project/11787-vintage-toy-synthesiser 13. Using Faust in JSFX, https://faustdoc.grame.fr/tutorials/jsfx/ 14. Lockless FIFO SPSC (Single Producer Single Consumer) Queue in C | Splinter Software, http://www.splinter.com.au/2026/05/13/lockless-spsc-queue/ 15. SPSC Lock Free Queue Implementation using C++ 20 | by Serhat Gül | May, 2026 - Medium, https://medium.com/@serhatg2490/spsc-lock-free-queue-implementation-using-c-20-dd7a140d10f9 16. Corona - VA & Wave Synthesizer - discoDSP, https://www.discodsp.com/corona/ 17. Lock-free processing · Issue #141 · RustAudio/dsp-chain - GitHub, https://github.com/RustAudio/dsp-chain/issues/141 18. An Experimental Exploration of Marsaglia's xorshift Generators, Scrambled - ResearchGate, https://www.researchgate.net/publication/260367347_An_Experimental_Exploration_of_Marsaglia's_xorshift_Generators_Scrambled 19. Xorshift RNGs - Journal of Statistical Software, https://www.jstatsoft.org/article/view/v008i14/916 20. Xorshift - Wikipedia, https://en.wikipedia.org/wiki/Xorshift 21. lemire/SIMDxorshift: Fast random number generators: Vectorized (SIMD) version of xorshift128+ - GitHub, https://github.com/lemire/SIMDxorshift 22. mburhanpurkar/fast_xorshift_plus: Vectorized PRNG - three times faster than scalar implementation! · GitHub, https://github.com/mburhanpurkar/fast_xorshift_plus 23. How would you port this "unsigned int" scalar code to "signed int" vector? - Stack Overflow, https://stackoverflow.com/questions/67225382/how-would-you-port-this-unsigned-int-scalar-code-to-signed-int-vector 24. random generator for musical domain (white noise): xorshift? - DSP and Plugin Development Forum - KVR Audio, https://www.kvraudio.com/forum/viewtopic.php?t=564273 25. Melda Production MSoundFactory - Green Musicians, https://www.greenmusicians.com/en/virtual-synth-keyboard-organ-software/melda-production/24918-melda-production-msoundfactory-3701701202065.html 26. Anukari - Loot Audio, https://www.lootaudio.com/category/plugins/anukari/anukari 27. Changelog - Surge XT, https://surge-synthesizer.github.io/changelog/ 28. DESIGNING SOFTWARE SYNTHESIZER PLUG-INS IN C++ with audio dsp. [2 ed.] 9781000375053, 1000375056 - DOKUMEN.PUB, https://dokumen.pub/designing-software-synthesizer-plug-ins-in-c-with-audio-dsp-2nbsped-9781000375053-1000375056.html 29. Reference work for voice stealing / voice allocation / polyphony? : r/DSP - Reddit, https://www.reddit.com/r/DSP/comments/112bwor/reference_work_for_voice_stealing_voice/ 30. How do I align cv::Mat for AVX-512/AVX2 architectures? - Stack Overflow, https://stackoverflow.com/questions/43718018/how-do-i-align-cvmat-for-avx-512-avx2-architectures

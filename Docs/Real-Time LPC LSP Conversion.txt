@@ -1,0 +1,151 @@
+192kHz超高サンプリングレートDSPにおけるリアルタイムLPC・LSP相互変換および数理的フォルマント変調仕様書
+192kHzの高精細オーディオ信号処理において、全極型（All-pole）合成フィルタの係数を直接補間することは、極（Poles）が単位円の外側に遷移し、フィルタの破綻（発散）を引き起こす極めて高いリスクを伴う。この問題を解決するため、線形予測係数（LPC）は、単位円上の根として定義される線スペクトル対（LSP、または角度ドメインにおける線スペクトル周波数：LSF）へと変換される。LSPは「根の交互配置性（インターレース特性）」という独自の数理的性質を持ち、制御レート（32または64サンプル周期）での線形補間時においても最小位相推移特性と絶対的な安定度を保証する。
+本仕様書は、192kHzオーディオプラグイン向けに設計された、極めて高効率でリアルタイム安全なLPC・LSP相互変換手法、およびLSPドメインにおける代数的フォルマント変調（シフティング、ストレッチング）の数学的証明とC++による最適化実装を詳述する。
+LPC・LSP変換の数理的基盤と多項式分解
+予測次数 P（一般に音声・音響処理では P = 10 \sim 24 が用いられる）の逆フィルタ A(z) は次式で定義される：
+A(z) = 1 + \sum_{k=1}^{P} a_k z^{-k}
+ここで、a_k は直接型の線形予測係数である。このフィルタから、完全閉鎖および完全開放の声道境界条件を模した対称多項式 P(z) と反対称多項式 Q(z) を構築する：
+P(z) = A(z) + z^{-(P+1)} A(z^{-1}) Q(z) = A(z) - z^{-(P+1)} A(z^{-1})
+P が偶数の場合、P(z) は z = -1 に、 Q(z) は z = 1 にそれぞれ自明な根を持つ。これらの自明な根を多項式除算（デコンボリューション）によって除去することで、偶数次の対称多項式 P'(z) および Q'(z) を得る：
+P'(z) = \frac{P(z)}{1 + z^{-1}} Q'(z) = \frac{Q(z)}{1 - z^{-1}}
+A(z) が最小位相特性（すべての根が単位円の内部に存在）を満たす場合、P'(z) および Q'(z) の根はすべて単位円上に存在し、かつ互いに交互に配置される。複素平面上の根を z_i = e^{j\omega_i} と表したとき、角度パラメータ \omega_i \in (0, \pi) が線スペクトル周波数（LSF）に対応し、その余弦値 x_i = \cos(\omega_i) \in (-1, 1) が線スペクトル対（LSP）に対応する。
+デコンボリューションの再帰的導出
+係数配列 a = [a_1, a_2, \dots, a_P] から P'(z) と Q'(z) の係数配列 p' = [p'_0, p'_1, \dots, p'_P] および q' = [q'_0, q'_1, \dots, q'_P] を算出するためのデコンボリューション処理は、以下の再帰関係式によって極めて高速かつ浮動小数点演算に最適化された形で実行される：
+p_0 = 1, \quad p_{P+1} = 1, \quad p_i = a_i + a_{P+1-i} \quad (1 \le i \le P) q_0 = 1, \quad q_{P+1} = -1, \quad q_i = a_i - a_{P+1-i} \quad (1 \le i \le P)
+ここで、除数多項式 (1 + z^{-1}) および (1 - z^{-1}) による前進差分/後退差分を解くことにより、以下の再帰的加減算のみで p' および q' が求まる：
+p'_0 = 1, \quad p'_i = p_i - p'_{i-1} \quad (1 \le i \le P) q'_0 = 1, \quad q'_i = q_i + q'_{i-1} \quad (1 \le i \le P)
+このステップにおいて、動的メモリ確保や乗算器を一切必要としないため、キャッシュ効率とパイプラインハザードの回避が同時に達成される。
+リアルタイム求根処理における数値解析手法の最適化
+対称多項式のすべての根は x = \cos(\omega) の写像を介して実数区間 [-1, 1] 上の根へと射影されるため、求根問題はチェビシェフ多項式シリーズの零点探索へと帰着される。
+クレンショー漸化式による高速評価と自動微分
+一般に次数 M = P/2 のチェビシェフ級数として表される対称多項式 F(x) の評価には、数値的安定性と演算効率に優れたクレンショー漸化式（Clenshaw Recurrence）が適用される。
+u_{M+2} = u_{M+1} = 0 u_k = 2x u_{k+1} - u_{k+2} + c_k \quad (k = M, M-1, \dots, 1) F(x) = x u_1 - u_2 + c_0
+求根の収束速度を劇的に向上させるため、本仕様書ではクレンショー漸化式を直接微分するアルゴリズムを導入する。これにより、超越関数の再評価を行うことなく、同一のループ内で関数値 F(x) とその一階導関数 F'(x) を同時算出することが可能となる。導関数の漸化式は以下の通り定義される：
+u'_{M+2} = u'_{M+1} = 0 u'_k = 2x u'_{k+1} - u'_{k+2} + 2u_{k+1} \quad (k = M, M-1, \dots, 1) F'(x) = x u'_1 - u'_2 + u_1
+このスキームにより、二分法（Bisection）単独の探索から、二次収束特性を持つニュートン・ラフソン（Newton-Raphson）法への移行が可能となり、求根に必要な繰り返し回数を大幅に削減できる。
+インタレース型ハイブリッド求根アルゴリズム
+根の交互配置性（P' の根と Q' の根が必ず交互に現れる性質）を最大限に活用し、探索範囲を動的に限定する「インタレース型走査」を実行する。
+[走査開始: x = 1.0] ---> [P'の根(x_1)を探索] ---> [発見: 位置x_1]
+                                                        |
+[Q'の根(x_2)を探索] [span_28](start_span)[span_28](end_span)[span_30](start_span)[span_30](end_span)[span_32](start_span)[span_32](end_span)<--- [走査開始点を x_1 に設定] <-----+
+      |
+      v
+[発見: 位置x_2] ---> [P'の根(x_3)の探索開始点を x_2 に設定] ...
+
+走査軸を x = 1.0 から -1.0 に向けて設定し、ステップ幅 \Delta で走査する。
+まず P'(x) の符号変化（零点通過）を検出する。
+符号変化を検出した区間で、ニュートン・ラフソン法（または確実に収束させるための二分法とのハイブリッド法）を適用し、極めて高い精度で根 x_i を決定する。
+根 x_i が決定された瞬間、次の探索対象多項式を Q'(x) に切り替え、探索開始点を直前の根の位置 x_i に更新する。
+この一方向走査と動的開始点シフトにより、全区間の再スキャンが不要となり、リアルタイム処理における最悪計算量が大幅に低減される。
+192kHzオーディオに適した適応型グリッド・スケーリング
+192kHzという極めて高いサンプリングレート下では、人間の音声や一般的な楽器の共振成分（フォルマント）はナイキスト周波数（96kHz）に対して非常に低い帯域（主に 5\text{kHz} 以下、すなわち x \approx 1.0 付近）に極度に集中する。そのため、全区間 [-1, 1] を一様なステップ幅 \Delta で走査することは、不要な高域（x \le 0.0 の領域）の評価にCPUサイクルを浪費する一方で、低域における近接した極の検出漏れを引き起こす原因となる。
+この不均衡を解消するため、非線形な適応型ステップ幅（Adaptive Step-size）を導入する。
+\Delta(x) = \Delta_0 \left(1 - \gamma x[span_52](start_span)[span_52](end_span)^2\right)
+ここで、\Delta_0 は基準ステップ幅、\gamma \in [0.8, 0.95] は圧縮係数である。これにより、x \approx 1.0 付近ではステップ幅を極めて細かくして分解能を向上させ、根が希薄な x \approx -1.0 付近ではステップ幅を広げて高速にスキップさせることで、192kHzにおける求根の確実性と低CPU負荷を両立させる。
+LSPからLPCへの逆変換：制御レート用C++最適化実装
+LSPからLPCへの逆変換処理は、オーディオレンダリングスレッドの制御レート（32または64サンプル周期）で実行されるため、浮動小数点の例外が発生せず、かつメモリアロケーションが完全に排除された実装でなければならない。
+本アルゴリズムでは、根ペアを表す以下の2次FIRセクション（複素共役根ペアの展開）をカスケード接続して P'(z) および Q'(z) を再構築する：
+P'(z) = \prod_{i=1}^{M} \left(1 - 2x_{2i-1}z^{-1} + z^{-2}\right) [span_54](start_span)[span_54](end_span)Q'(z) = \prod_{i=1}^{M} \left(1 - 2x_{2i}z^{-1} + z^{-2}\right)
+ここで x_k は余弦ドメインにおけるLSP係数である。このフィルタにインパルス \delta[n] を入力し、その応答を P ステップ分シミュレートすることで、多項式展開の展開係数を直接得る。
+以下に、AVX2自動ベクトル化を阻害しないフラットなメモリレイアウトを採用し、リアルタイムスレッド安全性を担保したC++最適化実装仕様を示す。
+```cpp #include <array> #include <cmath> #include <algorithm>
+/**
+@brief 線スペクトル対 (LSP) から線形予測係数 (LPC) への逆変換を行うクラス。
+@tparam Order LPCフィルタの次数 (偶数であること。例: 10, 16, 24) */ template <size_t Order> class LspToLpcConverter { public: static_assert(Order % 2 == 0, "LPC Order must be an even integer."); static constexpr size_t M = Order / 2;/**
+@brief 余弦ドメインのLSP係数からLPC係数を再構築する (インパルス応答法)。
+@param lsp 入力LSP配列。範囲 [-1.0, 1.0] で単調減少していること。
+@param lpc 出力LPC配列（サイズ: Order）。
+@note 本関数はヒープアロケーションを一切行わず、実時間スレッドで安全に実行可能。 */ static void convert(const std::array<double, Order>& lsp, std::array<double, Order>& lpc) noexcept { // インパルス応答計算用の遅延バッファ。アライメントを揃えてキャッシュラインに最適化。 alignas(32) std::array<double, M * 2> delay_p{}; alignas(32) std::array<double, M * 2> delay_q{};double prev_p_out = 0.0; double prev_q_out = 0.0;// インパルス信号を時間的に1ステップずつ入力して応答係数を生成 for (size_t j = 0; j <= Order; ++j) { double xin_p = (j == 0) ? 1.0 : 0.0; double xin_q = (j == 0) ? 1.0 : 0.0;// P'(z) の 2次FIRフィルタ群のカスケード結合 for (size_t i = 0; i < M; ++i) { const size_t idx = i * 2; const double xout = xin_p - 2.0 * lsp[2 * i] * delay_p[idx] + delay_p[idx + 1]; delay_p[idx + 1] = delay_p[idx]; delay_p[idx] = xin_p; xin_p = xout; }// Q'(z) の 2次FIRフィルタ群のカスケード結合 for (size_t i = 0; i < M; ++i) { const size_t idx = i * 2; const double xout = xin_q - 2.0 * lsp[2 * i + 1] * delay_q[idx] + delay_q[idx + 1]; delay_q[idx + 1] = delay_q[idx]; delay_q[idx] = xin_q; xin_q = xout; }// 境界条件の結合: P(z) = (1 + z^-1)P'(z) および Q(z) = (1 - z^-1)Q'(z) const double p_out = xin_p + prev_p_out; const double q_out = xin_q - prev_q_out;prev_p_out = xin_p; prev_q_out = xin_q;// 予測係数 a_j = 0.5 * (P_j + Q_j) の復元。 // a_0 = 1.0 は固定値のため出力から除外する。 if (j > 0) { lpc[j - 1] = 0.5 * (p_out + q_out); } } } };
+---
+
+## LSP/LSFドメインにおける代数的フォルマント変調と安定性境界条件
+
+### 双一次共形写像による非線形フォルマント・シフティング
+声道長（Vocal Tract Length: VTL）の物理的スケーリングによるフォルマント・シフティングは、単位円上の複素根に対する双一次共形写像（Bilinear Conformal Mapping）を用いて代数的に定義される[span_77](start_span)[span_77](end_span)[span_79](start_span)[span_79](end_span)。複素領域における写像関数は次式で与えられる：
+
+$$z'_i = \frac{z_i - \alpha}{1 - \alpha z_i}$$
+
+ここで $\alpha \in (-1, 1)$ はフォルマント・ワープ係数である[span_81](start_span)[span_81](end_span)[span_82](start_span)[span_82](end_span)。$\alpha > 0$ のときフォルマント全体が低域にシフト（声道長の伸張を擬似的に表現）し、$\alpha < 0$ のとき高域にシフト（声道長の短縮）する。
+
+この写像を余弦ドメイン（[span_78](start_span)[span_78](end_span)[span_80](start_span)[span_80](end_span)LSP領域 $x_i = \cos(\omega_i)$）に直接適用するため、オイラーの公式を介して実数射影を行う。
+
+$$e^{j\omega'_i} = \frac{e^{j\omega_i} - \alpha}{1 - \alpha e^{j\omega_i}}$$
+
+実部を取り出すため、右辺の分母・分子に共役複素数を乗算して整理すると、超越関数（`cos`, `sin`, `arctan` 等）を一切経由しない、以下の高速な代数変換式が導出される：
+
+$$x'_i = \frac{(1+\alpha^2)x_i - 2\alpha}{1+\alpha^2 - 2\alpha x_i}$$
+
+#### 安定性の証明（単調増加・減少性の維持）
+変調後のフィルタが安定であるためには、変調写像を通した後もLSPのインターレース順序関係が完全に維持される（写像関数が $[-1, 1]$ において狭義単調増加である）ことが必要十分条件となる。写像関数 $f(x) = \frac{(1+\alpha^2)x - 2\alpha}{1+\alpha^2 - 2\alpha x}$ の一階導関数を求め、その符号を評価する。
+
+$$f'(x) = \frac{(1+\alpha^2)(1+\alpha^2 - 2\alpha x) - \left((1+\alpha^2)x - 2\alpha\right)(-2\alpha)}{(1+\alpha^2 - 2\alpha x)^2}$$
+
+分子を整理すると：
+
+$$(1+\alpha^2)^2 - 2\alpha(1+\alpha^2)x + 2\alpha(1+\alpha^2)x - 4\alpha^2 = (1+\alpha^2)^2 - 4\alpha^2 = (1-\alpha^2)^2$$
+
+したがって：
+
+$$f'(x) = \frac{(1-\alpha^2)^2}{(1+\alpha^2 - 2\alpha x)^2}$$
+
+すべての $\alpha \in (-1, 1)$ に対し、$(1-\alpha^2)^2 > 0$ であり、分母の二乗項も常に正である。ゆえに $f'(x) > 0$ が領域全体で成立し、本写像は厳密に狭義単調増加である。これにより、**変調前後でLSP根の交差（順序逆転）は数学的に絶対に発生せず、合成フィルタの最小位相推移特性と絶対安定性が維持される**。
+
+### フォルマントの伸張と圧縮（Stretching/Squeezing）
+フォルマントの個別帯域幅や共振特性を変化させる「伸張・圧縮」は、角度（LSF）ドメインにおける重心 $\bar{\omega}$ を基準としたアフィン変換として定式化される[span_83](start_span)[span_83](end_span)。
+
+$$\omega'_i = \bar{\omega} + \sigma (\omega_i - \bar{\omega})$$
+
+ここで、$\sigma > 0$ は伸張/圧縮率、$\bar{\omega} = \frac{1}{P}\sum_{k=1}^P \omega_k$ はフレームごとのスペクトル重心である[span_84](start_span)[span_84](end_span)。
+* $\sigma > 1$ の場合、極同士が離れて共振ピークが鋭くなり、知覚的に明瞭で緊張感のある音色となる[span_86](start_span)[span_86](end_span)[span_88](start_span)[span_88](end_span)。
+* $\sigma < 1$ の場合、極が中央に圧縮され、共振が滑らか（ブロード）になり、平坦または息漏れの多い音色へと変化する[span_87](start_span)[span_87](end_span)[span_89](start_span)[span_89](end_span)。
+
+しかし、この一次変換は $\sigma$ の値によっては根が物理的境界である $0$ または $\pi$ を超えてしまうか、あるいは隣接する根との距離が極端に縮まり、フィルタの過渡応答においてクリック音やバーストを引き起こすリスクがある。そのため、変調後は必ず次に示す「ガードバンド安定化処理」を通さなければならない。
+
+### LSFガードバンド安定化アルゴリズム
+隣接するLSF間の最小距離を規定するガードバンド幅 $\delta_{\text{min}}$ を次式に基づき設定する。
+[span_69](start_span)[span_69](end_span)[span_71](start_span)[span_71](end_span)
+$$\delta_{\text{min}} \approx 0.05 \cdot \frac{\pi}{P+1}$$
+
+この最小ステップ幅を強制適用するための双方向プッ[span_61](start_span)[span_61](end_span)[span_64](start_span)[span_64](end_span)シュ・プル（Push-Pull）安定化処理アルゴリズムのC++実装を以下に示す。
+
+```cpp
+/**
+ * @brief フォルマント変調後のLSF配列に対して、順序[span_62](start_span)[span_62](end_span)[span_65](start_span)[span_65](end_span)維持と境界超過防止のためのガードバンドを強制適用する。
+ * @tparam Order LPC予測次数
+ * @param lsf 角度ドメイン (0 から pi ラジアン) のLSF配列。
+ * @param min_dist 最小周波数間隔 (delta_min)。
+ */
+template <size_t Order>
+inl[span_56](start_span)[span_56](end_span)ine void stabilize_lsf(std::array<double, Order>& lsf, double min_dist) noexcept {
+    constexpr double pi = 3.14159265358979323846;
+
+    // パス 1: 前進プッシュ (低域から高域にかけて順序と最小間隔を矯正)
+    if (lsf[0] < min_dist) {
+        lsf[0] = min_dist;
+    }
+    for (size_t i = 1; i < Order; ++i) {
+        if (lsf[i] < lsf[i - 1] + min_dist) {
+            lsf[i] = lsf[i - 1] + min_dist;
+        }
+    }
+
+    // パス 2: 後退プル (高域から低域にかけてπの境界線と最小間隔を再矯正)
+    if (lsf[Order - 1] > pi - min_dist) {
+        lsf[Order - 1] = pi - min_dist;
+    }
+    for (size_t i = Order - 2; i < Order; --i) { // size_tのアンダーフローを利用した逆ループ
+        if (lsf[i] > lsf[i + 1] - min_dist) {
+            lsf[i] = lsf[i + 1] - min_dist;
+        }
+    }
+}
+
+音響管パラメータの比較特性と192kHzにおける補間挙動
+各係数ドメインが持つ音響シミュレーション上およびリアルタイム信号処理上の特性評価を以下の表にまとめる。
+192kHzにおける最適な補間戦略
+192kHzサンプリングレート下において、制御ブロックサイズを32または64サンプルとした場合、時間ステップ幅は極めて微小な 166 \sim 333 \mu\text{s} となる。この極小時間ステップ下では、本来知覚的に好ましいとされる高コストな「角度ドメイン（LSF: \omega_i）での線形補間」 を行わなくとも、計算コストが大幅に低い「余弦ドメイン（LSP: x_i）でのダイレクトな線形補間」によって十分に平滑、かつ非エイリアシング（クリックフリー）なパラメータ遷移を実現可能である。
+したがって、プラグインの最適な実装戦略は、分析スレッドで得られたLSP係数（x_i）を、そのままDSPレンダリングスレッド側で以下の線形補間式を適用して制御レート（32/64サンプル）ごとにステップ更新し：
+x_i[n] = (1 - \beta) x_i[\text{Prev}] + \beta [span_1](start_span)[span_1](end_span)[span_3](start_span)[span_3](end_span)x_i[\text{Next}] \quad (\beta \in [0, 1])
+更新されたLSPから、前述した LspToLpcConverter::convert を用いて瞬時にLPC係数（a_k）へと逆変換し、AVX2 SIMD命令で駆動する内積ループ（合成フィルタ処理）へと供給するアーキテクチャを採用することである。これにより、超高音質かつ完全に安定した可変フォルマント・オーディオエフェクトが実時間で成立する。
+引用文献
+1. LPC Formant-Shifting - DSPRelated.com, https://www.dsprelated.com/thread/5684/lpc-formant-shifting 2. SPECTRAL SMOOTHING FOR CONCATENATIVE SPEECH SYNTHESIS * - ISCA Archive, https://www.isca-archive.org/icslp_1998/chappell98_icslp.pdf 3. The Computation of Line Spectral Frequencies Using - Chebyshev Polynomials - RP Ramachandran and Kabal - Multimedia Signal Processing, https://mmsp.ece.mcgill.ca/Documents/Reports/1985/RamachandranR1985.pdf 4. The Computation of Line Spectral Frequencies Using Chebyshev Polynomials, http://hil.t.u-tokyo.ac.jp/~kameoka/SAP/papers/Kabal1986__The_Computation_of_Line_Spectral_Frequencies_Using_Chebyshev_Polynomials.pdf 5. A Review: Line Spectral Pairs, https://www.lintech.org/webpapers/lsp_paper.pdf 6. xiph.org: Ogg Vorbis documentation - MIT, https://web.mit.edu/cfox/share/doc/libvorbis-1.0/vorbis-spec-intro.html 7. (PDF) A Review Line Spectral Pairs - Academia.edu, https://www.academia.edu/3069146/A_Review_Line_Spectral_Pairs 8. speex/libspeex/lsp.c at master - GitHub, https://github.com/xiph/speex/blob/master/libspeex/lsp.c 9. LSF/LSP to LPC Conversion - Convert line spectral frequencies or line spectral pairs to linear prediction coefficients - Simulink - MathWorks, https://www.mathworks.com/help/dsp/ref/lsflsptolpcconversion.html 10. VLSI implementation of an efficient method for the computation of line spectral frequencies, https://rdw.rowan.edu/etd/1222/ 11. VLSI implementation of an efficient method for the computation of, https://rdw.rowan.edu/cgi/viewcontent.cgi?referer=&httpsredir=1&article=2222&context=etd 12. Clenshaw algorithm - Wikipedia, https://en.wikipedia.org/wiki/Clenshaw_algorithm 13. Clenshaw-type recurrence for derivative of Chebyshev series, https://scicomp.stackexchange.com/questions/27865/clenshaw-type-recurrence-for-derivative-of-chebyshev-series 14. The computation of line spectral frequencies using Chebyshev polynomials - SciSpace, https://scispace.com/papers/the-computation-of-line-spectral-frequencies-using-chebyshev-3rujviyno2 15. VOICE CONVERSION: A CRITICAL SURVEY - IME-USP, https://www.ime.usp.br/~mqz/SMC2010_Voice.pdf 16. varna9000/reticulum-tdeck - GitHub, https://github.com/varna9000/reticulum-tdeck 17. Information technology – Coding of audio-visual objects – Part 3, http://www.lpi.tel.uva.es/~nacho/docencia/ing_ond_1/trabajos_01_02/formatos_audio_digital/archivos/w2803_n.pdf 18. LPC to/from RC - Convert linear prediction coefficients to reflection coefficients or reflection coefficients to linear prediction coefficients - Simulink - MathWorks, https://www.mathworks.com/help/dsp/ref/lpctofromrc.html 19. Application of Linear Prediction Coefficients Interpolation in Speech Signal Coding, https://www.researchgate.net/publication/241035476_Application_of_Linear_Prediction_Coefficients_Interpolation_in_Speech_Signal_Coding 20. Spectral Envelope Transformation in Singing Voice for Advanced Pitch Shifting - MDPI, https://www.mdpi.com/2076-3417/6/11/368 21. Interpolation of Linear Prediction Coefficients for Speech Coding - Collectionscanada.ca, https://www.collectionscanada.gc.ca/obj/s4/f2/dsk1/tape4/PQDD_0034/MQ64229.pdf
