@@ -147,11 +147,18 @@ void VoiceManager::processMidiEvents(MidiQueue& midiQueue, PolyphonicVoiceSoA& d
                 dspState.phaseL[idx] = randomFloat01_scalar(mVoiceBlock.xorState[idx]) * 2048.0f;
                 dspState.phaseR[idx] = randomFloat01_scalar(mVoiceBlock.xorState[idx]) * 2048.0f;
 
-                // LPC合成フィルタ履歴のゼロクリア
-                for (int p = 0; p < PolyphonicVoiceSoA::kLpcOrder; ++p)
+                // BPFフィルタバンクの各バンド履歴のゼロクリア
+                for (int b = 0; b < PolyphonicVoiceSoA::kNumBands; ++b)
                 {
-                    dspState.filterHistoryL[p][idx] = 0.0f;
-                    dspState.filterHistoryR[p][idx] = 0.0f;
+                    dspState.filterX1_L[b][idx] = 0.0f;
+                    dspState.filterX2_L[b][idx] = 0.0f;
+                    dspState.filterY1_L[b][idx] = 0.0f;
+                    dspState.filterY2_L[b][idx] = 0.0f;
+
+                    dspState.filterX1_R[b][idx] = 0.0f;
+                    dspState.filterX2_R[b][idx] = 0.0f;
+                    dspState.filterY1_R[b][idx] = 0.0f;
+                    dspState.filterY2_R[b][idx] = 0.0f;
                 }
             }
         }

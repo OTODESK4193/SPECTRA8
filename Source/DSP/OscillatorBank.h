@@ -24,6 +24,12 @@ public:
                             __m256 envelopes,
                             __m256 noiseMix,
                             __m256 noiseBuffer,
+                            const float* modulatorEnvelopes,
+                            float formantShift,
+                            const float* b0_coeffs,
+                            const float* b2_coeffs,
+                            const float* a1_coeffs,
+                            const float* a2_coeffs,
                             float& outL,
                             float& outR);
 

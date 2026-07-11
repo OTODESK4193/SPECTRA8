@@ -54,10 +54,15 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
                                        __m256 envelopes,
                                        __m256 noiseMix,
                                        __m256 noiseBuffer,
+                                       const float* modulatorEnvelopes,
+                                       float formantShift,
+                                       const float* b0_coeffs,
+                                       const float* b2_coeffs,
+                                       const float* a1_coeffs,
+                                       const float* a2_coeffs,
                                        float& outL,
                                        float& outR)
 {
-    // テーブルへのポインタ (今回は Saw テーブルを使用)
     const float* tablePtrSaw = mWavetableSaw.data();
 
     // 1. LEFT オシレーター波形生成 (Wavetable補間)
@@ -74,7 +79,6 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
     __m256 y0_L = _mm256_i32gather_ps(tablePtrSaw, idx0_L, 4);
     __m256 y1_L = _mm256_i32gather_ps(tablePtrSaw, idx1_L, 4);
 
-    // FMA補間: out_L = y0_L * (1 - t_L) + y1_L * t_L
     __m256 tmp_L = _mm256_fnmadd_ps(t_L, y0_L, y0_L);
     __m256 oscL = _mm256_fmadd_ps(t_L, y1_L, tmp_L);
 
@@ -92,58 +96,91 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
     __m256 y0_R = _mm256_i32gather_ps(tablePtrSaw, idx0_R, 4);
     __m256 y1_R = _mm256_i32gather_ps(tablePtrSaw, idx1_R, 4);
 
-    // FMA補間
     __m256 tmp_R = _mm256_fnmadd_ps(t_R, y0_R, y0_R);
     __m256 oscR = _mm256_fmadd_ps(t_R, y1_R, tmp_R);
 
 
     // 3. 有声音(オシレーター)と無声音(ノイズ)のブレンド
-    // x = (1.0 - noiseMix) * osc + noiseMix * noise
     __m256 oneMinusNoiseMix = _mm256_sub_ps(_mm256_set1_ps(1.0f), noiseMix);
     __m256 excitationL = _mm256_fmadd_ps(oneMinusNoiseMix, oscL, _mm256_mul_ps(noiseMix, noiseBuffer));
     __m256 excitationR = _mm256_fmadd_ps(oneMinusNoiseMix, oscR, _mm256_mul_ps(noiseMix, noiseBuffer));
 
-    // 各ボイスの音量エンベロープを適用
-    excitationL = _mm256_mul_ps(excitationL, envelopes);
-    excitationR = _mm256_mul_ps(excitationR, envelopes);
 
+    // 4. 20バンド・バンドパス・フィルタバンクによる変調とボイス加算
+    float actMask[8];
+    float excL[8];
+    float excR[8];
+    float voiceEnvelopes[8];
 
-    // 4. LPC合成IIRフィルタリング (24次のループ)
-    // y[n] = x[n] - sum_{i=1}^P a_i * y[n-i]
-    uint32_t wPtr = state.filterWritePtr;
-    __m256 yL_sum = excitationL;
-    __m256 yR_sum = excitationR;
-    int rPtr = static_cast<int>(wPtr);
+    _mm256_storeu_ps(actMask, activeVoicesMask);
+    _mm256_storeu_ps(excL, excitationL);
+    _mm256_storeu_ps(excR, excitationR);
+    _mm256_storeu_ps(voiceEnvelopes, envelopes);
 
-    for (int i = 0; i < PolyphonicVoiceSoA::kLpcOrder; ++i)
+    float sumL = 0.0f;
+    float sumR = 0.0f;
+
+    for (int v = 0; v < 8; ++v)
     {
-        rPtr--;
-        if (rPtr < 0)
+        if (actMask[v] > 0.0f)
         {
-            rPtr = PolyphonicVoiceSoA::kLpcOrder - 1;
+            float vL = excL[v];
+            float vR = excR[v];
+
+            float voiceSumL = 0.0f;
+            float voiceSumR = 0.0f;
+
+            for (int i = 0; i < PolyphonicVoiceSoA::kNumBands; ++i)
+            {
+                // Biquad フィルタ実行 (LEFT)
+                float xL = vL;
+                float x1_L = state.filterX1_L[i][v];
+                float x2_L = state.filterX2_L[i][v];
+                float bpY1_L = state.filterY1_L[i][v];
+                float bpY2_L = state.filterY2_L[i][v];
+
+                float yL = b0_coeffs[i] * xL + b2_coeffs[i] * x2_L - a1_coeffs[i] * bpY1_L - a2_coeffs[i] * bpY2_L;
+                if (std::isnan(yL) || std::isinf(yL)) yL = 0.0f;
+
+                state.filterX2_L[i][v] = x1_L;
+                state.filterX1_L[i][v] = xL;
+                state.filterY2_L[i][v] = bpY1_L;
+                state.filterY1_L[i][v] = yL;
+
+                // Biquad フィルタ実行 (RIGHT)
+                float xR = vR;
+                float x1_R = state.filterX1_R[i][v];
+                float x2_R = state.filterX2_R[i][v];
+                float bpY1_R = state.filterY1_R[i][v];
+                float bpY2_R = state.filterY2_R[i][v];
+
+                float yR = b0_coeffs[i] * xR + b2_coeffs[i] * x2_R - a1_coeffs[i] * bpY1_R - a2_coeffs[i] * bpY2_R;
+                if (std::isnan(yR) || std::isinf(yR)) yR = 0.0f;
+
+                state.filterX2_R[i][v] = x1_R;
+                state.filterX1_R[i][v] = xR;
+                state.filterY2_R[i][v] = bpY1_R;
+                state.filterY1_R[i][v] = yR;
+
+                // フォルマントシフト写像
+                // (formantShift パラメータに応じてマッピングするインデックスをずらす)
+                float srcIdx = static_cast<float>(i) - formantShift;
+                srcIdx = std::clamp(srcIdx, 0.0f, static_cast<float>(PolyphonicVoiceSoA::kNumBands - 1));
+                int idx0 = static_cast<int>(srcIdx);
+                int idx1 = std::min(PolyphonicVoiceSoA::kNumBands - 1, idx0 + 1);
+                float frac = srcIdx - idx0;
+                float modEnv = modulatorEnvelopes[idx0] * (1.0f - frac) + modulatorEnvelopes[idx1] * frac;
+
+                voiceSumL += yL * modEnv;
+                voiceSumR += yR * modEnv;
+            }
+
+            sumL += voiceSumL * voiceEnvelopes[v];
+            sumR += voiceSumR * voiceEnvelopes[v];
         }
-
-        __m256 histL = _mm256_load_ps(&state.filterHistoryL[rPtr][0]);
-        __m256 coeffL = _mm256_load_ps(&state.filterCoeffsL[i][0]);
-        yL_sum = _mm256_fnmadd_ps(coeffL, histL, yL_sum);
-
-        __m256 histR = _mm256_load_ps(&state.filterHistoryR[rPtr][0]);
-        __m256 coeffR = _mm256_load_ps(&state.filterCoeffsR[i][0]);
-        yR_sum = _mm256_fnmadd_ps(coeffR, histR, yR_sum);
     }
 
-    // 5. ボイス有効無効マスクの適用 (NaNの漏れを防ぐためビットANDによる物理的クリアを実行)
     __m256 bitMask = _mm256_cmp_ps(activeVoicesMask, _mm256_setzero_ps(), _CMP_GT_OQ);
-    yL_sum = _mm256_and_ps(yL_sum, bitMask);
-    yR_sum = _mm256_and_ps(yR_sum, bitMask);
-
-    // 6. 出力履歴を円形バッファに書き戻す
-    _mm256_store_ps(&state.filterHistoryL[wPtr][0], yL_sum);
-    _mm256_store_ps(&state.filterHistoryR[wPtr][0], yR_sum);
-
-    // 円形バッファポインタをインクリメント
-    state.filterWritePtr = (wPtr + 1) % PolyphonicVoiceSoA::kLpcOrder;
-
 
     // 7. オシレーター位相の更新
     __m256 phaseIncrL_vec = _mm256_load_ps(state.phaseIncrL);
@@ -169,10 +206,9 @@ void OscillatorBank::processSampleAVX2(PolyphonicVoiceSoA& state,
     _mm256_store_ps(state.phaseL, phaseL_vec);
     _mm256_store_ps(state.phaseR, phaseR_vec);
 
-
-    // 8. 左右それぞれ8ボイスを水平加算してスカラーミックス出力を得る
-    outL = SimdUtils::horizontalSum(yL_sum);
-    outR = SimdUtils::horizontalSum(yR_sum);
+    // 8. 左右のチャネル出力を引数に書き戻し (無音不具合の解消)
+    outL = sumL;
+    outR = sumR;
 }
 
 } // namespace DSP

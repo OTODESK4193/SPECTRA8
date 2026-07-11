@@ -13,12 +13,9 @@ SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
       mAnalysisHopSize(100),
       mAnalysisWindowSize(1024),
       mControlRateBlockSize(32),
-      mControlRateCounter(0),
-      mCurrentGain(0.0f),
-      mTargetGain(0.0f)
+      mControlRateCounter(0)
 {
-    mAnalysisFft = std::make_unique<juce::dsp::FFT>(10);
-    mFsFft = std::make_unique<juce::dsp::FFT>(10);  // 1024ポイントFFT (16kHz領域)
+    std::memset(&mDspState, 0, sizeof(mDspState));
 }
 
 SPECTRA8AudioProcessor::~SPECTRA8AudioProcessor()
@@ -103,51 +100,76 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
 void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     juce::ignoreUnused (samplesPerBlock);
+
+    // 分析制御用パラメータの初期化 (未初期化によるLPC停止バグの解消)
+    mAnalysisWindowSize = 1024;
+    mAnalysisHopSize = 100;
+    mControlRateBlockSize = 32;
+    mDownsampleTimeAccum = 0.0;
+
     // 各モジュールの初期化 (ボイス合成・フィルタリングは16kHz固定)
     mVoiceManager.setup(16000.0);
     mOscillatorBank.setup(16000.0);
-    mCharacterProcessor.setup(sampleRate);
-    mMultiRateMapper.setup(sampleRate);
     
-    mLpcAnalyzer.setup(16);
-    mTelpcIntegrator.setup(10); // fftOrder=10 -> FFTSize=1024
-    mFsFft = std::make_unique<juce::dsp::FFT>(10); // 16kHz領域 1024ポイントFFT (size=1024)
-
     mMidiQueue.clear();
     mMidiActiveMode = false;
     mInputEnvelope = 0.0f;
     mCurrentF0 = 150.0f;
 
-    // 状態構造体のクリア (MSVCでのアライメント構造体コピーバグによるゴミ混入を防ぐためmemsetを使用)
+    // 状態構造体のクリア
     std::memset(&mDspState, 0, sizeof(mDspState));
 
     // 分析バッファの初期化
     mAnalysisInputBuffer.clear();
-    mAnalysisFrame.assign(mAnalysisWindowSize, 0.0f);
     
-    mTeEnvelope.resize(513, 0.0f);
-    mBarkEnergies.resize(25, 0.0f);
-    m16kLpc.assign(17, 0.0f);
-    m16kLpc[0] = 1.0f;
-    
-    mFsEnvelope.assign(513, 0.0f);
-    mIfftBuffer.assign(2048, 0.0f);
-    
-    // Levinson-Durbin用バッファの事前確保 (16次LPC用、17点)
-    mLdA.assign(17, 0.0f);
-    mLdANew.assign(17, 0.0f);
-    mLdNewLpc.assign(17, 0.0f);
-    
-    // LPC 初期目標値の設定 (16次中立フィルタ)
-    mFsLpc.assign(17, 0.0f);
-    mFsLpc[0] = 1.0f;
-    mFsLpcTarget = mFsLpc;
+    // 20バンド・バンドパス・フィルタバンク用バッファ・係数の初期化
+    int numBands = 20;
+    mBandEnvelopes.assign(numBands, 0.0f);
+    mTargetBandEnvelopes.assign(numBands, 0.0f);
+
+    mAnalFilterX1.assign(numBands, 0.0f);
+    mAnalFilterX2.assign(numBands, 0.0f);
+    mAnalFilterY1.assign(numBands, 0.0f);
+    mAnalFilterY2.assign(numBands, 0.0f);
+
+    mBandF0.resize(numBands);
+    mBandCoeffsB0.resize(numBands);
+    mBandCoeffsB2.resize(numBands);
+    mBandCoeffsA1.resize(numBands);
+    mBandCoeffsA2.resize(numBands);
+
+    float fMin = 80.0f;
+    float fMax = 7000.0f; // 16kHzのナイキスト周波数8000Hz以下に収める
+    float Q = 8.0f;       // 音量が滑らかにつながるように設定
+
+    for (int i = 0; i < numBands; ++i)
+    {
+        float freq = fMin * std::pow(fMax / fMin, static_cast<float>(i) / (numBands - 1));
+        mBandF0[i] = freq;
+
+        float omega = 2.0f * 3.14159265f * freq / 16000.0f;
+        float sinW = std::sin(omega);
+        float cosW = std::cos(omega);
+        float alpha = sinW / (2.0f * Q);
+
+        float b0 = sinW / 2.0f;
+        float b2 = -b0;
+        float a0 = 1.0f + alpha;
+        float a1 = -2.0f * cosW;
+        float a2 = 1.0f - alpha;
+
+        mBandCoeffsB0[i] = b0 / a0;
+        mBandCoeffsB2[i] = b2 / a0;
+        mBandCoeffsA1[i] = a1 / a0;
+        mBandCoeffsA2[i] = a2 / a0;
+    }
 
     m16kWetBuffer.assign(samplesPerBlock, 0.0f);
 
     mControlRateCounter = 0;
-    mCurrentGain = 0.0f;
-    mTargetGain = 0.0f;
+    mCurrentUnvoicedRatio = 0.0f;
+    mTargetUnvoicedRatio = 0.0f;
+    mF0History.assign(5, 150.0f);
 }
 
 void SPECTRA8AudioProcessor::releaseResources()
@@ -176,23 +198,18 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     // デバッグ用NaN/Inf検出マクロ
     #define CHECK_NAN(val, msg) \
         if (std::isnan(val) || std::isinf(val)) { \
-            if (mDebugMessage.startsWith("No errors") || mDebugMessage.isEmpty()) \
-                mDebugMessage = juce::String("ERR: ") + msg + " is NaN/Inf! Val: " + juce::String(val); \
+            mErrorState.store(1); \
         }
 
     #define CHECK_NAN_ARRAY(ptr, size, msg) \
         for (int _i = 0; _i < (size); ++_i) { \
             if (std::isnan((ptr)[_i]) || std::isinf((ptr)[_i])) { \
-                if (mDebugMessage.startsWith("No errors") || mDebugMessage.isEmpty()) \
-                    mDebugMessage = juce::String("ERR: ") + msg + "[" + juce::String(_i) + "] is NaN/Inf! Val: " + juce::String((ptr)[_i]); \
+                mErrorState.store(1); \
                 break; \
             } \
         }
 
     #define CHECK_NAN_VEC(vec, msg) CHECK_NAN_ARRAY((vec).data(), static_cast<int>((vec).size()), msg)
-
-    if (mDebugMessage.isEmpty() || mDebugMessage.startsWith("No errors"))
-        mDebugMessage = "No errors. Running fine.";
 
     if (numInputs > 0 && numSamples > 0)
     {
@@ -224,10 +241,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     // 2. パラメータのロード
     float character = apvts.getRawParameterValue("character")->load();
-    float frameRate = apvts.getRawParameterValue("frameRate")->load();
-    int lpcOrder = static_cast<int>(apvts.getRawParameterValue("lpcOrder")->load());
     float formantShift = apvts.getRawParameterValue("formantShift")->load();
-    float formantStretch = apvts.getRawParameterValue("formantStretch")->load();
     float detuneWidth = apvts.getRawParameterValue("detune")->load();
     float noiseParam = apvts.getRawParameterValue("noise")->load() * 0.01f; // 0.0f 〜 1.0f
 
@@ -286,222 +300,143 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mVoiceManager.setVoiceFrequency(0, finalF0);
     }
 
-    // 4. 入力音声を 16kHz にダウンサンプリング (分析パス)
+    // 4. 入力音声を 16kHz にダウンサンプリング (ホストサンプリングレートから 16kHz への直接線形リサンプラー)
     std::vector<float> downsampled;
-    if (numInputs > 0 && buffer.getNumChannels() > 0)
+    double srcSampleRate = getSampleRate();
+    if (numInputs > 0 && numSamples > 0 && srcSampleRate > 0.0)
     {
         const float* inputL = buffer.getReadPointer(0);
-        mMultiRateMapper.downsample(inputL, numSamples, downsampled);
-    }
-    CHECK_NAN_VEC(downsampled, "downsampled");
-    mAnalysisInputBuffer.insert(mAnalysisInputBuffer.end(), downsampled.begin(), downsampled.end());
-    CHECK_NAN_VEC(mAnalysisInputBuffer, "mAnalysisInputBuffer");
-
-    // 5. 16kHz領域でのホップごとのLPC/TrueEnvelope分析
-    // frameRateが0%の場合は前回のフレームを「フリーズ」する
-    if (frameRate > 0.0f && mAnalysisInputBuffer.size() >= static_cast<size_t>(mAnalysisWindowSize))
-    {
-        while (mAnalysisInputBuffer.size() >= static_cast<size_t>(mAnalysisWindowSize))
+        double timeAccum = mDownsampleTimeAccum;
+        double step = srcSampleRate / 16000.0;
+        
+        while (timeAccum < static_cast<double>(numSamples))
         {
-            // 分析フレームの構築
-            std::fill(mAnalysisFrame.begin(), mAnalysisFrame.end(), 0.0f);
-            int copySize = std::min(mAnalysisWindowSize, static_cast<int>(mAnalysisInputBuffer.size()));
-            std::copy(mAnalysisInputBuffer.begin(), mAnalysisInputBuffer.begin() + copySize, mAnalysisFrame.begin());
-
-            // ピッチ検出 (窓掛け前の生データを使用)
-            float f0 = mPitchDetector.detectPitch(mAnalysisFrame.data(), static_cast<int>(mAnalysisFrame.size()), 16000.0f);
-            if (f0 > 50.0f && f0 < 800.0f)
-            {
-                mCurrentF0 = f0;
-            }
-
-            // FFT用窓関数と振幅スケーリング適用
-            std::vector<float> windowedFrame(mAnalysisWindowSize, 0.0f);
-            float windowScale = 4.0f / static_cast<float>(mAnalysisWindowSize);
-            float angleArg = 2.0f * 3.141592653589793f / static_cast<float>(std::max(1, copySize - 1));
+            int idx0 = static_cast<int>(timeAccum);
+            int idx1 = std::min(numSamples - 1, idx0 + 1);
+            float frac = static_cast<float>(timeAccum - idx0);
             
-            for (int i = 0; i < copySize; ++i)
-            {
-                float window = 0.5f * (1.0f - std::cos(static_cast<float>(i) * angleArg));
-                windowedFrame[i] = mAnalysisFrame[i] * window * windowScale;
-            }
-
-            // 振幅包絡抽出 (True Envelope)
-            mTrueEnvelope.estimate(windowedFrame.data(), static_cast<int>(windowedFrame.size()), mCurrentF0, mTeEnvelope, 16000.0f);
-
-            // Barkフィルタバンクによる低域補償用の自己相関
-            std::vector<float> fftBuffer(2048, 0.0f);
-            std::copy(windowedFrame.begin(), windowedFrame.end(), fftBuffer.begin());
+            float val = inputL[idx0] * (1.0f - frac) + inputL[idx1] * frac;
+            downsampled.push_back(val);
             
-            mAnalysisFft->performRealOnlyForwardTransform(fftBuffer.data());
-            
-            std::vector<float> powerSpectrum(513, 0.0f);
-            powerSpectrum[0] = fftBuffer[0] * fftBuffer[0];
-            powerSpectrum[512] = fftBuffer[1] * fftBuffer[1];
-            for (int k = 1; k < 512; ++k)
-            {
-                powerSpectrum[k] = fftBuffer[2 * k] * fftBuffer[2 * k] + fftBuffer[2 * k + 1] * fftBuffer[2 * k + 1];
-            }
-
-            mBarkFilterBank.process(powerSpectrum.data(), mBarkEnergies);
-
-            // True Envelope と Bark下限拘束の統合による安定LPC導出 (16次LPC分析)
-            mTelpcIntegrator.integrate(mTeEnvelope, mBarkEnergies, 0.85f, lpcOrder, m16kLpc, mTargetGain);
-
-            // ===== 新アルゴリズム: 16kHz固定スペクトル直接変調 → IFFT → Levinson-Durbin =====
-            
-            // (A) 16kHz領域でフォルマント変調（シフト＆ストレッチ）
-            mFormantShifter.process(mTeEnvelope, mFsEnvelope, formantShift, formantStretch);
-
-            // (B) パワースペクトルを構築し、1024点IFFTで自己相関系列を得る (事前確保バッファを使用)
-            std::fill(mIfftBuffer.begin(), mIfftBuffer.end(), 0.0f);
-            
-            // DC と Nyquist
-            mIfftBuffer[0] = mFsEnvelope[0] * mFsEnvelope[0];
-            mIfftBuffer[1] = mFsEnvelope[512] * mFsEnvelope[512];
-            
-            // 残りのビン（実部にパワー、虚部に0）
-            for (int k = 1; k < 512; ++k)
-            {
-                float pwr = mFsEnvelope[k] * mFsEnvelope[k];
-                mIfftBuffer[2 * k] = pwr;
-                mIfftBuffer[2 * k + 1] = 0.0f;
-            }
-            
-            // IFFT実行 → 自己相関系列を得る
-            mFsFft->performRealOnlyInverseTransform(mIfftBuffer.data());
-            
-            // 逆FFTのスケーリング適用 (1/1024)
-            float invN = 1.0f / 1024.0f;
-            for (int i = 0; i < 1024; ++i)
-            {
-                mIfftBuffer[i] *= invN;
-            }
-            
-            // (C) Levinson-Durbin再帰法による16次LPC係数の算出 (事前確保バッファ使用)
-            int ldOrder = 16;
-            std::fill(mLdNewLpc.begin(), mLdNewLpc.end(), 0.0f);
-            mLdNewLpc[0] = 1.0f;
-            float ldGain = 0.0f;
-            
-            float E = mIfftBuffer[0] * 1.0001f; // 安定性のための対角成分ローディング (0.01%のノイズフロア追加)
-            if (mIfftBuffer[0] > 1e-10f)
-            {
-                std::fill(mLdA.begin(), mLdA.end(), 0.0f);
-                mLdA[0] = 1.0f;
-                
-                bool ldStable = true;
-                for (int i = 1; i <= ldOrder; ++i)
-                {
-                    float sum = 0.0f;
-                    for (int j = 1; j < i; ++j)
-                    {
-                        sum += mLdA[j] * mIfftBuffer[i - j];
-                    }
-                    
-                    float lambda = (mIfftBuffer[i] - sum) / E;
-                    if (std::abs(lambda) >= 1.0f) { ldStable = false; break; }
-                    
-                    std::fill(mLdANew.begin(), mLdANew.end(), 0.0f);
-                    mLdANew[0] = 1.0f;
-                    for (int j = 1; j < i; ++j) { mLdANew[j] = mLdA[j] - lambda * mLdA[i - j]; }
-                    mLdANew[i] = -lambda;
-                    
-                    std::copy(mLdANew.begin(), mLdANew.begin() + i + 1, mLdA.begin());
-                    E = E * (1.0f - lambda * lambda);
-                }
-                
-                if (ldStable && E > 0.0f) { std::copy(mLdA.begin(), mLdA.begin() + ldOrder + 1, mLdNewLpc.begin()); ldGain = std::sqrt(E); }
-            }
-            
-            if (ldGain > 0.0f) { mFsLpcTarget = mLdNewLpc; mTargetGain = ldGain; }
-
-            CHECK_NAN_VEC(mTeEnvelope, "mTeEnvelope");
-            CHECK_NAN_VEC(mFsEnvelope, "mFsEnvelope");
-            CHECK_NAN_VEC(mFsLpcTarget, "mFsLpcTarget");
-            CHECK_NAN(mTargetGain, "mTargetGain");
-
-            // 処理したホップ分を削除
-            mAnalysisInputBuffer.erase(mAnalysisInputBuffer.begin(), mAnalysisInputBuffer.begin() + mAnalysisHopSize);
+            timeAccum += step;
         }
+        mDownsampleTimeAccum = timeAccum - static_cast<double>(numSamples);
     }
+    
+    mAnalysisInputBuffer.insert(mAnalysisInputBuffer.end(), downsampled.begin(), downsampled.end());
 
-    // 6. 16kHz領域でのボコーダー合成 (downsampled.size() 回ループ)
+    // 5. 16kHz領域でのリアルタイム・チャネルボコーディング処理 (サンプル同期駆動)
     int num16kSamples = static_cast<int>(downsampled.size());
     m16kWetBuffer.resize(num16kSamples);
-    
+
+    int numBands = 20;
+
     for (int sample16k = 0; sample16k < num16kSamples; ++sample16k)
     {
-        // 6-A. コントロール・レート (32サンプル毎にLPC係数を更新)
+        float inSample = downsampled[sample16k];
+
+        // 5-A. 分析側（モジュレーター）：20バンドの Biquad BPF を通してエンベロープを検出
+        for (int i = 0; i < numBands; ++i)
+        {
+            float x = inSample;
+            float x1 = mAnalFilterX1[i];
+            float x2 = mAnalFilterX2[i];
+            float y1 = mAnalFilterY1[i];
+            float y2 = mAnalFilterY2[i];
+
+            // Biquad フィルタ実行
+            float y = mBandCoeffsB0[i] * x + mBandCoeffsB2[i] * x2 - mBandCoeffsA1[i] * y1 - mBandCoeffsA2[i] * y2;
+            if (std::isnan(y) || std::isinf(y)) y = 0.0f;
+
+            mAnalFilterX2[i] = x1;
+            mAnalFilterX1[i] = x;
+            mAnalFilterY2[i] = y1;
+            mAnalFilterY1[i] = y;
+
+            // 整流エンベロープフォロワーの平滑化更新
+            float envCoeff = 0.008f; // 平滑化の応答時定数 (カットオフ約25Hz)
+            mTargetBandEnvelopes[i] = mTargetBandEnvelopes[i] * (1.0f - envCoeff) + std::abs(y) * envCoeff;
+        }
+
+        // 5-B. コントロールレート（32サンプル毎）でのエンベロープ更新
         if (mControlRateCounter >= mControlRateBlockSize || mControlRateCounter == 0)
         {
             mControlRateCounter = 0;
-            
-            mFsLpc = mFsLpcTarget;
-            mCurrentGain = mTargetGain;
-
-            bool lpcValid = true;
-            for (size_t i = 0; i < mFsLpc.size(); ++i)
-            {
-                if (std::isnan(mFsLpc[i]) || std::isinf(mFsLpc[i]))
-                    lpcValid = false;
-            }
-
-            if (lpcValid && mFsLpc.size() >= 17)
-            {
-                // 16次LPC係数を8ボイス SoA にコピー
-                for (int i = 0; i < 16; ++i)
-                {
-                    float val = mFsLpc[i + 1];
-                    for (int v = 0; v < 8; ++v)
-                    {
-                        mDspState.filterCoeffsL[i][v] = val;
-                        mDspState.filterCoeffsR[i][v] = val;
-                    }
-                }
-            }
-            else
-            {
-                if (mDebugMessage.startsWith("No errors") || mDebugMessage.isEmpty())
-                    mDebugMessage = "WARN: LPC NaN/Inf! Reusing last stable coeffs.";
-            }
+            mBandEnvelopes = mTargetBandEnvelopes;
         }
-
         mControlRateCounter++;
 
-        // 6-B. ボイス状態の更新 (16kHz基準)
+        // 5-C. ボイス状態の更新 (16kHz基準)
         if (isMidiMode)
         {
             mVoiceManager.updateVoices(attack, decay, sustain, release);
         }
-        mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, tracking, mCurrentF0);
+        else
+        {
+            // オート・ピッチトラッキングモード (声の入力がある時だけボイス0を発音)
+            bool hasInput = (mInputEnvelope > 0.0005f);
+            mVoiceManager.setVoiceActive(0, hasInput);
+            for (int i = 1; i < 8; ++i)
+            {
+                mVoiceManager.setVoiceActive(i, false);
+            }
+            float envVolume = std::clamp(mInputEnvelope * 4.0f, 0.0f, 1.0f);
+            mVoiceManager.setVoiceEnvelope(0, envVolume);
+            
+            // ピッチ検出は使用せず、C3 (130Hz) 固定ピッチで完璧なロボットボイスを生成
+            float finalF0 = 130.0f * std::pow(2.0f, pitchTranspose / 12.0f);
+            mVoiceManager.setVoiceFrequency(0, finalF0);
+        }
 
-        // 6-C. 8ボイス並列用白色ノイズの生成
+        // ボコーダー合成用にフラットなピッチで SoA 状態を同期
+        mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, tracking, 130.0f);
+
+        // 5-D. 8ボイス並列キャリア用白色ノイズの生成
         __m256 noiseBuffer = mNoiseGenerator.nextBlockAVX2();
-
-        // 6-D. 8ボイス並列オシレーター＆フィルター処理実行 (16kHz固定駆動、16次フィルタ)
-        float sampleL = 0.0f;
-        float sampleR = 0.0f;
-        
         __m256 activeMask = mVoiceManager.getActiveVoicesMask();
         __m256 mixEnvelopes = mVoiceManager.getVoiceEnvelopes();
+
+        // ノイズの比率は UI の noiseParam をそのまま使用
         __m256 noiseMixVec = _mm256_set1_ps(noiseParam);
 
-        mOscillatorBank.processSampleAVX2(mDspState, activeMask, mixEnvelopes, noiseMixVec, noiseBuffer, sampleL, sampleR);
+        float sampleL = 0.0f;
+        float sampleR = 0.0f;
 
-        // ゲイン適用 (16kHz領域)
-        sampleL *= mCurrentGain;
-        sampleR *= mCurrentGain;
+        // 5-E. 20バンド・バンドパス・フィルタバンクによるキャリア変調処理を実行
+        mOscillatorBank.processSampleAVX2(
+            mDspState,
+            activeMask,
+            mixEnvelopes,
+            noiseMixVec,
+            noiseBuffer,
+            mBandEnvelopes.data(),
+            formantShift,
+            mBandCoeffsB0.data(),
+            mBandCoeffsB2.data(),
+            mBandCoeffsA1.data(),
+            mBandCoeffsA2.data(),
+            sampleL,
+            sampleR
+        );
 
-        // モノラルWet信号として蓄積
+        // Wet 信号バッファに書き戻す (ゲインは後段で適用)
         m16kWetBuffer[sample16k] = 0.5f * (sampleL + sampleR);
     }
+    mAnalysisInputBuffer.clear(); // リアルタイム処理につき毎回クリア
 
-    // 7. 16kHz Wet信号をホストサンプリングレートへアップサンプリング
+    // 7. 16kHz Wet信号をホストサンプリングレートへアップサンプリング (直書き線形リサンプラー)
     std::vector<float> wetFs(numSamples, 0.0f);
     if (numSamples > 0 && !m16kWetBuffer.empty())
     {
-        mMultiRateMapper.upsample(m16kWetBuffer, numSamples, wetFs.data());
+        double upRatio = static_cast<double>(m16kWetBuffer.size()) / static_cast<double>(numSamples);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            double pos = i * upRatio;
+            int idx0 = static_cast<int>(pos);
+            int idx1 = std::min(static_cast<int>(m16kWetBuffer.size() - 1), idx0 + 1);
+            float frac = static_cast<float>(pos - idx0);
+            wetFs[i] = m16kWetBuffer[idx0] * (1.0f - frac) + m16kWetBuffer[idx1] * frac;
+        }
     }
 
     // 8. 最終ミックスと出力 (ホストサンプリングレート処理)
@@ -521,11 +456,31 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float drySampleR = (numInputs > 1 && buffer.getNumChannels() > 1) ? buffer.getReadPointer(1)[sample] : drySampleL;
 
         float wetVal = wetFs[sample];
+
+        // 入力エネルギーが極めて低ければ、Wet信号を完全にミュート（ゲート）してノイズ漏れを防止
+        if (mInputEnvelope < 0.001f)
+        {
+            wetVal = 0.0f;
+        }
+
         float wetSampleL = wetVal;
         float wetSampleR = wetVal;
 
-        // Characterプロセッサによる Lo-Fi 効果の適用
-        mCharacterProcessor.processSample(wetSampleL, wetSampleR, character);
+        // 直書き Lo-Fi ビットクラッシャー ＋ サンプルレートリダクション
+        if (character < 0.98f)
+        {
+            float bits = 4.0f + 20.0f * character;
+            float steps = std::pow(2.0f, bits);
+            
+            int holdSamples = static_cast<int>(1.0f + 31.0f * (1.0f - character));
+            int holdStartIdx = std::clamp((sample / holdSamples) * holdSamples, 0, numSamples - 1);
+            
+            wetSampleL = wetFs[holdStartIdx];
+            wetSampleR = wetFs[holdStartIdx];
+            
+            wetSampleL = std::round(wetSampleL * steps) / steps;
+            wetSampleR = std::round(wetSampleR * steps) / steps;
+        }
 
         float outValL = (1.0f - mix) * drySampleL + mix * wetSampleL;
         float outValR = (1.0f - mix) * drySampleR + mix * wetSampleR;

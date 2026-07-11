@@ -50,28 +50,13 @@ target_sources(SPECTRA8 PRIVATE
     Source/PluginEditor.h
     Source/PluginEditor.cpp
 
-    # --- DSP モジュール ---
+    # --- DSP モジュール (シンプル直書き化) ---
     Source/DSP/SimdUtils.h
     Source/DSP/VoiceState.h
     Source/DSP/MidiQueue.h
-    Source/DSP/PitchDetector.h
-    Source/DSP/PitchDetector.cpp
-    Source/DSP/LPCAnalyzer.h
-    Source/DSP/LPCAnalyzer.cpp
-    Source/DSP/TrueEnvelope.h
-    Source/DSP/TrueEnvelope.cpp
-    Source/DSP/BarkFilterBank.h
-    Source/DSP/BarkFilterBank.cpp
-    Source/DSP/TELPCIntegrator.h
-    Source/DSP/TELPCIntegrator.cpp
-    Source/DSP/FormantShifter.h
-    Source/DSP/FormantShifter.cpp
-    Source/DSP/MultiRateMapper.h
-    Source/DSP/MultiRateMapper.cpp
     Source/DSP/OscillatorBank.h
     Source/DSP/OscillatorBank.cpp
     Source/DSP/NoiseGenerator.h
-    Source/DSP/CharacterProcessor.h
     Source/DSP/VoiceManager.h
     Source/DSP/VoiceManager.cpp
 

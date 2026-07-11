@@ -8,22 +8,23 @@ namespace DSP {
 struct alignas(32) PolyphonicVoiceSoA {
     static constexpr int kWaveTableSize = 2048;
     static constexpr int kWaveTableMask = 2047;
-    static constexpr int kLpcOrder = 16;
+    static constexpr int kNumBands = 20;
 
     alignas(32) float phaseIncrL[8] = { 0.0f };
     alignas(32) float phaseIncrR[8] = { 0.0f };
     alignas(32) float phaseL[8] = { 0.0f };
     alignas(32) float phaseR[8] = { 0.0f };
-    
-    // LPC合成フィルタ係数 (a_1 から a_24)
-    alignas(32) float filterCoeffsL[kLpcOrder][8] = { { 0.0f } };
-    alignas(32) float filterCoeffsR[kLpcOrder][8] = { { 0.0f } };
-    
-    // フィルターの履歴バッファ（円形バッファとして動作）
-    alignas(32) float filterHistoryL[kLpcOrder][8] = { { 0.0f } };
-    alignas(32) float filterHistoryR[kLpcOrder][8] = { { 0.0f } };
-    
-    uint32_t filterWritePtr = 0; // スカラーで全ボイス共通
+
+    // 20バンドBiquadフィルタの各ボイスごとの履歴 (x[n-1], x[n-2], y[n-1], y[n-2])
+    alignas(32) float filterX1_L[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterX2_L[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterY1_L[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterY2_L[kNumBands][8] = { { 0.0f } };
+
+    alignas(32) float filterX1_R[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterX2_R[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterY1_R[kNumBands][8] = { { 0.0f } };
+    alignas(32) float filterY2_R[kNumBands][8] = { { 0.0f } };
 };
 
 // ボイス管理・変調用状態（アライメント32バイト保証）

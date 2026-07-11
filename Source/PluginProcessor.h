@@ -2,20 +2,13 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <vector>
 #include <memory>
+#include <atomic>
 
 // DSPとボイスのヘッダー
 #include "VoiceState.h"
 #include "MidiQueue.h"
-#include "PitchDetector.h"
-#include "LPCAnalyzer.h"
-#include "TrueEnvelope.h"
-#include "BarkFilterBank.h"
-#include "TELPCIntegrator.h"
-#include "FormantShifter.h"
-#include "MultiRateMapper.h"
 #include "OscillatorBank.h"
 #include "NoiseGenerator.h"
-#include "CharacterProcessor.h"
 #include "VoiceManager.h"
 
 class SPECTRA8AudioProcessor : public juce::AudioProcessor {
@@ -49,7 +42,12 @@ public:
     // パラメータアクセス用の APVTS
     juce::AudioProcessorValueTreeState apvts;
 
-    juce::String getDebugMessage() const { return mDebugMessage; }
+    juce::String getDebugMessage() const
+    {
+        int state = mErrorState.load();
+        if (state == 1) return "ERR: NaN/Inf detected!";
+        return "No errors. Running fine.";
+    }
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -59,65 +57,54 @@ private:
     DSP::VoiceManager mVoiceManager;
     DSP::OscillatorBank mOscillatorBank;
     DSP::NoiseGenerator mNoiseGenerator;
-    DSP::CharacterProcessor mCharacterProcessor;
     
-    // 分析モジュール (16kHzで動作)
-    DSP::MultiRateMapper mMultiRateMapper;
-    DSP::PitchDetector mPitchDetector;
-    DSP::LPCAnalyzer mLpcAnalyzer;
-    DSP::TrueEnvelope mTrueEnvelope;
-    DSP::BarkFilterBank mBarkFilterBank;
-    DSP::TELPCIntegrator mTelpcIntegrator;
-    
-    // 変換・フォルマント処理モジュール
-    DSP::FormantShifter mFormantShifter;
-
     // 8ボイス並列DSP状態
     alignas(32) DSP::PolyphonicVoiceSoA mDspState;
 
     // 分析データバッファ (16kHz領域)
     std::vector<float> mAnalysisInputBuffer; // ダウンサンプルされた16kHzの継続サンプル
-    std::vector<float> mAnalysisFrame;       // 400サンプルの分析用フレーム
     
-    // 16kHz分析用中間バッファ
-    std::vector<float> mTeEnvelope;       // 16kHzスペクトル包絡 (513点)
-    std::vector<float> mBarkEnergies;     // Barkエネルギー (25点)
-    std::vector<float> m16kLpc;           // 16kHz LPC係数 (17点)
+    // 20バンド・バンドパス・フィルタバンク用状態変数 (16kHz動作)
+    std::vector<float> mBandEnvelopes;       // 20バンドの現在のエンベロープ
+    std::vector<float> mTargetBandEnvelopes; // 20バンドの目標エンベロープ
     
-    // 16kHz領域用のFFT/IFFTオブジェクト (サイズ1024 = 10次)
-    std::unique_ptr<juce::dsp::FFT> mFsFft;
-    std::vector<float> mFsEnvelope;       // 16kHz変調後スペクトル包絡 (513点)
-    std::vector<float> mIfftBuffer;       // 16kHz IFFT用バッファ (2048点, 事前確保)
-    std::vector<float> mFsLpc;            // 16kHzのLPC係数 (17点)
-    std::vector<float> mFsLpcTarget;      // 16kHz補間ターゲットLPC係数 (17点)
+    // 分析側のフィルタ履歴 (20バンド用)
+    std::vector<float> mAnalFilterX1;
+    std::vector<float> mAnalFilterX2;
+    std::vector<float> mAnalFilterY1;
+    std::vector<float> mAnalFilterY2;
+
+    // フィルタバンク中心周波数
+    std::vector<float> mBandF0;
     
-    // Levinson-Durbin計算用の事前確保バッファ (16次LPC用、17点)
-    std::vector<float> mLdA;              // 係数バッファ (17点)
-    std::vector<float> mLdANew;           // 係数更新用バッファ (17点)
-    std::vector<float> mLdNewLpc;         // 結果バッファ (17点)
-    
+    // Biquad フィルタ係数配列 (各サイズ20)
+    std::vector<float> mBandCoeffsB0;
+    std::vector<float> mBandCoeffsB2;
+    std::vector<float> mBandCoeffsA1;
+    std::vector<float> mBandCoeffsA2;
+
     // 16kHz中間 Wet 音バッファ
     std::vector<float> m16kWetBuffer;
 
-    // 分析タイミング制御 (16kHz で 100サンプルホップ = 6.25ms毎)
+    // 分析タイミング制御 (16kHz領域)
     int mAnalysisHopSize;
     int mAnalysisWindowSize;
     
-    // コントロール・レート制御 (16kHz領域で 32サンプル毎にLPC更新)
+    // コントロール・レート制御 (16kHz領域で 32サンプル毎にエンベロープ更新)
     int mControlRateBlockSize;
     int mControlRateCounter;
-    
-    // 前回のLPCゲイン（スカラー）
-    float mCurrentGain;
-    float mTargetGain;
+
+    // 有声/無声 (Voiced/Unvoiced) 動的ブレンド比率 (0.0 = 完全有声音, 1.0 = 完全無声音/ノイズ)
+    float mCurrentUnvoicedRatio;
+    float mTargetUnvoicedRatio;
 
     bool mMidiActiveMode = false;
     float mInputEnvelope = 0.0f;
     float mCurrentF0 = 150.0f;
+    std::vector<float> mF0History; // ピッチ検出のメディアンフィルタ用履歴バッファ (5フレーム)
+    double mDownsampleTimeAccum = 0.0; // タイムスタンプ蓄積用
 
-    std::unique_ptr<juce::dsp::FFT> mAnalysisFft; // オーディオコールバック内でのメモリ確保を防ぐためメンバ化
-
-    juce::String mDebugMessage;
+    std::atomic<int> mErrorState{ 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessor)
 };
