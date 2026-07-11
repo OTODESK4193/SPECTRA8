@@ -1,4 +1,5 @@
 #pragma once
+
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <vector>
 #include <memory>
@@ -57,24 +58,21 @@ private:
     DSP::VoiceManager mVoiceManager;
     DSP::OscillatorBank mOscillatorBank;
     DSP::NoiseGenerator mNoiseGenerator;
-    
+
     // 8ボイス並列DSP状態
     alignas(32) DSP::PolyphonicVoiceSoA mDspState;
 
-    // 分析データバッファ (16kHz領域)
-    std::vector<float> mAnalysisInputBuffer; // ダウンサンプルされた16kHzの継続サンプル
-    
     // 48バンド ZDF SVF 状態変数 (16kHz動作)
     std::vector<float> mBandEnvelopes;       // 48バンドの現在のエンベロープ
     std::vector<float> mTargetBandEnvelopes; // 48バンドの目標エンベロープ
-    
+
     // 分析側のZDF SVF状態変数（48バンド * 各2セクション分）
     std::vector<float> mAnalFilterS1;
     std::vector<float> mAnalFilterS2;
 
     // フィルタバンク中心周波数
     std::vector<float> mBandF0;
-    
+
     // ZDF SVF フィルタ係数配列 (最大サイズ48)
     std::vector<float> mBandCoeffsG;
     std::vector<float> mBandCoeffsK;
@@ -83,26 +81,31 @@ private:
 
     juce::LinearSmoothedValue<float> mFormantShiftSmoother;
 
-    // 16kHz中間 Wet 音バッファ
+    // リアルタイム安全な事前確保バッファ
+    std::vector<float> mDownsampledBuffer;
     std::vector<float> m16kWetBuffer;
+    std::vector<float> mWetFsBuffer;
+    std::vector<float> mDryLBuffer;
 
     // 分析タイミング制御 (16kHz領域)
     int mAnalysisHopSize;
     int mAnalysisWindowSize;
-    
+
     // コントロール・レート制御 (16kHz領域で 32サンプル毎にエンベロープ更新)
     int mControlRateBlockSize;
     int mControlRateCounter;
 
-    // 有声/無声 (Voiced/Unvoiced) 動的ブレンド比率 (0.0 = 完全有声音, 1.0 = 完全無声音/ノイズ)
+    // 有声/無声 (Voiced/Unvoiced) 動的ブレンド比率
     float mCurrentUnvoicedRatio;
     float mTargetUnvoicedRatio;
 
     bool mMidiActiveMode = false;
     float mInputEnvelope = 0.0f;
-    float mCurrentF0 = 150.0f;
-    std::vector<float> mF0History; // ピッチ検出のメディアンフィルタ用履歴バッファ (5フレーム)
-    double mDownsampleTimeAccum = 0.0; // タイムスタンプ蓄積用
+    double mDownsampleTimeAccum = 0.0;
+    double mStoredSampleRate = 0.0;
+
+    // ★フェイルセーフ：Autoモード時のボイスONエッジ検出用フラグ
+    bool mWasAutoVoiceActive = false;
 
     std::atomic<int> mErrorState{ 0 };
 
