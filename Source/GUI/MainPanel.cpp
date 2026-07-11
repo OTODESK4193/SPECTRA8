@@ -7,8 +7,7 @@ MainPanel::MainPanel(juce::AudioProcessorValueTreeState& state)
 {
     // 1. ノブの追加 (LPC/フォルマントセクション)
     addDial("character", "CHARACTER");
-    addDial("frameRate", "FRAME RATE");
-    addDial("lpcOrder", "LPC ORDER");
+    addDial("bandCount", "BANDS");
     addDial("formantShift", "FMT SHIFT");
     addDial("formantStretch", "FMT STRETCH");
     addDial("tracking", "TRACKING");
@@ -119,22 +118,22 @@ void MainPanel::paint(juce::Graphics& g)
     g.setColour(ColorPalette::textMuted);
     g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
 
-    // LPCセクションのラベル
-    for (int i = 0; i < 6; ++i)
+    // LPCセクションのラベル (新 5個)
+    for (int i = 0; i < 5; ++i)
     {
         auto bounds = mDials[i].slider->getBounds();
         g.drawText(mDials[i].label, bounds.getX(), bounds.getY() - 15, bounds.getWidth(), 12, juce::Justification::centred);
     }
 
-    // オシレーターセクションのラベル
-    for (int i = 6; i < 10; ++i)
+    // オシレーターセクションのラベル (新 4個)
+    for (int i = 5; i < 9; ++i)
     {
         auto bounds = mDials[i].slider->getBounds();
         g.drawText(mDials[i].label, bounds.getX(), bounds.getY() - 15, bounds.getWidth(), 12, juce::Justification::centred);
     }
 
-    // ADSR / Volume セクションのラベル
-    for (int i = 10; i < 16; ++i)
+    // ADSR / Volume セクションのラベル (新 6個)
+    for (int i = 9; i < 15; ++i)
     {
         auto bounds = mDials[i].slider->getBounds();
         g.drawText(mDials[i].label, bounds.getX(), bounds.getY() - 15, bounds.getWidth(), 12, juce::Justification::centred);
@@ -143,21 +142,27 @@ void MainPanel::paint(juce::Graphics& g)
 
 void MainPanel::resized()
 {
-    // LPC / フォルマント (Dials 0〜5)
-    // 2行3列で配置
+    // LPC / フォルマント (Dials 0〜4)
+    // 2行3列で配置 (1行目は2つ、2行目は3つ)
     int startX = 35;
     int startY = 70;
     int dialSize = 75;
     int spacingX = 65;
     int spacingY = 40;
 
-    for (int i = 0; i < 6; ++i)
+    // Row 0: Dials 0, 1
+    mDials[0].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonCyan);
+    mDials[0].slider->setBounds(startX + 0 * (dialSize + spacingX), startY, dialSize, dialSize + 16);
+
+    mDials[1].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonCyan);
+    mDials[1].slider->setBounds(startX + 1 * (dialSize + spacingX), startY, dialSize, dialSize + 16);
+
+    // Row 1: Dials 2, 3, 4
+    for (int i = 2; i < 5; ++i)
     {
-        int row = i / 3;
-        int col = i % 3;
-        
+        int col = i - 2;
         mDials[i].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonCyan);
-        mDials[i].slider->setBounds(startX + col * (dialSize + spacingX), startY + row * (dialSize + spacingY + 16), dialSize, dialSize + 16);
+        mDials[i].slider->setBounds(startX + col * (dialSize + spacingX), startY + dialSize + spacingY + 16, dialSize, dialSize + 16);
     }
 
     // オシレーター
@@ -167,30 +172,30 @@ void MainPanel::resized()
     mModeLabel.setBounds(650, 55, 120, 18);
     mModeCombo.setBounds(650, 75, 120, 24);
 
-    // Dials 6, 7 (Wavetable Pos, Pulse Width)
+    // Dials 5, 6 (Wavetable Pos, Pulse Width)
     int oscDialSize = 58;
+    mDials[5].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonPink);
+    mDials[5].slider->setBounds(520, 115, oscDialSize, oscDialSize + 16);
+    
     mDials[6].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonPink);
-    mDials[6].slider->setBounds(520, 115, oscDialSize, oscDialSize + 16);
-    
+    mDials[6].slider->setBounds(660, 115, oscDialSize, oscDialSize + 16);
+
+    // Dials 7, 8 (Detune, Noise Mix)
     mDials[7].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonPink);
-    mDials[7].slider->setBounds(660, 115, oscDialSize, oscDialSize + 16);
-
-    // Dials 8, 9 (Detune, Noise Mix)
-    mDials[8].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonPink);
-    mDials[8].slider->setBounds(520, 205, oscDialSize, oscDialSize + 16);
+    mDials[7].slider->setBounds(520, 205, oscDialSize, oscDialSize + 16);
     
-    mDials[9].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonPink);
-    mDials[9].slider->setBounds(660, 205, oscDialSize, oscDialSize + 16);
+    mDials[8].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonPink);
+    mDials[8].slider->setBounds(660, 205, oscDialSize, oscDialSize + 16);
 
-    // ADSR / Volume (Dials 10〜15)
+    // ADSR / Volume (Dials 9〜14)
     // 横一列に6個配置
     int adsrStartX = 30;
     int adsrStartY = 350;
     int adsrSpacingX = 49;
 
-    for (int i = 10; i < 16; ++i)
+    for (int i = 9; i < 15; ++i)
     {
-        int idx = i - 10;
+        int idx = i - 9;
         mDials[i].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonPurple);
         mDials[i].slider->setBounds(adsrStartX + idx * (dialSize + adsrSpacingX), adsrStartY, dialSize, dialSize + 16);
     }

@@ -26,13 +26,26 @@ public:
                             __m256 noiseBuffer,
                             const float* modulatorEnvelopes,
                             float formantShift,
+                            float formantStretch,
                             int currentNumBands,
+                            int waveform,
+                            float pulseWidth,
+                            float wavetablePosition,
                             const float* g_coeffs,
                             const float* k_coeffs,
                             const float* a1_coeffs,
                             const float* a2_coeffs,
                             float& outL,
                             float& outR);
+
+    // 将来カスタムWavetableを外部から流し込めるようにするための余地
+    void setCustomWavetable(const std::vector<float>& table)
+    {
+        if (table.size() == PolyphonicVoiceSoA::kWaveTableSize)
+        {
+            mCustomWavetable = table;
+        }
+    }
 
 private:
     void generateWavetables();
@@ -44,6 +57,7 @@ private:
     alignas(32) std::vector<float> mWavetableSaw;
     alignas(32) std::vector<float> mWavetablePulse;
     alignas(32) std::vector<float> mWavetableTri;
+    alignas(32) std::vector<float> mCustomWavetable;
 };
 
 } // namespace DSP

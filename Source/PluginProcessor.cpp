@@ -30,12 +30,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("character", 1), "Character", 0.0f, 1.0f, 1.0f));
 
-    layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("frameRate", 1), "Frame Rate", 0.0f, 100.0f, 100.0f));
-
-    layout.add(std::make_unique<juce::AudioParameterInt>(
-        juce::ParameterID("lpcOrder", 1), "LPC Order", 12, 18, 16));
-
     layout.add(std::make_unique<juce::AudioParameterInt>(
         juce::ParameterID("bandCount", 1), "Band Count", 8, 48, 48));
 
@@ -250,6 +244,12 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     int mode = static_cast<int>(apvts.getRawParameterValue("mode")->load());
     bool isMidiMode = (mode == 1);
 
+    // 追加でロードするパラメータ
+    float formantStretch = apvts.getRawParameterValue("formantStretch")->load();
+    int waveform = static_cast<int>(apvts.getRawParameterValue("waveform")->load());
+    float pulseWidth = apvts.getRawParameterValue("pulseWidth")->load() * 0.01f;
+    float wavetablePosition = apvts.getRawParameterValue("wavetablePosition")->load();
+
     // 3. 入力音声の包絡線（エンベロープ）算出
     if (numInputs > 0 && numSamples > 0)
     {
@@ -267,7 +267,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     if (isMidiMode)
     {
         mVoiceManager.processMidiEvents(mMidiQueue, mDspState);
-        mVoiceManager.updateVoices(attack, decay, sustain, release);
+        // updateVoices の呼び出しは 16kHz サンプルループ内部へ移動
         mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, tracking, 130.0f);
         mWasAutoVoiceActive = false;
     }
@@ -277,32 +277,44 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
         if (hasInput && !mWasAutoVoiceActive)
         {
-            mDspState.phaseL[0] = 0.0f;
-            mDspState.phaseR[0] = 0.0f;
-
-            for (int b = 0; b < DSP::PolyphonicVoiceSoA::kNumBands; ++b)
+            // ボイス0, 1, 2の位相とフィルタ状態をクリア/ランダム初期化
+            for (int v = 0; v < 3; ++v)
             {
-                mDspState.filterS1_S1_L[b][0] = 0.0f;
-                mDspState.filterS1_S2_L[b][0] = 0.0f;
-                mDspState.filterS1_S1_R[b][0] = 0.0f;
-                mDspState.filterS1_S2_R[b][0] = 0.0f;
-                mDspState.filterS2_S1_L[b][0] = 0.0f;
-                mDspState.filterS2_S2_L[b][0] = 0.0f;
-                mDspState.filterS2_S1_R[b][0] = 0.0f;
-                mDspState.filterS2_S2_R[b][0] = 0.0f;
+                mDspState.phaseL[v] = static_cast<float>(v) * 500.0f;
+                mDspState.phaseR[v] = static_cast<float>(v) * 500.0f + 250.0f;
+
+                for (int b = 0; b < DSP::PolyphonicVoiceSoA::kNumBands; ++b)
+                {
+                    mDspState.filterS1_S1_L[b][v] = 0.0f;
+                    mDspState.filterS1_S2_L[b][v] = 0.0f;
+                    mDspState.filterS1_S1_R[b][v] = 0.0f;
+                    mDspState.filterS1_S2_R[b][v] = 0.0f;
+                    mDspState.filterS2_S1_L[b][v] = 0.0f;
+                    mDspState.filterS2_S2_L[b][v] = 0.0f;
+                    mDspState.filterS2_S1_R[b][v] = 0.0f;
+                    mDspState.filterS2_S2_R[b][v] = 0.0f;
+                }
             }
         }
         mWasAutoVoiceActive = hasInput;
 
+        // AUTOモードでは3ボイス（ユニゾン）をアクティブにして厚みを出す
         mVoiceManager.setVoiceActive(0, hasInput);
-        for (int i = 1; i < 8; ++i)
+        mVoiceManager.setVoiceActive(1, hasInput);
+        mVoiceManager.setVoiceActive(2, hasInput);
+        for (int i = 3; i < 8; ++i)
         {
             mVoiceManager.setVoiceActive(i, false);
         }
 
         float envVolume = std::clamp(mInputEnvelope * 6.0f, 0.0f, 1.0f);
         mVoiceManager.setVoiceEnvelope(0, envVolume);
+        mVoiceManager.setVoiceEnvelope(1, envVolume * 0.8f);
+        mVoiceManager.setVoiceEnvelope(2, envVolume * 0.8f);
+
         mVoiceManager.setVoiceFrequency(0, 130.0f);
+        mVoiceManager.setVoiceFrequency(1, 130.0f);
+        mVoiceManager.setVoiceFrequency(2, 130.0f);
         mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, 0.0f, 130.0f);
     }
 
@@ -339,6 +351,12 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     for (int sample16k = 0; sample16k < num16kSamples; ++sample16k)
     {
+        // 16kHz サンプルごとに ADSR エンベロープを更新 (MIDIモード時のみ)
+        if (isMidiMode)
+        {
+            mVoiceManager.updateVoices(attack, decay, sustain, release);
+        }
+
         float inSample = mDownsampledBuffer[sample16k];
 
         // 5-A. 分析側：4次直列 ZDF SVF (S1 -> S2) 正確なVA構造へ修正
@@ -414,7 +432,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             noiseBuffer,
             mBandEnvelopes.data(),
             smoothedFormant,
+            formantStretch,
             currentNumBands,
+            waveform,
+            pulseWidth,
+            wavetablePosition,
             mBandCoeffsG.data(),
             mBandCoeffsK.data(),
             mBandCoeffsA1.data(),

@@ -261,15 +261,32 @@ void VoiceManager::syncToDspState(PolyphonicVoiceSoA& dspState, float detuneWidt
             // (1.0 = 完全入力ピッチ追従、0.0 = 完全MIDIピッチ固定)
             float freq0 = freqMidi + (currentF0 - freqMidi) * tracking;
             
-            // WidthとTriggerRandomによる左右デチューン幅
-            float detuneVal = detuneWidthCents + mVoiceBlock.triggerRand[i] * 10.0f; // 僅かなバラツキを加える
+            // 複数ボイスがアクティブな場合（ユニゾンやAUTOモード時など）の厚みを出すピッチ分散
+            // ボイス0: センター, ボイス1: 低め（-0.6倍）, ボイス2: 高め（+0.6倍）, ボイス3: 低め（-0.3倍）など
+            float unisonOffset = 0.0f;
+            if (i == 1) unisonOffset = -0.6f;
+            else if (i == 2) unisonOffset = 0.6f;
+            else if (i == 3) unisonOffset = -0.3f;
+            else if (i == 4) unisonOffset = 0.3f;
+            else if (i == 5) unisonOffset = -0.9f;
+            else if (i == 6) unisonOffset = 0.9f;
 
-            // Cents から倍率への変換
+            // WidthとTriggerRandomによる左右デチューン幅 + ユニゾン用オフセット
+            // 各ボイス内でL/Rもデチューンし、さらにボイス間でもデチューンさせることで厚みを出す
+            float detuneVal = detuneWidthCents * (1.0f + 0.3f * unisonOffset) + mVoiceBlock.triggerRand[i] * 10.0f;
+            
+            // ボイス間の根本的な周波数のズレ (unisonOffset を周波数に反映)
+            // デチューン幅 detuneWidthCents が 0 の時は完全に同調する
+            float voiceDetuneCents = detuneWidthCents * unisonOffset;
+            float voiceFreqScale = std::pow(2.0f, voiceDetuneCents / 1200.0f);
+            float baseFreq = freq0 * voiceFreqScale;
+
+            // Cents から倍率への変換 (各ボイス内での左右のデチューン)
             float coeffL = std::pow(2.0f, -detuneVal / 1200.0f);
             float coeffR = std::pow(2.0f, detuneVal / 1200.0f);
 
-            float freqL = freq0 * coeffL;
-            float freqR = freq0 * coeffR;
+            float freqL = baseFreq * coeffL;
+            float freqR = baseFreq * coeffR;
 
             // 位相増分: inc = freq / sampleRate * tableSize
             dspState.phaseIncrL[i] = (freqL / static_cast<float>(mSampleRate)) * 2048.0f;
