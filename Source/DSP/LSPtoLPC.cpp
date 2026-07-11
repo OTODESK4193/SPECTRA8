@@ -36,21 +36,14 @@ void LSPtoLPC::expandFilter(const float* roots, int numRoots, float* outputCoeff
         float twoX = 2.0f * roots[i];
         int maxK = 2 * i + 2;
 
-        // インプレースで (1 - 2*x*z^-1 + z^-2) を畳み込む
-        // C_new[k] = C_old[k] - 2*x*C_old[k-1] + C_old[k-2]
-        
-        outputCoeffs[maxK] += outputCoeffs[maxK - 2];
-        if (maxK - 1 >= 1)
-        {
-            outputCoeffs[maxK - 1] += -twoX * outputCoeffs[maxK - 2] + (maxK - 3 >= 0 ? outputCoeffs[maxK - 3] : 0.0f);
-        }
-
-        for (int k = maxK - 2; k >= 2; --k)
+        // 逆順（maxK から 1 まで）に更新することで、インプレース更新時に古い値を使用できるようにする
+        outputCoeffs[maxK] = outputCoeffs[maxK] - twoX * outputCoeffs[maxK - 1] + outputCoeffs[maxK - 2];
+        for (int k = maxK - 1; k >= 2; --k)
         {
             outputCoeffs[k] = outputCoeffs[k] - twoX * outputCoeffs[k - 1] + outputCoeffs[k - 2];
         }
-
         outputCoeffs[1] = outputCoeffs[1] - twoX * outputCoeffs[0];
+        // outputCoeffs[0] は 1.0f で不変
     }
 }
 

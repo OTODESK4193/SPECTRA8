@@ -14,7 +14,7 @@ MultiRateMapper::MultiRateMapper()
 
 void MultiRateMapper::setup(double nativeSampleRate)
 {
-    mNativeSampleRate = nativeSampleRate;
+    mNativeSampleRate = std::max(8000.0, nativeSampleRate);
     mRatio = 16000.0 / mNativeSampleRate;
     mSourceSamplePosition = 0.0;
 
@@ -22,6 +22,13 @@ void MultiRateMapper::setup(double nativeSampleRate)
     // 16kHzサンプリングレートのナイキスト周波数は8000Hzなので、7500Hzあたりで遮断する
     auto coeffs = juce::dsp::IIR::Coefficients<float>::makeLowPass(mNativeSampleRate, 7500.0f);
     mAntiAliasFilter = std::make_unique<juce::dsp::IIR::Filter<float>>(coeffs);
+    
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = mNativeSampleRate;
+    spec.maximumBlockSize = 2048;
+    spec.numChannels = 1;
+    mAntiAliasFilter->prepare(spec);
+    
     mAntiAliasFilter->reset();
 }
 

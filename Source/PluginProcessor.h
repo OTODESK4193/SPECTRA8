@@ -51,6 +51,8 @@ public:
     // パラメータアクセス用の APVTS
     juce::AudioProcessorValueTreeState apvts;
 
+    juce::String getDebugMessage() const { return mDebugMessage; }
+
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -112,6 +114,8 @@ private:
     float mCurrentF0 = 150.0f;
 
     std::unique_ptr<juce::dsp::FFT> mAnalysisFft; // オーディオコールバック内でのメモリ確保を防ぐためメンバ化
+
+    juce::String mDebugMessage;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessor)
 };

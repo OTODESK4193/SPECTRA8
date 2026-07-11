@@ -166,6 +166,32 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     const int numSamples = buffer.getNumSamples();
     const int numInputs = getTotalNumInputChannels();
 
+    // デバッグ用NaN/Inf検出マクロ
+    #define CHECK_NAN(val, msg) \
+        if (std::isnan(val) || std::isinf(val)) { \
+            if (mDebugMessage.startsWith("No errors") || mDebugMessage.isEmpty()) \
+                mDebugMessage = juce::String("ERR: ") + msg + " is NaN/Inf! Val: " + juce::String(val); \
+        }
+
+    #define CHECK_NAN_ARRAY(ptr, size, msg) \
+        for (int _i = 0; _i < (size); ++_i) { \
+            if (std::isnan((ptr)[_i]) || std::isinf((ptr)[_i])) { \
+                if (mDebugMessage.startsWith("No errors") || mDebugMessage.isEmpty()) \
+                    mDebugMessage = juce::String("ERR: ") + msg + "[" + juce::String(_i) + "] is NaN/Inf! Val: " + juce::String((ptr)[_i]); \
+                break; \
+            } \
+        }
+
+    #define CHECK_NAN_VEC(vec, msg) CHECK_NAN_ARRAY((vec).data(), static_cast<int>((vec).size()), msg)
+
+    if (mDebugMessage.isEmpty() || mDebugMessage.startsWith("No errors"))
+        mDebugMessage = "No errors. Running fine.";
+
+    if (numInputs > 0 && numSamples > 0)
+    {
+        CHECK_NAN_ARRAY(buffer.getReadPointer(0), numSamples, "DAW Input Buffer");
+    }
+
     // 1. MIDIメッセージをスレッド安全なキューにロード
     for (const auto metadata : midiMessages)
     {
@@ -254,7 +280,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         const float* inputL = buffer.getReadPointer(0);
         mMultiRateMapper.downsample(inputL, numSamples, downsampled);
     }
+    CHECK_NAN_VEC(downsampled, "downsampled");
     mAnalysisInputBuffer.insert(mAnalysisInputBuffer.end(), downsampled.begin(), downsampled.end());
+    CHECK_NAN_VEC(mAnalysisInputBuffer, "mAnalysisInputBuffer");
 
     // 5. 16kHz領域でのホップごとのLPC/TrueEnvelope分析
     // frameRateが0%の場合は前回のフレームを「フリーズ」する
@@ -268,20 +296,32 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             int copySize = std::min(mAnalysisWindowSize, static_cast<int>(mAnalysisInputBuffer.size()));
             std::copy(mAnalysisInputBuffer.begin(), mAnalysisInputBuffer.begin() + copySize, mAnalysisFrame.begin());
 
-            // ピッチ検出
+            // ピッチ検出 (窓掛け前の生データを使用)
             float f0 = mPitchDetector.detectPitch(mAnalysisFrame.data(), static_cast<int>(mAnalysisFrame.size()), 16000.0f);
             if (f0 > 50.0f && f0 < 800.0f)
             {
                 mCurrentF0 = f0;
             }
 
+            // FFT用窓関数と振幅スケーリング適用
+            // ハニング窓のコヒーレントゲイン補正 (x2) と FFTスケーリング (実数FFTのため 2/N) を合わせ、全体で 4.0/N のスケーリングを行う
+            std::vector<float> windowedFrame(mAnalysisWindowSize, 0.0f);
+            float windowScale = 4.0f / static_cast<float>(mAnalysisWindowSize);
+            float angleArg = 2.0f * 3.141592653589793f / static_cast<float>(std::max(1, copySize - 1));
+            
+            for (int i = 0; i < copySize; ++i)
+            {
+                float window = 0.5f * (1.0f - std::cos(static_cast<float>(i) * angleArg));
+                windowedFrame[i] = mAnalysisFrame[i] * window * windowScale;
+            }
+
             // 振幅包絡抽出 (True Envelope)
-            mTrueEnvelope.estimate(mAnalysisFrame.data(), static_cast<int>(mAnalysisFrame.size()), mCurrentF0, mTeEnvelope, 16000.0f);
+            mTrueEnvelope.estimate(windowedFrame.data(), static_cast<int>(windowedFrame.size()), mCurrentF0, mTeEnvelope, 16000.0f);
 
             // Barkフィルタバンクによる低域補償
             // 自己相関のために実数FFTを準備
             std::vector<float> fftBuffer(2048, 0.0f);
-            std::copy(mAnalysisFrame.begin(), mAnalysisFrame.end(), fftBuffer.begin());
+            std::copy(windowedFrame.begin(), windowedFrame.end(), fftBuffer.begin());
             
             // FFT実行 (コールバック内でのインスタンス生成を排除)
             mAnalysisFft->performRealOnlyForwardTransform(fftBuffer.data());
@@ -305,6 +345,15 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
             // ホストSR用の 24次 LSP 空間へ再射影 (高域ダミー極追加)
             mMultiRateMapper.mapLSF(m16kLsp, lpcOrder, mLspTarget, 24);
+
+            CHECK_NAN_VEC(mAnalysisFrame, "mAnalysisFrame");
+            CHECK_NAN_VEC(windowedFrame, "windowedFrame");
+            CHECK_NAN(f0, "f0 from detector");
+            CHECK_NAN_VEC(mTeEnvelope, "mTeEnvelope");
+            CHECK_NAN_VEC(mBarkEnergies, "mBarkEnergies");
+            CHECK_NAN_VEC(m16kLpc, "m16kLpc");
+            CHECK_NAN(mTargetGain, "mTargetGain");
+            CHECK_NAN_VEC(mLspTarget, "mLspTarget");
 
             // 処理したホップ分を削除
             mAnalysisInputBuffer.erase(mAnalysisInputBuffer.begin(), mAnalysisInputBuffer.begin() + mAnalysisHopSize);
@@ -341,8 +390,13 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             // 6-B. LSPドメインでのフォルマント変調 (Shifter)
             mFormantShifter.process(mLspInterpolated, mLspShifted, formantShift, formantStretch, 24);
 
+            CHECK_NAN_VEC(mLspInterpolated, "mLspInterpolated");
+            CHECK_NAN_VEC(mLspShifted, "mLspShifted");
+
             // 6-C. LSP から LPC への逆変換
             mLspToLpc.convert(mLspShifted, mFsLpc, 24);
+
+            CHECK_NAN_VEC(mFsLpc, "mFsLpc");
 
             // 算出された LPC 係数を 8ボイス並列状態にコピー
             for (int i = 0; i < 24; ++i)
@@ -389,14 +443,24 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         // 6-G. Characterノブによる Lo-Fi/Hi-Fi 連続処理の適用
         mCharacterProcessor.processSample(sampleL, sampleR, character);
 
+        CHECK_NAN(sampleL, "sampleL (after OscBank)");
+        CHECK_NAN(sampleR, "sampleR (after OscBank)");
+
         // 6-H. Dry / Wet ミックス & アウトプットレベルの適用
         float drySample = dryL[sample];
         float outValL = (1.0f - mix) * drySample + mix * sampleL;
         float outValR = (1.0f - mix) * drySample + mix * sampleR;
 
+        CHECK_NAN(outValL, "outValL");
+        CHECK_NAN(outValR, "outValR");
+
         writePointerL[sample] = outValL * outputGain;
         writePointerR[sample] = outValR * outputGain;
     }
+
+    #undef CHECK_NAN
+    #undef CHECK_NAN_ARRAY
+    #undef CHECK_NAN_VEC
 }
 
 juce::AudioProcessorEditor* SPECTRA8AudioProcessor::createEditor()
