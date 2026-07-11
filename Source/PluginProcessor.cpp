@@ -49,9 +49,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("tracking", 1), "Tracking", 0.0f, 100.0f, 100.0f));
 
-    // フォルマントシフト (双一次写像のアルファ値、範囲 -0.5 〜 0.5)
+    // フォルマントシフト (半音単位, 範囲 -24.0 〜 24.0 半音)
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("formantShift", 1), "Formant Shift", -0.5f, 0.5f, 0.0f));
+        juce::ParameterID("formantShift", 1), "Formant Shift", -24.0f, 24.0f, 0.0f));
 
     // フォルマントストレッチ/スクィーズ (アフィン変換 of シグマ値、範囲 0.5 〜 2.0)
     layout.add(std::make_unique<juce::AudioParameterFloat>(
@@ -92,6 +92,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("mix", 1), "Mix", 0.0f, 100.0f, 100.0f));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("outputLevel", 1), "Output Level", -60.0f, 12.0f, 0.0f));
+
+    // 動作モード (Auto = 0, MIDI = 1)
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("mode", 1), "Mode", juce::StringArray{ "Auto", "MIDI" }, 0));
 
     return layout;
 }
@@ -200,7 +204,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         event.sampleOffset = static_cast<uint32_t>(metadata.samplePosition);
         if (msg.isNoteOn())
         {
-            mMidiActiveMode = true;
             event.type = DSP::NoteEvent::NoteOn;
             event.note = static_cast<uint8_t>(msg.getNoteNumber());
             event.velocity = static_cast<uint8_t>(msg.getVelocity());
@@ -237,6 +240,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     float outputDb = apvts.getRawParameterValue("outputLevel")->load();
     float outputGain = std::pow(10.0f, outputDb / 20.0f);
 
+    int mode = static_cast<int>(apvts.getRawParameterValue("mode")->load());
+    bool isMidiMode = (mode == 1);
+
     // 3. MIDIキューまたはオートモードの同期、および入力音量追従エンベロープ
     if (numInputs > 0 && numSamples > 0)
     {
@@ -251,26 +257,30 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mInputEnvelope = mInputEnvelope * (1.0f - coeff) + avgAbs * coeff;
     }
 
-    if (mMidiActiveMode)
+    if (isMidiMode)
     {
         mVoiceManager.processMidiEvents(mMidiQueue, mDspState);
         mVoiceManager.updateVoices(attack, decay, sustain, release);
     }
     else
     {
-        // オート・ピッチトラッキングモード (ボイス0を常時発音、入力ピッチと音量を追従)
-        mVoiceManager.setVoiceActive(0, true);
+        // オート・ピッチトラッキングモード (声の入力がある時だけボイス0を発音)
+        bool hasInput = (mInputEnvelope > 0.0005f);
+        mVoiceManager.setVoiceActive(0, hasInput);
         for (int i = 1; i < 8; ++i)
         {
             mVoiceManager.setVoiceActive(i, false);
         }
+        
+        // 音量を入力エンベロープに追従させる (感度調整用に 4.0f 倍)
+        float envVolume = std::clamp(mInputEnvelope * 4.0f, 0.0f, 1.0f);
+        mVoiceManager.setVoiceEnvelope(0, envVolume);
         
         float baseF0 = 150.0f; // C3ベースのデフォルトピッチ
         float freq0 = baseF0 + (mCurrentF0 - baseF0) * tracking;
         float finalF0 = freq0 * std::pow(2.0f, pitchTranspose / 12.0f);
 
         mVoiceManager.setVoiceFrequency(0, finalF0);
-        mVoiceManager.setVoiceEnvelope(0, 1.0f);
     }
 
     // 4. 入力音声を 16kHz にダウンサンプリング (分析パス)

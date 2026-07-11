@@ -48,6 +48,26 @@ MainPanel::MainPanel(juce::AudioProcessorValueTreeState& state)
     mWaveformLabel.setJustificationType(juce::Justification::centred);
     mWaveformLabel.setColour(juce::Label::textColourId, ColorPalette::textBody);
     addAndMakeVisible(mWaveformLabel);
+
+    // 5. 動作モードコンボボックスの追加
+    addAndMakeVisible(mModeCombo);
+    mModeCombo.addItem("Auto (Vocal)", 1);
+    mModeCombo.addItem("MIDI Mode", 2);
+    mModeCombo.setEditableText(false);
+    mModeCombo.setJustificationType(juce::Justification::centred);
+    
+    mModeCombo.setColour(juce::ComboBox::backgroundColourId, ColorPalette::panelBg);
+    mModeCombo.setColour(juce::ComboBox::outlineColourId, ColorPalette::panelBorder);
+    mModeCombo.setColour(juce::ComboBox::textColourId, ColorPalette::textBody);
+    
+    mModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        mState, "mode", mModeCombo);
+
+    mModeLabel.setText("MODE", juce::dontSendNotification);
+    mModeLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+    mModeLabel.setJustificationType(juce::Justification::centred);
+    mModeLabel.setColour(juce::Label::textColourId, ColorPalette::textBody);
+    addAndMakeVisible(mModeLabel);
 }
 
 void MainPanel::addDial(const juce::String& paramID, const juce::String& label)
@@ -143,6 +163,9 @@ void MainPanel::resized()
     // オシレーター
     mWaveformLabel.setBounds(520, 55, 120, 18);
     mWaveformCombo.setBounds(520, 75, 120, 24);
+
+    mModeLabel.setBounds(650, 55, 120, 18);
+    mModeCombo.setBounds(650, 75, 120, 24);
 
     // Dials 6, 7 (Wavetable Pos, Pulse Width)
     mDials[6].slider->setColour(juce::Slider::rotarySliderFillColourId, ColorPalette::neonPink);

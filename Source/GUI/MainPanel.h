@@ -33,6 +33,11 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mWaveformAttachment;
     juce::Label mWaveformLabel;
 
+    // 動作モード用コンボボックス (Auto / MIDI)
+    juce::ComboBox mModeCombo;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mModeAttachment;
+    juce::Label mModeLabel;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainPanel)
 };
 
