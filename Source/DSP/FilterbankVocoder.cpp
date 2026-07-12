@@ -26,6 +26,26 @@ void FilterbankVocoder::prepare(double sampleRate)
         mBandF0[(size_t)i] = freq;
     }
 
+    // Subtractive(減算型)用のバンド端周波数: 隣接バンド中心の幾何平均 (対数軸上の中点)
+    for (int i = 1; i < kMaxBands; ++i)
+        mBandEdges[(size_t)i] = std::sqrt(mBandF0[(size_t)(i - 1)] * mBandF0[(size_t)i]);
+    mBandEdges[0] = mBandF0[0] * mBandF0[0] / mBandEdges[1];                     // 対数軸外挿
+    mBandEdges[kMaxBands] = juce::jmin(7800.0f,
+        mBandF0[kMaxBands - 1] * mBandF0[kMaxBands - 1] / mBandEdges[kMaxBands - 1]);
+
+    // 分析側 LR4-LPF 係数 (Q=0.707固定, エッジ周波数は不変のため事前計算)
+    const float kButterworth = 1.41421356f; // k = 1/Q, Q = 0.707
+    for (int i = 0; i <= kMaxBands; ++i)
+    {
+        const float g = std::tan(3.14159265f * mBandEdges[(size_t)i] / (float)kInternalSampleRate);
+        mEdgeG[(size_t)i] = g;
+        mEdgeA1[(size_t)i] = 1.0f / (1.0f + g * (g + kButterworth));
+    }
+
+    // 分析側の各バンドをピーク0dBに揃える正規化ゲイン (エッジ固定のため事前計算)
+    for (int i = 0; i < kMaxBands; ++i)
+        mBandNorm[(size_t)i] = computeBandNorm(mBandEdges[(size_t)i], mBandEdges[(size_t)i + 1]);
+
     reset();
 }
 
@@ -98,25 +118,21 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
 
             analOut = y_bp_2;
         }
-        else // Subtractive / LR4
+        else // Subtractive / LR4 (バンド端エッジのLR4-HPF→LR4-LPF直列 + ピーク正規化)
         {
             auto& lr4 = mAnalLr4[(size_t)i];
-            const float a1_lr4 = 1.0f / (1.0f + g_anal * (g_anal + k_lr4));
+            const float gLo  = mEdgeG[(size_t)i];      // 下端エッジ (HPF)
+            const float a1Lo = mEdgeA1[(size_t)i];
+            const float gHi  = mEdgeG[(size_t)i + 1];  // 上端エッジ (LPF)
+            const float a1Hi = mEdgeA1[(size_t)i + 1];
 
-            // Section 1 (LPF)
-            float v1_s1 = a1_lr4 * (lr4.lpf1.s1 + g_anal * (modulator - lr4.lpf1.s2));
-            float y_lp_s1 = lr4.lpf1.s2 + g_anal * v1_s1;
-            lr4.lpf1.s1 = 2.0f * v1_s1 - lr4.lpf1.s1;
-            lr4.lpf1.s2 = 2.0f * y_lp_s1 - lr4.lpf1.s2;
+            float y = processLpfSection(lr4.hiLp1, modulator, gHi, a1Hi);
+            y       = processLpfSection(lr4.hiLp2, y,         gHi, a1Hi);
+            y       = processHpfSection(lr4.loHp1, y,         gLo, a1Lo);
+            y       = processHpfSection(lr4.loHp2, y,         gLo, a1Lo);
 
-            // Section 2 (HPF)
-            float v1_s2 = a1_lr4 * (lr4.hpf1.s1 + g_anal * (y_lp_s1 - lr4.hpf1.s2));
-            float y_lp_s2 = lr4.hpf1.s2 + g_anal * v1_s2;
-            float y_hp = y_lp_s1 - k_lr4 * v1_s2 - y_lp_s2;
-            lr4.hpf1.s1 = 2.0f * v1_s2 - lr4.hpf1.s1;
-            lr4.hpf1.s2 = 2.0f * y_lp_s2 - lr4.hpf1.s2;
-
-            analOut = y_hp;
+            // 正規化(ピーク0dB) + BPF Bankとの聴感レベル整合メイクアップ
+            analOut = y * mBandNorm[(size_t)i] * kSubMakeup;
         }
 
         // エンベロープ追従（キャラクター値でアタック/リリースタイムを調整）
@@ -180,39 +196,35 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
 
             carrierOutR = y_bp_R2;
         }
-        else // Subtractive / LR4
+        else // Subtractive / LR4 (合成側もバンド端エッジのLR4-HPF→LR4-LPF直列 + ピーク正規化)
         {
-            const float a1_lr4_synth = 1.0f / (1.0f + g_synth * (g_synth + k_lr4));
+            // フォルマント・シフト/ストレッチをバンド端周波数に適用
+            float eHi = mBandEdges[(size_t)i + 1] * formantStretch * shiftFactor;
+            eHi = juce::jlimit(60.0f, 7800.0f, eHi);
+            float eLo = mBandEdges[(size_t)i] * formantStretch * shiftFactor;
+            eLo = juce::jlimit(50.0f, eHi * 0.98f, eLo); // 上端との逆転を防止
+
+            const float gLo_s  = std::tan(3.14159265f * eLo / (float)kInternalSampleRate);
+            const float a1Lo_s = 1.0f / (1.0f + gLo_s * (gLo_s + k_lr4));
+            const float gHi_s  = std::tan(3.14159265f * eHi / (float)kInternalSampleRate);
+            const float a1Hi_s = 1.0f / (1.0f + gHi_s * (gHi_s + k_lr4));
+            const float norm_s = computeBandNorm(eLo, eHi);
 
             // LEFT
             auto& lr4L = mSynthLr4L[(size_t)i];
-            float vL_s1 = a1_lr4_synth * (lr4L.lpf1.s1 + g_synth * (carrierL - lr4L.lpf1.s2));
-            float y_lp_L_s1 = lr4L.lpf1.s2 + g_synth * vL_s1;
-            lr4L.lpf1.s1 = 2.0f * vL_s1 - lr4L.lpf1.s1;
-            lr4L.lpf1.s2 = 2.0f * y_lp_L_s1 - lr4L.lpf1.s2;
-
-            float vL_s2 = a1_lr4_synth * (lr4L.hpf1.s1 + g_synth * (y_lp_L_s1 - lr4L.hpf1.s2));
-            float y_lp_L_s2 = lr4L.hpf1.s2 + g_synth * vL_s2;
-            float y_hp_L = y_lp_L_s1 - k_lr4 * vL_s2 - y_lp_L_s2;
-            lr4L.hpf1.s1 = 2.0f * vL_s2 - lr4L.hpf1.s1;
-            lr4L.hpf1.s2 = 2.0f * y_lp_L_s2 - lr4L.hpf1.s2;
-
-            carrierOutL = y_hp_L;
+            float yL = processLpfSection(lr4L.hiLp1, carrierL, gHi_s, a1Hi_s);
+            yL       = processLpfSection(lr4L.hiLp2, yL,       gHi_s, a1Hi_s);
+            yL       = processHpfSection(lr4L.loHp1, yL,       gLo_s, a1Lo_s);
+            yL       = processHpfSection(lr4L.loHp2, yL,       gLo_s, a1Lo_s);
+            carrierOutL = yL * norm_s;
 
             // RIGHT
             auto& lr4R = mSynthLr4R[(size_t)i];
-            float vR_s1 = a1_lr4_synth * (lr4R.lpf1.s1 + g_synth * (carrierR - lr4R.lpf1.s2));
-            float y_lp_R_s1 = lr4R.lpf1.s2 + g_synth * vR_s1;
-            lr4R.lpf1.s1 = 2.0f * vR_s1 - lr4R.lpf1.s1;
-            lr4R.lpf1.s2 = 2.0f * y_lp_R_s1 - lr4R.lpf1.s2;
-
-            float vR_s2 = a1_lr4_synth * (lr4R.hpf1.s1 + g_synth * (y_lp_R_s1 - lr4R.hpf1.s2));
-            float y_lp_R_s2 = lr4R.hpf1.s2 + g_synth * vR_s2;
-            float y_hp_R = y_lp_R_s1 - k_lr4 * vR_s2 - y_lp_R_s2;
-            lr4R.hpf1.s1 = 2.0f * vR_s2 - lr4R.hpf1.s1;
-            lr4R.hpf1.s2 = 2.0f * y_lp_R_s2 - lr4R.hpf1.s2;
-
-            carrierOutR = y_hp_R;
+            float yR = processLpfSection(lr4R.hiLp1, carrierR, gHi_s, a1Hi_s);
+            yR       = processLpfSection(lr4R.hiLp2, yR,       gHi_s, a1Hi_s);
+            yR       = processHpfSection(lr4R.loHp1, yR,       gLo_s, a1Lo_s);
+            yR       = processHpfSection(lr4R.loHp2, yR,       gLo_s, a1Lo_s);
+            carrierOutR = yR * norm_s;
         }
 
         // 変調 (EQゲイン適用)

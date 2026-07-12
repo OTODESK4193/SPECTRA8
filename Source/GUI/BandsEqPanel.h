@@ -27,9 +27,12 @@ public:
 
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
 
 private:
     void handleMouse(const juce::MouseEvent& e);
+    void confirmResetAllBands(); // 右クリック→確認ダイアログ→全バンド0dB
+    int  bandIndexAt(const juce::MouseEvent& e) const; // 座標→バンド番号 (-1 = 領域外)
 
     juce::AudioProcessorValueTreeState& apvts;
     std::array<std::atomic<float>, kMaxBands>& mBandGains;

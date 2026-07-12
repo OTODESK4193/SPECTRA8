@@ -131,12 +131,65 @@ void BandsEqPanel::resized()
 
 void BandsEqPanel::mouseDown(const juce::MouseEvent& e)
 {
+    // 右クリック → 全バンドリセットの確認ダイアログ (誤操作でカーブを消さないための Y/N 確認)
+    if (e.mods.isPopupMenu())
+    {
+        confirmResetAllBands();
+        return;
+    }
     handleMouse(e);
 }
 
 void BandsEqPanel::mouseDrag(const juce::MouseEvent& e)
 {
+    if (e.mods.isPopupMenu())
+        return; // 右ドラッグではカーブを描き込まない
+
     handleMouse(e);
+}
+
+void BandsEqPanel::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    // ダブルクリック → そのバンドのみ 0dB にリセット
+    const int bandIdx = bandIndexAt(e);
+    if (bandIdx < 0) return;
+
+    mBandGains[(size_t)bandIdx].store(1.0f); // リニア 1.0 = 0dB
+    repaint();
+}
+
+int BandsEqPanel::bandIndexAt(const juce::MouseEvent& e) const
+{
+    auto r = getLocalBounds().reduced(16);
+    if (!r.contains(e.getPosition())) return -1;
+
+    const int activeBands = juce::jlimit(8, kMaxBands,
+        static_cast<int>(apvts.getRawParameterValue("bandCount")->load()));
+
+    const float bandW = (float)r.getWidth() / (float)activeBands;
+    int bandIdx = (int)(((float)(e.x - r.getX())) / bandW);
+    return juce::jlimit(0, activeBands - 1, bandIdx);
+}
+
+void BandsEqPanel::confirmResetAllBands()
+{
+    auto options = juce::MessageBoxOptions::makeOptionsYesNo(
+        juce::MessageBoxIconType::QuestionIcon,
+        "BANDS EQ Reset",
+        "Reset all band gains to 0 dB?",
+        "Yes", "No", this);
+
+    juce::AlertWindow::showAsync(options,
+        [safeThis = juce::Component::SafePointer<BandsEqPanel>(this)](int result)
+        {
+            // result: 1 = Yes, 0 = No (JUCEの2ボタン規約)
+            if (result == 1 && safeThis != nullptr)
+            {
+                for (auto& g : safeThis->mBandGains)
+                    g.store(1.0f);
+                safeThis->repaint();
+            }
+        });
 }
 
 void BandsEqPanel::handleMouse(const juce::MouseEvent& e)
