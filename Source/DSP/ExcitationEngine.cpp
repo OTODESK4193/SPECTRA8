@@ -253,19 +253,21 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
     {
         auto& v = mVoices[(size_t)i];
 
-        // 非MIDIモード（Autoモード）の場合、ボイス0だけを外部ピッチでモノフォニック駆動
+        // 非MIDIモード（Autoモード）の場合、ボイス0〜2をアクティブにしてユニゾンデチューン効果を得る
         if (!isMidiMode)
         {
-            if (i > 0)
+            if (i > 2)
             {
                 v.active = false;
                 v.stage = Voice::Idle;
                 v.envValue = 0.0f;
+                v.velocity = 0.0f;
                 continue;
             }
             v.active = true;
             v.stage = Voice::Sustain;
-            v.envValue = 1.0f;
+            v.envValue = (i == 0) ? 1.0f : 0.8f;
+            v.velocity = 1.0f;
             v.targetFreq = externalPitchHz;
         }
 
