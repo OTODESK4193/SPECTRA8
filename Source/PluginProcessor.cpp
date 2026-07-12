@@ -117,7 +117,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("stereoWidth", 1), "Stereo Width", 0.0f, 100.0f, 0.0f));
 
     layout.add(std::make_unique<juce::AudioParameterChoice>(
-        juce::ParameterID("windowType", 1), "Window Type", juce::StringArray{ "Hann", "Hamming" }, 0));
+        juce::ParameterID("windowType", 1), "Window Type", juce::StringArray{ "Hann", "Hamming", "Blackman" }, 0));
 
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("interpolationMode", 1), "Interpolation Mode", juce::StringArray{ "LSP", "LAR" }, 0));
@@ -600,9 +600,13 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                     {
                         w = 0.5f * (1.0f - std::cos(2.0f * 3.14159265f * j / 511.0f));
                     }
-                    else // Hamming
+                    else if (windowType == 1) // Hamming
                     {
                         w = 0.54f - 0.46f * std::cos(2.0f * 3.14159265f * j / 511.0f);
+                    }
+                    else // Blackman
+                    {
+                        w = 0.42f - 0.5f * std::cos(2.0f * 3.14159265f * j / 511.0f) + 0.08f * std::cos(4.0f * 3.14159265f * j / 511.0f);
                     }
                     windowed[j] = mLpcAnalysisBuffer[j] * w;
                 }
@@ -781,7 +785,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mPitchStep = (mTargetPitchHz - mCurrentPitchHz) / static_cast<float>(mControlRateBlockSize);
 
             // --- キャリアボイスのパラメータ同期 (コントロールレート) ---
-            float detuneCents = detuneWidth * 100.0f;
+            float detuneCents = detuneWidth;
             if (isMidiMode)
             {
                 mVoiceManager.syncToDspState(mDspState, detuneCents, pitchTranspose, tracking, mCurrentPitchHz, noiseParam);
@@ -873,16 +877,19 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             }
 
             // LPC逆フィルタを回して残差 (Residual) 信号を抽出
-            float residual = inSample;
-            for (int i = 1; i <= 16; ++i)
+            if (mLpcResidualBuffer.size() == 512 && mLpcAnalysisBuffer.size() == 512)
             {
-                float prevInput = mLpcAnalysisBuffer[512 - i];
-                // 符号の整合性を確保： 逆フィルタ A(z) = 1 + sum(a_i z^-i) なので加算(+)とする
-                residual += interpLpc[i - 1] * prevInput;
+                float residual = inSample;
+                for (int i = 1; i <= 16; ++i)
+                {
+                    float prevInput = mLpcAnalysisBuffer[512 - i];
+                    // 符号の整合性を確保： 逆フィルタ A(z) = 1 + sum(a_i z^-i) なので加算(+)とする
+                    residual += interpLpc[i - 1] * prevInput;
+                }
+                
+                std::memmove(mLpcResidualBuffer.data(), mLpcResidualBuffer.data() + 1, 511 * sizeof(float));
+                mLpcResidualBuffer[511] = residual;
             }
-            
-            std::memmove(mLpcResidualBuffer.data(), mLpcResidualBuffer.data() + 1, 511 * sizeof(float));
-            mLpcResidualBuffer[511] = residual;
         }
 
         // --- 有声/無声比率の計算 ---

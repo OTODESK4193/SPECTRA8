@@ -79,6 +79,7 @@ VocoderTabPanel::VocoderTabPanel(juce::AudioProcessorValueTreeState& state)
     addAndMakeVisible(mWindowTypeCombo);
     mWindowTypeCombo.addItem("Hann Window", 1);
     mWindowTypeCombo.addItem("Hamming Window", 2);
+    mWindowTypeCombo.addItem("Blackman Window", 3);
     mWindowTypeCombo.setEditableText(false);
     mWindowTypeCombo.setJustificationType(juce::Justification::centred);
     mWindowTypeCombo.setLookAndFeel(&mArcLookAndFeel);
