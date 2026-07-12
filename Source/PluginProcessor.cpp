@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "DSP/LspUtils.h"
+#include "DSP/PitchDetector.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -25,6 +27,13 @@ SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
     }
     mLpcAnalysisBuffer.assign(512, 0.0f);
     mCurrentLpcCoeffs.assign(16, 0.0f);
+    
+    mCurrentLsp.assign(16, 0.0f);
+    mCurrentLspSmoothed.assign(16, 0.0f);
+    mLspStep.assign(16, 0.0f);
+    mFrozenLsp.assign(16, 0.0f);
+    mPitchHistory.assign(5, 130.0f);
+    mLpcResidualBuffer.assign(512, 0.0f);
 }
 
 SPECTRA8AudioProcessor::~SPECTRA8AudioProcessor()
@@ -90,6 +99,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
 
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("mode", 1), "Mode", juce::StringArray{ "Auto", "MIDI" }, 0));
+
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("formantFreeze", 1), "Formant Freeze", juce::StringArray{ "Off", "On" }, 0));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("stereoWidth", 1), "Stereo Width", 0.0f, 100.0f, 0.0f));
 
     return layout;
 }
@@ -160,6 +175,27 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
     mLpcAnalysisBuffer.assign(512, 0.0f);
     mCurrentLpcCoeffs.assign(16, 0.0f);
+    
+    mCurrentLsp.assign(16, 0.0f);
+    mCurrentLspSmoothed.assign(16, 0.0f);
+    mLspStep.assign(16, 0.0f);
+    mFrozenLsp.assign(16, 0.0f);
+    mFormantFreezeActive = false;
+    
+    mCurrentPitchHz = 130.0f;
+    mTargetPitchHz = 130.0f;
+    mPitchSmoothed = 130.0f;
+    mIsVoiced = false;
+    mVoicedDebounceCounter = 0;
+    mPitchHistory.assign(5, 130.0f);
+    mLpcResidualBuffer.assign(512, 0.0f);
+    
+    mModeCrossfade.reset(sampleRate, 0.030);
+    mPrevVocoderMode = -1;
+    mMode0WetBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    mMode1WetBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    
+    mSmoothedGain = 1.0f;
     mLimiterGain = 1.0f;
 }
 
@@ -259,12 +295,30 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     bool isMidiMode = (mode == 1);
 
     // 追加でロードするパラメータ
-    float formantStretch = apvts.getRawParameterValue("formantStretch")->load();
     int waveform = static_cast<int>(apvts.getRawParameterValue("waveform")->load());
     float pulseWidth = apvts.getRawParameterValue("pulseWidth")->load() * 0.01f;
     float wavetablePosition = apvts.getRawParameterValue("wavetablePosition")->load();
     int vocoderMode = static_cast<int>(apvts.getRawParameterValue("vocoderMode")->load());
     bool limiterEnable = static_cast<int>(apvts.getRawParameterValue("limiterEnable")->load()) == 1;
+
+    bool freezeParam = (static_cast<int>(apvts.getRawParameterValue("formantFreeze")->load()) == 1);
+    float stereoWidth = apvts.getRawParameterValue("stereoWidth")->load() * 0.01f;
+
+    // アルゴリズム切り替え時のクロスフェード開始判定
+    if (mPrevVocoderMode != vocoderMode)
+    {
+        if (mPrevVocoderMode != -1)
+        {
+            mModeCrossfade.setCurrentAndTargetValue(0.0f);
+            mModeCrossfade.setTargetValue(1.0f);
+        }
+        else
+        {
+            mModeCrossfade.setCurrentAndTargetValue(1.0f);
+        }
+        mPrevVocoderMode = vocoderMode;
+    }
+    bool isCrossfading = mModeCrossfade.isSmoothing();
 
     // 3. 入力音声の包絡線（エンベロープ）算出
     if (numInputs > 0 && numSamples > 0)
@@ -283,7 +337,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     if (isMidiMode)
     {
         mVoiceManager.processMidiEvents(mMidiQueue, mDspState);
-        // updateVoices の呼び出しは 16kHz サンプルループ内部へ移動
         mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, tracking, 130.0f);
         mWasAutoVoiceActive = false;
     }
@@ -293,7 +346,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
         if (hasInput && !mWasAutoVoiceActive)
         {
-            // ボイス0, 1, 2の位相とフィルタ状態をクリア/ランダム初期化
             for (int v = 0; v < 3; ++v)
             {
                 mDspState.phaseL[v] = static_cast<float>(v) * 500.0f;
@@ -314,7 +366,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         }
         mWasAutoVoiceActive = hasInput;
 
-        // AUTOモードでは3ボイス（ユニゾン）をアクティブにして厚みを出す
         mVoiceManager.setVoiceActive(0, hasInput);
         mVoiceManager.setVoiceActive(1, hasInput);
         mVoiceManager.setVoiceActive(2, hasInput);
@@ -328,13 +379,14 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mVoiceManager.setVoiceEnvelope(1, envVolume * 0.8f);
         mVoiceManager.setVoiceEnvelope(2, envVolume * 0.8f);
 
-        mVoiceManager.setVoiceFrequency(0, 130.0f);
-        mVoiceManager.setVoiceFrequency(1, 130.0f);
-        mVoiceManager.setVoiceFrequency(2, 130.0f);
-        mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, 0.0f, 130.0f);
+        // AUTOモード時のピッチは有声音検出結果 mCurrentPitchHz に追従させる
+        float activePitch = mIsVoiced ? mCurrentPitchHz : 130.0f;
+        mVoiceManager.setVoiceFrequency(0, activePitch);
+        mVoiceManager.setVoiceFrequency(1, activePitch);
+        mVoiceManager.setVoiceFrequency(2, activePitch);
+        mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, 0.0f, activePitch);
     }
 
-    // サンプル精度フォルマントシフターの取得
     mFormantShiftSmoother.skip(numSamples);
     float currentFormantShift = mFormantShiftSmoother.getCurrentValue();
 
@@ -366,7 +418,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mDownsampleTimeAccum = timeAccum - static_cast<double>(numSamples);
     }
 
-    // 分析バッファの更新（履歴シフト）
     int numNew = num16kSamples;
     if (numNew > 0)
     {
@@ -383,10 +434,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     // 5. 16kHz領域でのリアルタイム・チャネルボコーディング処理
     int maxBands = DSP::PolyphonicVoiceSoA::kNumBands;
+    float mPitchStep = 0.0f;
 
     for (int sample16k = 0; sample16k < num16kSamples; ++sample16k)
     {
-        // 16kHz サンプルごとに ADSR エンベロープを更新 (MIDIモード時のみ)
         if (isMidiMode)
         {
             mVoiceManager.updateVoices(attack, decay, sustain, release);
@@ -394,10 +445,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
         float inSample = mDownsampledBuffer[sample16k];
 
-        // 5-A. 分析側（モジュレーター）：100%確実に音が鳴る実績のあるオリジナル差分式
+        // 5-A. 分析側（モジュレーター）：ZDF BPF
         for (int i = 0; i < currentNumBands; ++i)
         {
-            // --- セクション 1 ---
             float s1_s1 = mAnalFilterS1[i];
             float s2_s1 = mAnalFilterS2[i];
             float v1_s1 = mBandCoeffsA1[i] * (s1_s1 + mBandCoeffsG[i] * (inSample - s2_s1));
@@ -407,7 +457,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mAnalFilterS1[i] = 2.0f * y_bp_s1 - s1_s1;
             mAnalFilterS2[i] = 2.0f * y_lp_s1 - s2_s1;
 
-            // --- セクション 2 (直列接続 S1 -> S2) ---
             int idx_s2 = i + maxBands;
             float s1_s2 = mAnalFilterS1[idx_s2];
             float s2_s2 = mAnalFilterS2[idx_s2];
@@ -418,7 +467,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mAnalFilterS1[idx_s2] = 2.0f * y_bp_s2 - s1_s2;
             mAnalFilterS2[idx_s2] = 2.0f * y_lp_s2 - s2_s2;
 
-            // 整流エンベロープフォロワーの更新
             float env = std::abs(y_bp_s2);
             float envCoeff = (env > mTargetBandEnvelopes[i]) ? 0.015f : 0.003f;
             mTargetBandEnvelopes[i] = mTargetBandEnvelopes[i] * (1.0f - envCoeff) + env * envCoeff;
@@ -427,19 +475,16 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         if (mControlRateCounter >= mControlRateBlockSize || mControlRateCounter == 0)
         {
             mControlRateCounter = 0;
-            // ターゲットエンベロープに Band EQ ゲインを乗算して mBandEnvelopes に反映する
             for (int i = 0; i < maxBands; ++i)
             {
                 float gain = mBandGains[i].load();
                 mBandEnvelopes[i] = mTargetBandEnvelopes[i] * gain;
-                // UI用アナライザーレベルに書き込み
                 mBandLevelsForUi[i].store(mBandEnvelopes[i]);
             }
             
-            // LPC分析を実行 (vocoderMode == 1 の場合のみ)
-            if (vocoderMode == 1)
+            // LPC/LSP分析の実行
+            if (vocoderMode == 1 || isCrossfading)
             {
-                // 自己相関 r[k]
                 float r[17] = { 0.0f };
                 float windowed[512];
                 for (int j = 0; j < 512; ++j)
@@ -463,12 +508,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 float E = r[0];
                 a[0] = 1.0f;
 
-                if (E <= 1e-9f)
+                bool lpcSuccess = false;
+                if (E > 1e-9f)
                 {
-                    std::fill(a + 1, a + 17, 0.0f);
-                }
-                else
-                {
+                    lpcSuccess = true;
                     for (int i = 1; i <= 16; ++i)
                     {
                         float lambda = 0.0f;
@@ -480,6 +523,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
                         if (std::abs(lambda) >= 0.999f)
                         {
+                            lpcSuccess = false;
                             break;
                         }
 
@@ -494,31 +538,147 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                         std::copy(next_a, next_a + i + 1, a);
 
                         E *= (1.0f - lambda * lambda);
-                        if (E <= 1e-9f) break;
+                        if (E <= 1e-9f) {
+                            lpcSuccess = false;
+                            break;
+                        }
                     }
                 }
 
-                // 帯域拡張 (Bandwidth Expansion) による安定化
+                // 帯域拡張
                 for (int i = 1; i <= 16; ++i)
                 {
                     a[i] *= std::pow(0.985f, static_cast<float>(i));
                 }
 
-                // LPC係数を更新
-                std::copy(a + 1, a + 17, mCurrentLpcCoeffs.begin());
+                // LSP変換とフリーズ
+                if (freezeParam)
+                {
+                    if (!mFormantFreezeActive)
+                    {
+                        mFrozenLsp = mCurrentLsp;
+                        mFormantFreezeActive = true;
+                    }
+                    mCurrentLsp = mFrozenLsp;
+                }
+                else
+                {
+                    mFormantFreezeActive = false;
+                    if (lpcSuccess)
+                    {
+                        bool lspSuccess = DSP::LspUtils::lpcToLsp(a + 1, mCurrentLsp.data(), 16);
+                        if (lspSuccess)
+                        {
+                            DSP::LspUtils::enforceLspClearance(mCurrentLsp.data(), 16);
+                        }
+                    }
+                }
+
+                // ピッチ検出 (MPM) と V/UV 判定
+                float pitchHz = 0.0f;
+                float clarity = 0.0f;
+                bool pitchFound = DSP::PitchDetector::detectPitchMPM(windowed, 512, 16000.0, pitchHz, clarity);
+                
+                float zcr = DSP::PitchDetector::computeZcr(windowed, 512);
+                float lber = DSP::PitchDetector::computeLber(windowed, 512, 16000.0);
+                float lpcGain = (r[0] > 1e-9f) ? (10.0f * std::log10(r[0] / (E + 1e-9f))) : 0.0f;
+
+                // 有声判定条件
+                bool isVoicedFrame = (pitchFound && clarity >= 0.60f && lpcGain >= 6.0f && zcr < 0.20f && lber >= 0.50f);
+                if (isVoicedFrame)
+                {
+                    mIsVoiced = true;
+                    mVoicedDebounceCounter = 0;
+                }
+                else
+                {
+                    mVoicedDebounceCounter++;
+                    if (mVoicedDebounceCounter >= 3)
+                    {
+                        mIsVoiced = false;
+                    }
+                }
+
+                if (mIsVoiced && pitchHz >= 50.0f && pitchHz <= 500.0f)
+                {
+                    mPitchHistory.erase(mPitchHistory.begin());
+                    mPitchHistory.push_back(pitchHz);
+                    
+                    std::vector<float> sortedHistory = mPitchHistory;
+                    std::sort(sortedHistory.begin(), sortedHistory.end());
+                    mTargetPitchHz = sortedHistory[2]; // 中央値
+                }
+                else if (!mIsVoiced)
+                {
+                    mTargetPitchHz = 130.0f;
+                }
             }
+
+            // 線形補間ステップの計算
+            for (int i = 0; i < 16; ++i)
+            {
+                mLspStep[i] = (mCurrentLsp[i] - mCurrentLspSmoothed[i]) / static_cast<float>(mControlRateBlockSize);
+            }
+            mPitchStep = (mTargetPitchHz - mCurrentPitchHz) / static_cast<float>(mControlRateBlockSize);
         }
         mControlRateCounter++;
 
-        float lowEnergy = 0.0f;
-        float highEnergy = 0.0f;
-        int midPoint = currentNumBands / 2;
-        for (int i = 0; i < midPoint; ++i) lowEnergy += mBandEnvelopes[i];
-        for (int i = midPoint; i < currentNumBands; ++i) highEnergy += mBandEnvelopes[i];
+        // --- 1サンプルごとの LSP & ピッチ 補間 ---
+        if (vocoderMode == 1 || isCrossfading)
+        {
+            for (int i = 0; i < 16; ++i)
+            {
+                mCurrentLspSmoothed[i] += mLspStep[i];
+            }
+            mCurrentPitchHz += mPitchStep;
 
-        float uvRatio = highEnergy / (lowEnergy + highEnergy + 1e-6f);
-        float consonantFactor = std::clamp((uvRatio - 0.22f) * 3.0f, 0.0f, 1.0f);
-        mCurrentUnvoicedRatio = mCurrentUnvoicedRatio * 0.9f + consonantFactor * 0.1f;
+            // LSPの双一次周波数ワーピング (BFW) をサンプル精度で適用
+            std::vector<float> warpedLsp(16, 0.0f);
+            float alpha = std::tanh(currentFormantShift / 24.0f * 0.45f);
+
+            for (int i = 0; i < 16; ++i)
+            {
+                float w = std::acos(std::clamp(mCurrentLspSmoothed[i], -0.9999f, 0.9999f));
+                float sin_w = std::sin(w);
+                float cos_w = std::cos(w);
+                
+                float warped_w = w + 2.0f * std::atan((alpha * sin_w) / (1.0f - alpha * cos_w + 1e-9f));
+                warpedLsp[i] = std::cos(std::clamp(warped_w, 0.001f, 3.1415f));
+            }
+
+            // ワーピング後のLSPの安定化
+            DSP::LspUtils::enforceLspClearance(warpedLsp.data(), 16);
+
+            // LSP から LPC 係数に逆変換
+            std::vector<float> interpLpc(16, 0.0f);
+            DSP::LspUtils::lspToLpc(warpedLsp.data(), interpLpc.data(), 16);
+
+            // DspState の lpcCoeffs にロード
+            for (int i = 0; i < 16; ++i)
+            {
+                float val = interpLpc[i];
+                for (int v = 0; v < 8; ++v)
+                {
+                    mDspState.lpcCoeffs[i][v] = val;
+                }
+            }
+
+            // LPC逆フィルタを回して残差 (Residual) 信号を抽出
+            float residual = inSample;
+            for (int i = 1; i <= 16; ++i)
+            {
+                float prevInput = mLpcAnalysisBuffer[512 - i];
+                // 符号の整合性を確保： 逆フィルタ A(z) = 1 + sum(a_i z^-i) なので加算(+)とする
+                residual += interpLpc[i - 1] * prevInput;
+            }
+            
+            std::memmove(mLpcResidualBuffer.data(), mLpcResidualBuffer.data() + 1, 511 * sizeof(float));
+            mLpcResidualBuffer[511] = residual;
+        }
+
+        // --- 有声/無声比率の計算 ---
+        float targetUv = mIsVoiced ? 0.0f : 1.0f;
+        mCurrentUnvoicedRatio = mCurrentUnvoicedRatio * 0.95f + targetUv * 0.05f;
 
         __m256 noiseBuffer = mNoiseGenerator.nextBlockAVX2();
         __m256 activeMask = mVoiceManager.getActiveVoicesMask();
@@ -527,49 +687,96 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float dynNoiseMix = std::clamp(noiseParam + (1.0f - noiseParam) * mCurrentUnvoicedRatio * 1.5f, 0.0f, 1.0f);
         __m256 noiseMixVec = _mm256_set1_ps(dynNoiseMix);
 
-        // LPCModeのときは、LPC係数を SoA 状態変数にロード
-        if (vocoderMode == 1)
+        // --- レンダリング処理 ---
+        float mode0_L = 0.0f, mode0_R = 0.0f;
+        float mode1_L = 0.0f, mode1_R = 0.0f;
+
+        // Mode 0（Filterbank）の計算
+        if (vocoderMode == 0 || isCrossfading)
         {
-            for (int i = 0; i < 16; ++i)
-            {
-                float val = mCurrentLpcCoeffs[i];
-                for (int v = 0; v < 8; ++v)
-                {
-                    mDspState.lpcCoeffs[i][v] = val;
-                }
-            }
+            mOscillatorBank.processSampleAVX2(
+                mDspState, activeMask, mixEnvelopes, noiseMixVec, noiseBuffer,
+                mBandEnvelopes.data(), currentFormantShift, stereoWidth, character,
+                0, // vocoderMode = 0
+                currentNumBands, waveform, pulseWidth, wavetablePosition,
+                mBandCoeffsG.data(), mBandCoeffsK.data(), mBandCoeffsA1.data(), mBandCoeffsA1.data(),
+                mode0_L, mode0_R
+            );
         }
 
-        float sampleL = 0.0f;
-        float sampleR = 0.0f;
+        // Mode 1（LPC）の計算
+        if (vocoderMode == 1 || isCrossfading)
+        {
+            // SoA 状態へ残差信号を書き込み
+            float resVal = mLpcResidualBuffer[511];
+            for (int v = 0; v < 8; ++v)
+            {
+                mDspState.lpcResidual[v] = resVal;
+            }
 
-        // ★WET音復活の核心：キャリアフィルターは固定係数のまま処理（発散・相殺を100%防止）
-        // スムージングされた currentFormantShift スカラー値を直接 OscillatorBank へ転送
-        mOscillatorBank.processSampleAVX2(
-            mDspState,
-            activeMask,
-            mixEnvelopes,
-            noiseMixVec,
-            noiseBuffer,
-            mBandEnvelopes.data(),
-            currentFormantShift,
-            formantStretch,
-            vocoderMode,
-            currentNumBands,
-            waveform,
-            pulseWidth,
-            wavetablePosition,
-            mBandCoeffsG.data(),
-            mBandCoeffsK.data(),
-            mBandCoeffsA1.data(),
-            mBandCoeffsA1.data(),
-            sampleL,
-            sampleR
-        );
+            mOscillatorBank.processSampleAVX2(
+                mDspState, activeMask, mixEnvelopes, noiseMixVec, noiseBuffer,
+                mBandEnvelopes.data(), currentFormantShift, stereoWidth, character,
+                1, // vocoderMode = 1
+                currentNumBands, waveform, pulseWidth, wavetablePosition,
+                mBandCoeffsG.data(), mBandCoeffsK.data(), mBandCoeffsA1.data(), mBandCoeffsA1.data(),
+                mode1_L, mode1_R
+            );
+        }
 
         if (sample16k < static_cast<int>(m16kWetBuffer.size()))
         {
-            m16kWetBuffer[sample16k] = 0.5f * (sampleL + sampleR);
+            mMode0WetBuffer[sample16k] = 0.5f * (mode0_L + mode0_R);
+            mMode1WetBuffer[sample16k] = 0.5f * (mode1_L + mode1_R);
+        }
+    }
+
+    // 6. Wet信号のクロスフェード & RMSゲインマッチング
+    if (num16kSamples > 0)
+    {
+        // 6-A. クロスフェードの適用
+        for (int i = 0; i < num16kSamples; ++i)
+        {
+            float w0 = mMode0WetBuffer[i];
+            float w1 = mMode1WetBuffer[i];
+            
+            float blend = mModeCrossfade.getNextValue();
+            float targetCross = static_cast<float>(vocoderMode);
+            mModeCrossfade.setTargetValue(targetCross);
+
+            m16kWetBuffer[i] = (1.0f - blend) * w0 + blend * w1;
+        }
+
+        // 6-B. RMS ゲインマッチング
+        float sumSqIn = 0.0f;
+        float sumSqWet = 0.0f;
+        for (int i = 0; i < num16kSamples; ++i)
+        {
+            sumSqIn += mDownsampledBuffer[i] * mDownsampledBuffer[i];
+            sumSqWet += m16kWetBuffer[i] * m16kWetBuffer[i];
+        }
+        float rmsIn = std::sqrt(sumSqIn / num16kSamples);
+        float rmsWet = std::sqrt(sumSqWet / num16kSamples);
+        
+        float targetGain = 1.0f;
+        if (rmsWet > 1e-6f)
+        {
+            targetGain = rmsIn / rmsWet;
+        }
+        targetGain = std::clamp(targetGain, 0.05f, 15.0f); // ゲイン幅制限
+
+        // アタック5ms(0.0124f)、リリース30ms(0.0021f)
+        for (int i = 0; i < num16kSamples; ++i)
+        {
+            float diff = targetGain - mSmoothedGain;
+            float coeff = (diff > 0.0f) ? 0.0124f : 0.0021f;
+            mSmoothedGain += diff * coeff;
+
+            // LPCモードのブレンド比率(0.0〜1.0)に応じてゲインマッチングを適用
+            float blend = mModeCrossfade.getCurrentValue();
+            float finalGain = (1.0f - blend) + blend * mSmoothedGain;
+
+            m16kWetBuffer[i] *= finalGain;
         }
     }
 

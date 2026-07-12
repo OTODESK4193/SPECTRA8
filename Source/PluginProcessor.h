@@ -126,15 +126,38 @@ private:
     // ★フェイルセーフ：Autoモード時のボイスONエッジ検出用フラグ
     bool mWasAutoVoiceActive = false;
 
-    // LPC分析用
+    // LPC / LSP 分析・合成用
     std::vector<float> mLpcAnalysisBuffer;
     std::vector<float> mCurrentLpcCoeffs;
+    std::vector<float> mCurrentLsp;
+    std::vector<float> mCurrentLspSmoothed;
+    std::vector<float> mLspStep;
+    std::vector<float> mFrozenLsp;
+    bool mFormantFreezeActive = false;
+
+    // ピッチ検出 & V/UV判定用
+    float mCurrentPitchHz = 130.0f;
+    float mTargetPitchHz = 130.0f;
+    float mPitchSmoothed = 130.0f;
+    bool mIsVoiced = false;
+    int mVoicedDebounceCounter = 0;
+    std::vector<float> mPitchHistory;
+
+    // 残差信号 (Residual) バッファ
+    std::vector<float> mLpcResidualBuffer;
+
+    // アルゴリズム切り替えクロスフェード
+    juce::LinearSmoothedValue<float> mModeCrossfade;
+    int mPrevVocoderMode = -1;
+    std::vector<float> mMode0WetBuffer;
+    std::vector<float> mMode1WetBuffer;
 
     // Band EQ およびアナライザーレベル
     std::array<std::atomic<float>, 48> mBandGains;
     std::array<std::atomic<float>, 48> mBandLevelsForUi;
 
     // 最終段リミッター用状態
+    float mSmoothedGain = 1.0f;
     float mLimiterGain = 1.0f;
 
     std::atomic<int> mErrorState{ 0 };

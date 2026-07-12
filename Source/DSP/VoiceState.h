@@ -33,6 +33,7 @@ struct alignas(32) PolyphonicVoiceSoA {
     alignas(32) float lpcCoeffs[kLpcOrder][8] = { { 0.0f } };
     alignas(32) float lpcHistoryL[kLpcOrder][8] = { { 0.0f } };
     alignas(32) float lpcHistoryR[kLpcOrder][8] = { { 0.0f } };
+    alignas(32) float lpcResidual[8] = { 0.0f };
 };
 
 // ボイス管理・変調用状態（アライメント32バイト保証）
