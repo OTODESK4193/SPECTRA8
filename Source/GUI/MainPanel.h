@@ -44,6 +44,18 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mLimiterAttachment;
     juce::Label mLimiterLabel;
 
+    juce::ComboBox mWindowTypeCombo;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mWindowTypeAttachment;
+    juce::Label mWindowTypeLabel;
+
+    juce::ComboBox mInterpolationModeCombo;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mInterpolationModeAttachment;
+    juce::Label mInterpolationModeLabel;
+
+    juce::ComboBox mFilterbankTypeCombo;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mFilterbankTypeAttachment;
+    juce::Label mFilterbankTypeLabel;
+
     ArcDialLookAndFeel mArcLookAndFeel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VocoderTabPanel)

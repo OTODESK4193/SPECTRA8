@@ -32,8 +32,18 @@ SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
     mCurrentLspSmoothed.assign(16, 0.0f);
     mLspStep.assign(16, 0.0f);
     mFrozenLsp.assign(16, 0.0f);
+    mCurrentLar.assign(16, 0.0f);
+    mCurrentLarSmoothed.assign(16, 0.0f);
+    mLarStep.assign(16, 0.0f);
+    mFrozenLar.assign(16, 0.0f);
     mPitchHistory.assign(5, 130.0f);
     mLpcResidualBuffer.assign(512, 0.0f);
+    mMsDelayBuffer.assign(128, 0.0f);
+    mMsDelayWritePtr = 0;
+    mApfBufferL.assign(64, 0.0f);
+    mApfBufferR.assign(64, 0.0f);
+    mApfWritePtrL = 0;
+    mApfWritePtrR = 0;
 }
 
 SPECTRA8AudioProcessor::~SPECTRA8AudioProcessor()
@@ -105,6 +115,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("stereoWidth", 1), "Stereo Width", 0.0f, 100.0f, 0.0f));
+
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("windowType", 1), "Window Type", juce::StringArray{ "Hann", "Hamming" }, 0));
+
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("interpolationMode", 1), "Interpolation Mode", juce::StringArray{ "LSP", "LAR" }, 0));
+
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("filterbankType", 1), "Filterbank Type", juce::StringArray{ "Bandpass", "Subtractive" }, 0));
 
     return layout;
 }
@@ -180,6 +199,10 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mCurrentLspSmoothed.assign(16, 0.0f);
     mLspStep.assign(16, 0.0f);
     mFrozenLsp.assign(16, 0.0f);
+    mCurrentLar.assign(16, 0.0f);
+    mCurrentLarSmoothed.assign(16, 0.0f);
+    mLarStep.assign(16, 0.0f);
+    mFrozenLar.assign(16, 0.0f);
     mFormantFreezeActive = false;
     
     mCurrentPitchHz = 130.0f;
@@ -197,6 +220,15 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     
     mSmoothedGain = 1.0f;
     mLimiterGain = 1.0f;
+
+    mMsFilterState = 0.0f;
+    mMsPrevInput = 0.0f;
+    mMsDelayBuffer.assign(128, 0.0f);
+    mMsDelayWritePtr = 0;
+    mApfBufferL.assign(64, 0.0f);
+    mApfBufferR.assign(64, 0.0f);
+    mApfWritePtrL = 0;
+    mApfWritePtrR = 0;
 }
 
 void SPECTRA8AudioProcessor::releaseResources()
@@ -304,6 +336,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     bool freezeParam = (static_cast<int>(apvts.getRawParameterValue("formantFreeze")->load()) == 1);
     float stereoWidth = apvts.getRawParameterValue("stereoWidth")->load() * 0.01f;
 
+    int windowType = static_cast<int>(apvts.getRawParameterValue("windowType")->load());
+    int interpolationMode = static_cast<int>(apvts.getRawParameterValue("interpolationMode")->load());
+    int filterbankType = static_cast<int>(apvts.getRawParameterValue("filterbankType")->load());
+
     // アルゴリズム切り替え時のクロスフェード開始判定
     if (mPrevVocoderMode != vocoderMode)
     {
@@ -319,6 +355,43 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mPrevVocoderMode = vocoderMode;
     }
     bool isCrossfading = mModeCrossfade.isSmoothing();
+
+    // 入力ステレオイメージの解析 (M-S デコレレーターおよびパン復元用)
+    float inputPan = 0.5f;
+    float inputCorrelation = 1.0f;
+    if (numInputs > 0 && numSamples > 0)
+    {
+        float sumSqL = 0.0f;
+        float sumSqR = 0.0f;
+        float sumCross = 0.0f;
+        const float* readL = buffer.getReadPointer(0);
+        const float* readR = (numInputs > 1) ? buffer.getReadPointer(1) : readL;
+        for (int s = 0; s < numSamples; ++s)
+        {
+            float l = readL[s];
+            float r = readR[s];
+            sumSqL += l * l;
+            sumSqR += r * r;
+            sumCross += l * r;
+        }
+        float E_L = sumSqL;
+        float E_R = sumSqR;
+        float denom = std::sqrt(E_L * E_R);
+        if (denom > 1e-9f)
+        {
+            inputCorrelation = sumCross / denom;
+        }
+        inputCorrelation = std::clamp(inputCorrelation, -1.0f, 1.0f);
+
+        float sqrtEL = std::sqrt(E_L);
+        float sqrtER = std::sqrt(E_R);
+        float panDenom = sqrtEL + sqrtER;
+        if (panDenom > 1e-9f)
+        {
+            inputPan = sqrtER / panDenom;
+        }
+        inputPan = std::clamp(inputPan, 0.0f, 1.0f);
+    }
 
     // 3. 入力音声の包絡線（エンベロープ）算出
     if (numInputs > 0 && numSamples > 0)
@@ -337,7 +410,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     if (isMidiMode)
     {
         mVoiceManager.processMidiEvents(mMidiQueue, mDspState);
-        mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, tracking, 130.0f);
         mWasAutoVoiceActive = false;
     }
     else
@@ -379,12 +451,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mVoiceManager.setVoiceEnvelope(1, envVolume * 0.8f);
         mVoiceManager.setVoiceEnvelope(2, envVolume * 0.8f);
 
-        // AUTOモード時のピッチは有声音検出結果 mCurrentPitchHz に追従させる
-        float activePitch = mIsVoiced ? mCurrentPitchHz : 130.0f;
-        mVoiceManager.setVoiceFrequency(0, activePitch);
-        mVoiceManager.setVoiceFrequency(1, activePitch);
-        mVoiceManager.setVoiceFrequency(2, activePitch);
-        mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, 0.0f, activePitch);
     }
 
     mFormantShiftSmoother.skip(numSamples);
@@ -445,31 +511,67 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
         float inSample = mDownsampledBuffer[sample16k];
 
-        // 5-A. 分析側（モジュレーター）：ZDF BPF
-        for (int i = 0; i < currentNumBands; ++i)
+        // 5-A. 分析側（モジュレーター）
+        if (filterbankType == 0) // Bandpass
         {
-            float s1_s1 = mAnalFilterS1[i];
-            float s2_s1 = mAnalFilterS2[i];
-            float v1_s1 = mBandCoeffsA1[i] * (s1_s1 + mBandCoeffsG[i] * (inSample - s2_s1));
-            float y_bp_s1 = v1_s1;
-            float y_lp_s1 = s2_s1 + mBandCoeffsG[i] * v1_s1;
+            for (int i = 0; i < currentNumBands; ++i)
+            {
+                float s1_s1 = mAnalFilterS1[i];
+                float s2_s1 = mAnalFilterS2[i];
+                float v1_s1 = mBandCoeffsA1[i] * (s1_s1 + mBandCoeffsG[i] * (inSample - s2_s1));
+                float y_bp_s1 = v1_s1;
+                float y_lp_s1 = s2_s1 + mBandCoeffsG[i] * v1_s1;
 
-            mAnalFilterS1[i] = 2.0f * y_bp_s1 - s1_s1;
-            mAnalFilterS2[i] = 2.0f * y_lp_s1 - s2_s1;
+                mAnalFilterS1[i] = 2.0f * y_bp_s1 - s1_s1;
+                mAnalFilterS2[i] = 2.0f * y_lp_s1 - s2_s1;
 
-            int idx_s2 = i + maxBands;
-            float s1_s2 = mAnalFilterS1[idx_s2];
-            float s2_s2 = mAnalFilterS2[idx_s2];
-            float v1_s2 = mBandCoeffsA1[i] * (s1_s2 + mBandCoeffsG[i] * (y_bp_s1 - s2_s2));
-            float y_bp_s2 = v1_s2;
-            float y_lp_s2 = s2_s2 + mBandCoeffsG[i] * v1_s2;
+                int idx_s2 = i + maxBands;
+                float s1_s2 = mAnalFilterS1[idx_s2];
+                float s2_s2 = mAnalFilterS2[idx_s2];
+                float v1_s2 = mBandCoeffsA1[i] * (s1_s2 + mBandCoeffsG[i] * (y_bp_s1 - s2_s2));
+                float y_bp_s2 = v1_s2;
+                float y_lp_s2 = s2_s2 + mBandCoeffsG[i] * v1_s2;
 
-            mAnalFilterS1[idx_s2] = 2.0f * y_bp_s2 - s1_s2;
-            mAnalFilterS2[idx_s2] = 2.0f * y_lp_s2 - s2_s2;
+                mAnalFilterS1[idx_s2] = 2.0f * y_bp_s2 - s1_s2;
+                mAnalFilterS2[idx_s2] = 2.0f * y_lp_s2 - s2_s2;
 
-            float env = std::abs(y_bp_s2);
-            float envCoeff = (env > mTargetBandEnvelopes[i]) ? 0.015f : 0.003f;
-            mTargetBandEnvelopes[i] = mTargetBandEnvelopes[i] * (1.0f - envCoeff) + env * envCoeff;
+                float env = std::abs(y_bp_s2);
+                float envCoeff = (env > mTargetBandEnvelopes[i]) ? 0.015f : 0.003f;
+                mTargetBandEnvelopes[i] = mTargetBandEnvelopes[i] * (1.0f - envCoeff) + env * envCoeff;
+            }
+        }
+        else // Subtractive / LR4
+        {
+            const float k_lr4 = 1.41421356f; // Q = 0.707 (damping k = 1/Q)
+            for (int i = 0; i < currentNumBands; ++i)
+            {
+                float g = mBandCoeffsG[i];
+                float a1_lr4 = 1.0f / (1.0f + g * (g + k_lr4));
+
+                // セクション 1 (LPF)
+                float s1_s1 = mAnalFilterS1[i];
+                float s2_s1 = mAnalFilterS2[i];
+                float v1_s1 = a1_lr4 * (s1_s1 + g * (inSample - s2_s1));
+                float y_lp_s1 = s2_s1 + g * v1_s1;
+
+                mAnalFilterS1[i] = 2.0f * v1_s1 - s1_s1;
+                mAnalFilterS2[i] = 2.0f * y_lp_s1 - s2_s1;
+
+                // セクション 2 (HPF)
+                int idx_s2 = i + maxBands;
+                float s1_s2 = mAnalFilterS1[idx_s2];
+                float s2_s2 = mAnalFilterS2[idx_s2];
+                float v1_s2 = a1_lr4 * (s1_s2 + g * (y_lp_s1 - s2_s2));
+                float y_lp_s2 = s2_s2 + g * v1_s2;
+                float y_hp_s2 = y_lp_s1 - k_lr4 * v1_s2 - y_lp_s2; // HPF 出力
+
+                mAnalFilterS1[idx_s2] = 2.0f * v1_s2 - s1_s2;
+                mAnalFilterS2[idx_s2] = 2.0f * y_lp_s2 - s2_s2;
+
+                float env = std::abs(y_hp_s2);
+                float envCoeff = (env > mTargetBandEnvelopes[i]) ? 0.015f : 0.003f;
+                mTargetBandEnvelopes[i] = mTargetBandEnvelopes[i] * (1.0f - envCoeff) + env * envCoeff;
+            }
         }
 
         if (mControlRateCounter >= mControlRateBlockSize || mControlRateCounter == 0)
@@ -489,7 +591,15 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 float windowed[512];
                 for (int j = 0; j < 512; ++j)
                 {
-                    float w = 0.54f - 0.46f * std::cos(2.0f * 3.14159265f * j / 511.0f); // ハミング窓
+                    float w = 0.0f;
+                    if (windowType == 0) // Hann
+                    {
+                        w = 0.5f * (1.0f - std::cos(2.0f * 3.14159265f * j / 511.0f));
+                    }
+                    else // Hamming
+                    {
+                        w = 0.54f - 0.46f * std::cos(2.0f * 3.14159265f * j / 511.0f);
+                    }
                     windowed[j] = mLpcAnalysisBuffer[j] * w;
                 }
 
@@ -551,25 +661,60 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                     a[i] *= std::pow(0.985f, static_cast<float>(i));
                 }
 
-                // LSP変換とフリーズ
-                if (freezeParam)
+                // LSP/LAR変換とフリーズ
+                if (interpolationMode == 0) // LSP Mode
                 {
-                    if (!mFormantFreezeActive)
+                    if (freezeParam)
                     {
-                        mFrozenLsp = mCurrentLsp;
-                        mFormantFreezeActive = true;
-                    }
-                    mCurrentLsp = mFrozenLsp;
-                }
-                else
-                {
-                    mFormantFreezeActive = false;
-                    if (lpcSuccess)
-                    {
-                        bool lspSuccess = DSP::LspUtils::lpcToLsp(a + 1, mCurrentLsp.data(), 16);
-                        if (lspSuccess)
+                        if (!mFormantFreezeActive)
                         {
-                            DSP::LspUtils::enforceLspClearance(mCurrentLsp.data(), 16);
+                            mFrozenLsp = mCurrentLsp;
+                            mFormantFreezeActive = true;
+                        }
+                        mCurrentLsp = mFrozenLsp;
+                    }
+                    else
+                    {
+                        mFormantFreezeActive = false;
+                        if (lpcSuccess)
+                        {
+                            float lpc_for_lsp[16];
+                            for (int i = 1; i <= 16; ++i)
+                            {
+                                lpc_for_lsp[i - 1] = -a[i]; // 極性反転の整合
+                            }
+                            bool lspSuccess = DSP::LspUtils::lpcToLsp(lpc_for_lsp, mCurrentLsp.data(), 16);
+                            if (lspSuccess)
+                            {
+                                DSP::LspUtils::enforceLspClearance(mCurrentLsp.data(), 16);
+                            }
+                        }
+                    }
+                }
+                else // LAR Mode
+                {
+                    if (freezeParam)
+                    {
+                        if (!mFormantFreezeActive)
+                        {
+                            mFrozenLar = mCurrentLar;
+                            mFormantFreezeActive = true;
+                        }
+                        mCurrentLar = mFrozenLar;
+                    }
+                    else
+                    {
+                        mFormantFreezeActive = false;
+                        if (lpcSuccess)
+                        {
+                            float lpc_for_lar[16];
+                            for (int i = 1; i <= 16; ++i)
+                            {
+                                lpc_for_lar[i - 1] = -a[i];
+                            }
+                            float parcor[16] = {0.0f};
+                            DSP::LspUtils::lpcToParcor(lpc_for_lar, parcor, 16);
+                            DSP::LspUtils::parcorToLar(parcor, mCurrentLar.data(), 16);
                         }
                     }
                 }
@@ -615,43 +760,104 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             }
 
             // 線形補間ステップの計算
-            for (int i = 0; i < 16; ++i)
+            if (interpolationMode == 0) // LSP
             {
-                mLspStep[i] = (mCurrentLsp[i] - mCurrentLspSmoothed[i]) / static_cast<float>(mControlRateBlockSize);
+                for (int i = 0; i < 16; ++i)
+                {
+                    mLspStep[i] = (mCurrentLsp[i] - mCurrentLspSmoothed[i]) / static_cast<float>(mControlRateBlockSize);
+                    mLarStep[i] = 0.0f;
+                }
+            }
+            else // LAR
+            {
+                for (int i = 0; i < 16; ++i)
+                {
+                    mLarStep[i] = (mCurrentLar[i] - mCurrentLarSmoothed[i]) / static_cast<float>(mControlRateBlockSize);
+                    mLspStep[i] = 0.0f;
+                }
             }
             mPitchStep = (mTargetPitchHz - mCurrentPitchHz) / static_cast<float>(mControlRateBlockSize);
+
+            // --- キャリアボイスのパラメータ同期 (コントロールレート) ---
+            if (isMidiMode)
+            {
+                mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, tracking, mCurrentPitchHz);
+            }
+            else
+            {
+                float activePitch = mIsVoiced ? mCurrentPitchHz : 130.0f;
+                mVoiceManager.setVoiceFrequency(0, activePitch);
+                mVoiceManager.setVoiceFrequency(1, activePitch);
+                mVoiceManager.setVoiceFrequency(2, activePitch);
+                mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, 0.0f, activePitch);
+            }
         }
         mControlRateCounter++;
 
-        // --- 1サンプルごとの LSP & ピッチ 補間 ---
+        // --- 1サンプルごとの LSP/LAR & ピッチ 補間 ---
         if (vocoderMode == 1 || isCrossfading)
         {
-            for (int i = 0; i < 16; ++i)
-            {
-                mCurrentLspSmoothed[i] += mLspStep[i];
-            }
             mCurrentPitchHz += mPitchStep;
 
-            // LSPの双一次周波数ワーピング (BFW) をサンプル精度で適用
-            std::vector<float> warpedLsp(16, 0.0f);
-            float alpha = std::tanh(currentFormantShift / 24.0f * 0.45f);
-
-            for (int i = 0; i < 16; ++i)
-            {
-                float w = std::acos(std::clamp(mCurrentLspSmoothed[i], -0.9999f, 0.9999f));
-                float sin_w = std::sin(w);
-                float cos_w = std::cos(w);
-                
-                float warped_w = w + 2.0f * std::atan((alpha * sin_w) / (1.0f - alpha * cos_w + 1e-9f));
-                warpedLsp[i] = std::cos(std::clamp(warped_w, 0.001f, 3.1415f));
-            }
-
-            // ワーピング後のLSPの安定化
-            DSP::LspUtils::enforceLspClearance(warpedLsp.data(), 16);
-
-            // LSP から LPC 係数に逆変換
             std::vector<float> interpLpc(16, 0.0f);
-            DSP::LspUtils::lspToLpc(warpedLsp.data(), interpLpc.data(), 16);
+
+            if (interpolationMode == 0) // LSP Mode
+            {
+                for (int i = 0; i < 16; ++i)
+                {
+                    mCurrentLspSmoothed[i] += mLspStep[i];
+                }
+
+                // LSPの双一次周波数ワーピング (BFW) をサンプル精度で適用
+                std::vector<float> warpedLsp(16, 0.0f);
+                float alpha = std::tanh(currentFormantShift / 24.0f * 0.45f);
+
+                for (int i = 0; i < 16; ++i)
+                {
+                    float w = std::acos(std::clamp(mCurrentLspSmoothed[i], -0.9999f, 0.9999f));
+                    float sin_w = std::sin(w);
+                    float cos_w = std::cos(w);
+                    
+                    float warped_w = w + 2.0f * std::atan((alpha * sin_w) / (1.0f - alpha * cos_w + 1e-9f));
+                    warpedLsp[i] = std::cos(std::clamp(warped_w, 0.001f, 3.1415f));
+                }
+
+                // ワーピング後のLSPの安定化
+                DSP::LspUtils::enforceLspClearance(warpedLsp.data(), 16);
+
+                // LSP から LPC 係数に逆変換
+                DSP::LspUtils::lspToLpc(warpedLsp.data(), interpLpc.data(), 16);
+            }
+            else // LAR Mode
+            {
+                for (int i = 0; i < 16; ++i)
+                {
+                    mCurrentLarSmoothed[i] += mLarStep[i];
+                }
+
+                // LAR空間での双一次周波数ワーピング
+                float alpha = std::tanh(currentFormantShift / 24.0f * 0.45f);
+                float warpedLar[16] = {0.0f};
+
+                float parcor[16] = {0.0f};
+                DSP::LspUtils::larToParcor(mCurrentLarSmoothed.data(), parcor, 16);
+
+                for (int i = 0; i < 16; ++i)
+                {
+                    float w = std::acos(std::clamp(parcor[i], -0.99f, 0.99f));
+                    float sin_w = std::sin(w);
+                    float cos_w = std::cos(w);
+                    float warped_w = w + 2.0f * std::atan((alpha * sin_w) / (1.0f - alpha * cos_w + 1e-9f));
+                    parcor[i] = std::cos(std::clamp(warped_w, 0.001f, 3.1415f));
+                }
+
+                DSP::LspUtils::parcorToLar(parcor, warpedLar, 16);
+                
+                // ワーピング後の LAR から LPC 係数に逆変換
+                float warpedParcor[16] = {0.0f};
+                DSP::LspUtils::larToParcor(warpedLar, warpedParcor, 16);
+                DSP::LspUtils::parcorToLpc(warpedParcor, interpLpc.data(), 16);
+            }
 
             // DspState の lpcCoeffs にロード
             for (int i = 0; i < 16; ++i)
@@ -826,6 +1032,33 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float wetSampleL = wetVal;
         float wetSampleR = wetVal;
 
+        // LPC Mode のステレオ全通 (APF) デコレレーター
+        if (vocoderMode == 1)
+        {
+            float g_L = std::sqrt(1.0f - inputPan);
+            float g_R = std::sqrt(inputPan);
+
+            // 左側 APF (delay = 13)
+            int rPtrL = (mApfWritePtrL - 13 + 64) % 64;
+            float delayed_xL = mApfBufferL[rPtrL];
+            float apfOutL = -0.6f * wetVal + delayed_xL;
+            mApfBufferL[mApfWritePtrL] = wetVal + 0.6f * apfOutL;
+            mApfWritePtrL = (mApfWritePtrL + 1) % 64;
+
+            // 右側 APF (delay = 17)
+            int rPtrR = (mApfWritePtrR - 17 + 64) % 64;
+            float delayed_xR = mApfBufferR[rPtrR];
+            float apfOutR = -0.6f * wetVal + delayed_xR;
+            mApfBufferR[mApfWritePtrR] = wetVal + 0.6f * apfOutR;
+            mApfWritePtrR = (mApfWritePtrR + 1) % 64;
+
+            // 相関度合い C_LR に基づく非相関ステレオ化
+            float beta = stereoWidth * std::sqrt(1.0f - inputCorrelation * inputCorrelation);
+            wetSampleL = g_L * wetVal + beta * apfOutL;
+            wetSampleR = g_R * wetVal - beta * apfOutR;
+        }
+
+        // Lo-Fi プロセッシング (左右独立して適用)
         if (character < 0.98f)
         {
             float bits = 4.0f + 20.0f * character;
@@ -834,11 +1067,36 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             int holdSamples = static_cast<int>(1.0f + 31.0f * (1.0f - character));
             int holdStartIdx = std::clamp((sample / holdSamples) * holdSamples, 0, numSamples - 1);
 
+            // サンプルホールド
             wetSampleL = mWetFsBuffer[holdStartIdx];
             wetSampleR = mWetFsBuffer[holdStartIdx];
 
+            // 量子化
             wetSampleL = std::round(wetSampleL * steps) / steps;
             wetSampleR = std::round(wetSampleR * steps) / steps;
+        }
+
+        // MSダイナミック・クロス・マトリクス (全モード適用)
+        {
+            float mid = 0.5f * (wetSampleL + wetSampleR);
+            float side = 0.5f * (wetSampleL - wetSampleR);
+
+            // 80Hz 1次 HPF (Side成分のみ)
+            float a1_hp = std::exp(-2.0f * 3.14159265f * 80.0f / static_cast<float>(srcSampleRate));
+            float sideFiltered = side - mMsPrevInput + a1_hp * mMsFilterState;
+            mMsPrevInput = side;
+            mMsFilterState = sideFiltered;
+
+            // 1.5ms 遅延 (Side成分のみ)
+            int delaySamples = std::clamp(static_cast<int>(0.0015 * srcSampleRate), 1, 120);
+            mMsDelayBuffer[mMsDelayWritePtr] = sideFiltered;
+            int readPtr = (mMsDelayWritePtr - delaySamples + 128) % 128;
+            float sideProcessed = mMsDelayBuffer[readPtr] * stereoWidth;
+            mMsDelayWritePtr = (mMsDelayWritePtr + 1) % 128;
+
+            // MSデコードして L/R に戻す
+            wetSampleL = mid + sideProcessed;
+            wetSampleR = mid - sideProcessed;
         }
 
         if (!std::isfinite(wetSampleL) || !std::isfinite(wetSampleR))

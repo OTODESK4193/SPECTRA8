@@ -133,6 +133,10 @@ private:
     std::vector<float> mCurrentLspSmoothed;
     std::vector<float> mLspStep;
     std::vector<float> mFrozenLsp;
+    std::vector<float> mCurrentLar;
+    std::vector<float> mCurrentLarSmoothed;
+    std::vector<float> mLarStep;
+    std::vector<float> mFrozenLar;
     bool mFormantFreezeActive = false;
 
     // ピッチ検出 & V/UV判定用
@@ -159,6 +163,17 @@ private:
     // 最終段リミッター用状態
     float mSmoothedGain = 1.0f;
     float mLimiterGain = 1.0f;
+
+    // MSクロスマトリクスおよびデコレレーター用状態
+    float mMsFilterState = 0.0f;
+    float mMsPrevInput = 0.0f;
+    std::vector<float> mMsDelayBuffer;
+    int mMsDelayWritePtr = 0;
+
+    std::vector<float> mApfBufferL;
+    std::vector<float> mApfBufferR;
+    int mApfWritePtrL = 0;
+    int mApfWritePtrR = 0;
 
     std::atomic<int> mErrorState{ 0 };
 

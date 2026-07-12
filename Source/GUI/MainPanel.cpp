@@ -74,6 +74,54 @@ VocoderTabPanel::VocoderTabPanel(juce::AudioProcessorValueTreeState& state)
     mLimiterLabel.setJustificationType(juce::Justification::centred);
     mLimiterLabel.setColour(juce::Label::textColourId, ColorPalette::textMuted);
     addAndMakeVisible(mLimiterLabel);
+
+    // 5. Window Type ComboBox
+    addAndMakeVisible(mWindowTypeCombo);
+    mWindowTypeCombo.addItem("Hann Window", 1);
+    mWindowTypeCombo.addItem("Hamming Window", 2);
+    mWindowTypeCombo.setEditableText(false);
+    mWindowTypeCombo.setJustificationType(juce::Justification::centred);
+    mWindowTypeCombo.setLookAndFeel(&mArcLookAndFeel);
+    mWindowTypeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        mState, "windowType", mWindowTypeCombo);
+
+    mWindowTypeLabel.setText("ANALYSIS WINDOW", juce::dontSendNotification);
+    mWindowTypeLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    mWindowTypeLabel.setJustificationType(juce::Justification::centred);
+    mWindowTypeLabel.setColour(juce::Label::textColourId, ColorPalette::textMuted);
+    addAndMakeVisible(mWindowTypeLabel);
+
+    // 6. Interpolation Mode ComboBox
+    addAndMakeVisible(mInterpolationModeCombo);
+    mInterpolationModeCombo.addItem("LSP Interpolate", 1);
+    mInterpolationModeCombo.addItem("LAR Interpolate", 2);
+    mInterpolationModeCombo.setEditableText(false);
+    mInterpolationModeCombo.setJustificationType(juce::Justification::centred);
+    mInterpolationModeCombo.setLookAndFeel(&mArcLookAndFeel);
+    mInterpolationModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        mState, "interpolationMode", mInterpolationModeCombo);
+
+    mInterpolationModeLabel.setText("LPC INTERPOLATION", juce::dontSendNotification);
+    mInterpolationModeLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    mInterpolationModeLabel.setJustificationType(juce::Justification::centred);
+    mInterpolationModeLabel.setColour(juce::Label::textColourId, ColorPalette::textMuted);
+    addAndMakeVisible(mInterpolationModeLabel);
+
+    // 7. Filterbank Type ComboBox
+    addAndMakeVisible(mFilterbankTypeCombo);
+    mFilterbankTypeCombo.addItem("BPF Bank", 1);
+    mFilterbankTypeCombo.addItem("Subtractive LR4", 2);
+    mFilterbankTypeCombo.setEditableText(false);
+    mFilterbankTypeCombo.setJustificationType(juce::Justification::centred);
+    mFilterbankTypeCombo.setLookAndFeel(&mArcLookAndFeel);
+    mFilterbankTypeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        mState, "filterbankType", mFilterbankTypeCombo);
+
+    mFilterbankTypeLabel.setText("FILTERBANK TYPE", juce::dontSendNotification);
+    mFilterbankTypeLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    mFilterbankTypeLabel.setJustificationType(juce::Justification::centred);
+    mFilterbankTypeLabel.setColour(juce::Label::textColourId, ColorPalette::textMuted);
+    addAndMakeVisible(mFilterbankTypeLabel);
 }
 
 void VocoderTabPanel::addDial(const juce::String& paramID, const juce::String& label, juce::Colour fillColour)
@@ -169,13 +217,22 @@ void VocoderTabPanel::resized()
     }
 
     // 右下セクション: マスターコンボ＆ノブ配置 (Dials 9〜10)
-    mLimiterLabel.setBounds(415, 250, 120, 16);
-    mLimiterCombo.setBounds(415, 270, 120, 24);
+    mLimiterLabel.setBounds(415, 235, 140, 16);
+    mLimiterCombo.setBounds(415, 255, 140, 24);
 
-    int masterStartX = 550;
-    int masterStartY = 280;
+    mFilterbankTypeLabel.setBounds(415, 295, 140, 16);
+    mFilterbankTypeCombo.setBounds(415, 315, 140, 24);
+
+    mWindowTypeLabel.setBounds(575, 235, 95, 16);
+    mWindowTypeCombo.setBounds(575, 255, 95, 24);
+
+    mInterpolationModeLabel.setBounds(680, 235, 95, 16);
+    mInterpolationModeCombo.setBounds(680, 255, 95, 24);
+
+    int masterStartX = 575;
+    int masterStartY = 310;
     mDials[9].slider->setBounds(masterStartX, masterStartY, dialSize, dialSize + 15);         // mix
-    mDials[10].slider->setBounds(masterStartX + dialSize + 30, masterStartY, dialSize, dialSize + 15); // outputLevel
+    mDials[10].slider->setBounds(masterStartX + dialSize + 20, masterStartY, dialSize, dialSize + 15); // outputLevel
 }
 
 

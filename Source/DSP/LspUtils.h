@@ -193,5 +193,75 @@ inline void enforceLspClearance(float* lsp, int order)
     }
 }
 
+// LPC to PARCOR (Step-down procedure)
+inline bool lpcToParcor(const float* lpc, float* parcor, int order)
+{
+    std::vector<float> a(order + 1, 0.0f);
+    std::vector<float> next_a(order + 1, 0.0f);
+    a[0] = 1.0f;
+    for (int i = 1; i <= order; ++i) {
+        a[i] = lpc[i - 1];
+    }
+
+    for (int i = order; i >= 1; --i) {
+        float ki = a[i];
+        parcor[i - 1] = ki;
+        if (std::abs(ki) >= 0.999f) {
+            ki = (ki > 0.0f) ? 0.999f : -0.999f;
+            parcor[i - 1] = ki;
+        }
+        
+        float denom = 1.0f - ki * ki;
+        if (denom < 1e-6f) denom = 1e-6f;
+
+        for (int j = 1; j < i; ++j) {
+            next_a[j] = (a[j] + ki * a[i - j]) / denom;
+        }
+        for (int j = 1; j < i; ++j) {
+            a[j] = next_a[j];
+        }
+    }
+    return true;
+}
+
+// PARCOR to LPC (Step-up procedure)
+inline void parcorToLpc(const float* parcor, float* lpc, int order)
+{
+    std::vector<float> a(order + 1, 0.0f);
+    std::vector<float> next_a(order + 1, 0.0f);
+    a[0] = 1.0f;
+
+    for (int i = 1; i <= order; ++i) {
+        float ki = parcor[i - 1];
+        next_a[i] = ki;
+        for (int j = 1; j < i; ++j) {
+            next_a[j] = a[j] - ki * a[i - j];
+        }
+        std::copy(next_a.begin(), next_a.begin() + i + 1, a.begin());
+    }
+
+    for (int i = 1; i <= order; ++i) {
+        lpc[i - 1] = a[i];
+    }
+}
+
+// PARCOR to LAR
+inline void parcorToLar(const float* parcor, float* lar, int order)
+{
+    for (int i = 0; i < order; ++i) {
+        float ki = std::clamp(parcor[i], -0.99f, 0.99f);
+        lar[i] = std::log((1.0f + ki) / (1.0f - ki));
+    }
+}
+
+// LAR to PARCOR
+inline void larToParcor(const float* lar, float* parcor, int order)
+{
+    for (int i = 0; i < order; ++i) {
+        float exp_g = std::exp(lar[i]);
+        parcor[i] = (exp_g - 1.0f) / (exp_g + 1.0f);
+    }
+}
+
 } // namespace LspUtils
 } // namespace DSP
