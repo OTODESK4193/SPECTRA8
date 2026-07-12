@@ -69,6 +69,12 @@ namespace DSP {
         float& outL,
         float& outR)
     {
+        (void)formantStretch;
+        (void)pulseWidth;
+        (void)wavetablePosition;
+        (void)k_coeffs;
+        (void)a2_coeffs;
+
         // ----------------------------------------------------
         // Mode 0: 従来の Filterbank モード (100% オリジナル動作維持)
         // ----------------------------------------------------

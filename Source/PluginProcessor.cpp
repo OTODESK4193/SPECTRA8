@@ -400,9 +400,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             // --- セクション 1 ---
             float s1_s1 = mAnalFilterS1[i];
             float s2_s1 = mAnalFilterS2[i];
-            float v1_s1 = mBandCoeffsA1[i] * (mBandCoeffsG[i] * (inSample - s2_s1) - s1_s1);
+            float v1_s1 = mBandCoeffsA1[i] * (s1_s1 + mBandCoeffsG[i] * (inSample - s2_s1));
             float y_bp_s1 = v1_s1;
-            float y_lp_s1 = mBandCoeffsG[i] * v1_s1 + s2_s1;
+            float y_lp_s1 = s2_s1 + mBandCoeffsG[i] * v1_s1;
 
             mAnalFilterS1[i] = 2.0f * y_bp_s1 - s1_s1;
             mAnalFilterS2[i] = 2.0f * y_lp_s1 - s2_s1;
@@ -411,9 +411,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             int idx_s2 = i + maxBands;
             float s1_s2 = mAnalFilterS1[idx_s2];
             float s2_s2 = mAnalFilterS2[idx_s2];
-            float v1_s2 = mBandCoeffsA1[i] * (mBandCoeffsG[i] * (y_bp_s1 - s2_s2) - s1_s2);
+            float v1_s2 = mBandCoeffsA1[i] * (s1_s2 + mBandCoeffsG[i] * (y_bp_s1 - s2_s2));
             float y_bp_s2 = v1_s2;
-            float y_lp_s2 = mBandCoeffsG[i] * v1_s2 + s2_s2;
+            float y_lp_s2 = s2_s2 + mBandCoeffsG[i] * v1_s2;
 
             mAnalFilterS1[idx_s2] = 2.0f * y_bp_s2 - s1_s2;
             mAnalFilterS2[idx_s2] = 2.0f * y_lp_s2 - s2_s2;

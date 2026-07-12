@@ -43,9 +43,35 @@ public:
 
     juce::String getDebugMessage() const
     {
-        int state = mErrorState.load();
-        if (state == 1) return "ERR: NaN/Inf detected!";
-        return "No errors. Running fine.";
+        int errState = mErrorState.load();
+        if (errState == 1) return "ERR: NaN/Inf detected! (Muted)";
+
+        float inEnv = mInputEnvelope;
+        int activeVoices = mVoiceManager.getNumActiveVoices();
+
+        juce::String msg = "Status: ";
+        if (inEnv < 0.0001f)
+        {
+            msg += "No Input (Dry Only) | ";
+        }
+        else
+        {
+            msg += "InLvl: " + juce::String(inEnv * 100.0f, 2) + "% | ";
+        }
+
+        if (activeVoices == 0)
+        {
+            msg += "NO ACTIVE VOICES";
+        }
+        else
+        {
+            msg += "Voices Active: " + juce::String(activeVoices);
+        }
+
+        int vMode = static_cast<int>(apvts.getRawParameterValue("vocoderMode")->load());
+        msg += " [" + juce::String(vMode == 0 ? "Filterbank" : "LPC") + "]";
+
+        return msg;
     }
 
     // Band EQ およびアナライザー用メソッド
