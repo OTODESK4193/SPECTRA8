@@ -195,11 +195,26 @@ private:
 
         if (voiced)
         {
-            pitchHz = hz;
-            // オクターブジャンプの抑制つき平滑化
-            const float ratio = pitchHz / juce::jmax(1.0f, smoothedHz);
-            const float alpha = (ratio > 1.9f || ratio < 0.53f) ? 0.15f : 0.5f;
-            smoothedHz += alpha * (pitchHz - smoothedHz);
+            // オクターブエラー（ダブルピッチ / ハーフピッチ）の自動補正
+            float correctedHz = hz;
+            if (smoothedHz > 30.0f)
+            {
+                const float rVal = hz / smoothedHz;
+                // 1オクターブ上の誤検出を元のオクターブに引き戻す
+                if (rVal >= 1.8f && rVal <= 2.2f)
+                {
+                    correctedHz = hz * 0.5f;
+                }
+                // 1オクターブ下の誤検出を元のオクターブに引き上げる
+                else if (rVal >= 0.45f && rVal <= 0.55f)
+                {
+                    correctedHz = hz * 2.0f;
+                }
+            }
+
+            // 生ピッチ・平滑化ピッチの両方に補正値を適用
+            pitchHz = correctedHz;
+            smoothedHz += 0.5f * (pitchHz - smoothedHz);
             smoothedHz = juce::jlimit(kMinHz, kMaxHz, smoothedHz);
         }
     }
