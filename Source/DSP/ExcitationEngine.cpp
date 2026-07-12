@@ -305,44 +305,52 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
         float phaseIncL = freqL / (float)kInternalSampleRate;
         float phaseIncR = freqR / (float)kInternalSampleRate;
 
-        // 3. ボイス別ADSRエンベロープ更新
-        switch (v.stage)
+        // 3. ボイス別ADSRエンベロープ更新 (MIDIモード時のみ)
+        if (isMidiMode)
         {
-        case Voice::Attack:
-            v.envValue += attStep;
-            if (v.envValue >= 1.0f)
+            switch (v.stage)
             {
-                v.envValue = 1.0f;
-                v.stage = Voice::Decay;
-            }
-            break;
+            case Voice::Attack:
+                v.envValue += attStep;
+                if (v.envValue >= 1.0f)
+                {
+                    v.envValue = 1.0f;
+                    v.stage = Voice::Decay;
+                }
+                break;
 
-        case Voice::Decay:
-            v.envValue -= decStep * (1.0f - mSustain);
-            if (v.envValue <= mSustain)
-            {
+            case Voice::Decay:
+                v.envValue -= decStep * (1.0f - mSustain);
+                if (v.envValue <= mSustain)
+                {
+                    v.envValue = mSustain;
+                    v.stage = Voice::Sustain;
+                }
+                break;
+
+            case Voice::Sustain:
                 v.envValue = mSustain;
-                v.stage = Voice::Sustain;
-            }
-            break;
+                break;
 
-        case Voice::Sustain:
-            v.envValue = mSustain;
-            break;
+            case Voice::Release:
+                v.envValue -= relStep * v.releaseStartVal;
+                if (v.envValue <= 0.0f)
+                {
+                    v.envValue = 0.0f;
+                    v.stage = Voice::Idle;
+                    v.active = false;
+                }
+                break;
 
-        case Voice::Release:
-            v.envValue -= relStep * v.releaseStartVal;
-            if (v.envValue <= 0.0f)
-            {
+            default:
                 v.envValue = 0.0f;
-                v.stage = Voice::Idle;
-                v.active = false;
+                break;
             }
-            break;
-
-        default:
-            v.envValue = 0.0f;
-            break;
+        }
+        else
+        {
+            // Autoモード時はADSR設定を無視してキャリア音量を最大固定
+            v.envValue = (i == 0) ? 1.0f : 0.8f;
         }
 
         // 4. 波形生成

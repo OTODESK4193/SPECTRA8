@@ -34,6 +34,7 @@ private:
     ValueKnob mKnobRelease;
     ValueKnob mKnobMix;
     ValueKnob mKnobOutLevel;
+    ValueKnob mKnobPitchQuantize; // 新設: ケロケロ
 
     // コンボ 6種
     juce::ComboBox mComboVocoderMode;
@@ -58,6 +59,7 @@ private:
     juce::Label mLblRelease { {}, "RELEASE" };
     juce::Label mLblMix { {}, "MIX" };
     juce::Label mLblOutLevel { {}, "OUT LEVEL" };
+    juce::Label mLblPitchQuantize { {}, "PITCH Q" }; // 新設: ケロケロ
 
     // アタッチメント
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentCharacter;
@@ -71,6 +73,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentRelease;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentMix;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentOutLevel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentPitchQuantize; // 新設: ケロケロ
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentVocoderMode;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentVoicingMode;

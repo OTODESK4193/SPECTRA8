@@ -38,6 +38,7 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
     setupKnob(mKnobRelease, mLblRelease, "s");
     setupKnob(mKnobMix, mLblMix, "%");
     setupKnob(mKnobOutLevel, mLblOutLevel, " dB");
+    setupKnob(mKnobPitchQuantize, mLblPitchQuantize, "%");
 
     // コンボボックス初期化
     auto setupCombo = [this](juce::ComboBox& c, const juce::StringArray& items)
@@ -73,6 +74,7 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
     mAttachmentRelease    = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "release", mKnobRelease);
     mAttachmentMix        = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "mix", mKnobMix);
     mAttachmentOutLevel   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "outputLevel", mKnobOutLevel);
+    mAttachmentPitchQuantize = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "pitchQuantize", mKnobPitchQuantize);
 
     mAttachmentVocoderMode     = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "vocoderMode", mComboVocoderMode);
     mAttachmentVoicingMode     = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "mode", mComboVoicingMode);
@@ -97,6 +99,7 @@ VocoderPanel::~VocoderPanel()
     mKnobRelease.setLookAndFeel(nullptr);
     mKnobMix.setLookAndFeel(nullptr);
     mKnobOutLevel.setLookAndFeel(nullptr);
+    mKnobPitchQuantize.setLookAndFeel(nullptr);
 }
 
 void VocoderPanel::paint(juce::Graphics& g)
@@ -161,16 +164,20 @@ void VocoderPanel::resized()
     mKnobTracking.setBounds(midX, midY1, knobSize, knobSize);
     mLblTracking.setBounds(midX - 10, midY1 + knobSize, knobSize + 20, labelH);
 
-    // 下段 2個ノブ (FMT SHIFT, FMT STRETCH)
+    // 下段 3個ノブ (FMT SHIFT, FMT STRETCH, PITCH Q)
     int midY2 = midArea.getY() + 144;
-    midX = midArea.getX() + (midArea.getWidth() - knobSize * 2) / 3;
+    midX = midArea.getX() + (midArea.getWidth() - knobSize * 3) / 4;
     
     mKnobFmtShift.setBounds(midX, midY2, knobSize, knobSize);
     mLblFmtShift.setBounds(midX - 10, midY2 + knobSize, knobSize + 20, labelH);
     
-    midX += knobSize + (midArea.getWidth() - knobSize * 2) / 3;
+    midX += knobSize + (midArea.getWidth() - knobSize * 3) / 4;
     mKnobFmtStretch.setBounds(midX, midY2, knobSize, knobSize);
     mLblFmtStretch.setBounds(midX - 10, midY2 + knobSize, knobSize + 20, labelH);
+
+    midX += knobSize + (midArea.getWidth() - knobSize * 3) / 4;
+    mKnobPitchQuantize.setBounds(midX, midY2, knobSize, knobSize);
+    mLblPitchQuantize.setBounds(midX - 10, midY2 + knobSize, knobSize + 20, labelH);
 
     // 右セクション: ADSR / MIX / OUT (width: 30%)
     auto rightArea = r;

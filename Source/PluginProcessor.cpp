@@ -55,6 +55,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("outputLevel", 1), "Output Level", -60.0f, 12.0f, 0.0f));
 
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("pitchQuantize", 1), "Pitch Quantize", 0.0f, 100.0f, 0.0f));
+
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("mode", 1), "Mode", juce::StringArray{ "Auto", "MIDI" }, 0));
 
@@ -91,6 +94,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("porta", 1), "Portamento", 0.0f, 2.0f, 0.1f)); // ポルタメント
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("basePitch", 1), "Base Pitch", 50.0f, 500.0f, 130.0f));
 
     // MIDI用ADSR
     layout.add(std::make_unique<juce::AudioParameterFloat>(
@@ -357,8 +363,18 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         // 有声音ピッチの取得 (トラッカーの値)
         float pitchHz = mPitchTracker.isVoiced() ? mPitchTracker.getPitchHz() : 130.0f;
         // Tracking パラメータの適用 (Autoモードでも0%のときは基準ピッチに固定しうねりを防止)
+        float basePitch = apvts.getRawParameterValue("basePitch")->load();
         float tracking = apvts.getRawParameterValue("tracking")->load() * 0.01f;
-        float activePitch = 130.0f + (pitchHz - 130.0f) * tracking;
+        float activePitch = basePitch + (pitchHz - basePitch) * tracking;
+
+        // ケロケロ（ピッチ量子化）の適用
+        float qAmt = apvts.getRawParameterValue("pitchQuantize")->load() * 0.01f;
+        if (qAmt > 0.001f && activePitch > 20.0f)
+        {
+            float note = std::round(12.0f * std::log2(activePitch / 440.0f) + 69.0f);
+            float qPitch = 440.0f * std::pow(2.0f, (note - 69.0f) / 12.0f);
+            activePitch = activePitch + (qPitch - activePitch) * qAmt;
+        }
 
         mExcitationEngine.processSample(carrierL, carrierR, activePitch, isMidiMode);
 

@@ -31,6 +31,7 @@ ExcitationPanel::ExcitationPanel(juce::AudioProcessorValueTreeState& state)
     setupKnob(mKnobNoise, mLblNoise, "%");
     setupKnob(mKnobLofi, mLblLofi);
     setupKnob(mKnobPorta, mLblPorta, "s");
+    setupKnob(mKnobBasePitch, mLblBasePitch, " Hz");
 
     mComboWaveform.setColour(juce::ComboBox::backgroundColourId, SpectraColors::knobTrack);
     mComboWaveform.setColour(juce::ComboBox::textColourId, SpectraColors::text);
@@ -49,6 +50,7 @@ ExcitationPanel::ExcitationPanel(juce::AudioProcessorValueTreeState& state)
     mAttachmentNoise      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "noise", mKnobNoise);
     mAttachmentLofi       = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "lofi", mKnobLofi);
     mAttachmentPorta      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "porta", mKnobPorta);
+    mAttachmentBasePitch  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "basePitch", mKnobBasePitch);
 
     mAttachmentWaveform   = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "waveform", mComboWaveform);
 }
@@ -61,6 +63,7 @@ ExcitationPanel::~ExcitationPanel()
     mKnobNoise.setLookAndFeel(nullptr);
     mKnobLofi.setLookAndFeel(nullptr);
     mKnobPorta.setLookAndFeel(nullptr);
+    mKnobBasePitch.setLookAndFeel(nullptr);
 }
 
 void ExcitationPanel::paint(juce::Graphics& g)
@@ -113,4 +116,9 @@ void ExcitationPanel::resized()
 
     mKnobPorta.setBounds(startX + stepX * 2, rowY2, knobSize, knobSize);
     mLblPorta.setBounds(startX + stepX * 2 - 10, rowY2 + knobSize, knobSize + 20, labelH);
+
+    // 左側下段: BASE PITCHノブ (波形選択コンボの下)
+    const int basePitchX = r.getX() + 32 + (comboW - knobSize) / 2;
+    mKnobBasePitch.setBounds(basePitchX, rowY2, knobSize, knobSize);
+    mLblBasePitch.setBounds(basePitchX - 10, rowY2 + knobSize, knobSize + 20, labelH);
 }
