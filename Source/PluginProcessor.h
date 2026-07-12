@@ -46,6 +46,7 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
+    bool mIsInitialized = false;
     juce::AudioProcessorValueTreeState apvts;
 
     juce::String getDebugMessage() const
@@ -94,7 +95,7 @@ private:
     std::vector<float> m16kWetR;
 
     int mControlRateCounter = 0;
-    std::atomic<float> mInputEnvelope { 0.0f };
+    alignas(8) std::atomic<float> mInputEnvelope { 0.0f };
     int mPrevMode = -1;
     float mLastVoicedPitch = 130.0f;
 

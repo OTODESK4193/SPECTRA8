@@ -17,10 +17,12 @@ SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
         mBandGains[(size_t)i].store(1.0f);
         mBandLevelsForUi[(size_t)i].store(0.0f);
     }
+    mIsInitialized = true;
 }
 
 SPECTRA8AudioProcessor::~SPECTRA8AudioProcessor()
 {
+    mIsInitialized = false;
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::createParameterLayout()
@@ -97,6 +99,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("basePitch", 1), "Base Pitch", 50.0f, 500.0f, 130.0f));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("noiseColor", 1), "Noise Color", 
+        juce::NormalisableRange<float>(100.0f, 10000.0f, 0.0f, 0.25f), 1000.0f));
 
     // MIDI用ADSR
     layout.add(std::make_unique<juce::AudioParameterFloat>(
@@ -196,6 +202,12 @@ bool SPECTRA8AudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) 
 
 void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
+    if (!mIsInitialized)
+    {
+        buffer.clear();
+        return;
+    }
+
     juce::ScopedNoDenormals noDenormals;
     const int numSamples = buffer.getNumSamples();
     const int numInputs = getTotalNumInputChannels();
@@ -349,7 +361,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             const float decay = apvts.getRawParameterValue("decay")->load();
             const float sustain = apvts.getRawParameterValue("sustain")->load();
             const float release = apvts.getRawParameterValue("release")->load();
-            const float noiseColor = apvts.getRawParameterValue("noiseColor")->load();
+            
+            float noiseColor = 1000.0f;
+            if (auto* p = apvts.getRawParameterValue("noiseColor"))
+                noiseColor = p->load();
 
             // モジュール側の同期
             mExcitationEngine.syncParameters(waveform, wtPos, pulseWidth, detune, noise, lofi, porta,
@@ -382,13 +397,18 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float tracking = apvts.getRawParameterValue("tracking")->load() * 0.01f;
         float activePitch = basePitch + (pitchHz - basePitch) * tracking;
 
+        // 安全対策: activePitch が異常値のときは basePitch に戻す
+        if (std::isnan(activePitch) || activePitch <= 20.0f || activePitch > 8000.0f)
+            activePitch = basePitch;
+
         // ケロケロ（ピッチ量子化）の適用
         float qAmt = apvts.getRawParameterValue("pitchQuantize")->load() * 0.01f;
-        if (qAmt > 0.001f && activePitch > 20.0f)
+        if (qAmt > 0.001f && activePitch > 20.0f && !std::isnan(activePitch))
         {
             float note = std::round(12.0f * std::log2(activePitch / 440.0f) + 69.0f);
             float qPitch = 440.0f * std::pow(2.0f, (note - 69.0f) / 12.0f);
-            activePitch = activePitch + (qPitch - activePitch) * qAmt;
+            if (!std::isnan(qPitch) && qPitch > 20.0f)
+                activePitch = activePitch + (qPitch - activePitch) * qAmt;
         }
 
         mExcitationEngine.processSample(carrierL, carrierR, activePitch, isMidiMode);

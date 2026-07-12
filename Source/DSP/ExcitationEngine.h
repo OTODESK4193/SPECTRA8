@@ -47,7 +47,9 @@ private:
         void reset() { s1 = 0.0f; s2 = 0.0f; }
         float processBPF(float in, float fc, float sampleRate) noexcept
         {
-            float g = std::tan(3.14159265f * fc / sampleRate);
+            // fc を安全な範囲 (ナイキスト周波数の 90% 以下) に制限して tan の発散(NaN)を防止
+            float safeFc = juce::jlimit(20.0f, sampleRate * 0.45f, fc);
+            float g = std::tan(3.14159265f * safeFc / sampleRate);
             float r = 0.5f; // Q = 1.0相当 (1/(2Q))
             float h = 1.0f / (1.0f + g * (g + 2.0f * r));
             float v0 = in;
