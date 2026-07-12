@@ -95,6 +95,7 @@ private:
 
     int mControlRateCounter = 0;
     std::atomic<float> mInputEnvelope { 0.0f };
+    int mPrevMode = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessor)
 };

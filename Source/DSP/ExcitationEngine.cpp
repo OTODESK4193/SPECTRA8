@@ -371,6 +371,14 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
     outL = (1.0f - mNoiseMix) * voiceSumL + mNoiseMix * noiseSampleL;
     outR = (1.0f - mNoiseMix) * voiceSumR + mNoiseMix * noiseSampleR;
 
+    // MIDIモード時、鍵盤を弾いていない（アクティブなボイスが0）ときはキャリアを完全ミュート（常時ノイズ出力を防止）
+    if (isMidiMode && activeVoiceCount == 0)
+    {
+        outL = 0.0f;
+        outR = 0.0f;
+        return;
+    }
+
     // 7. LoFiポストエフェクト適用
     applyLoFi(outL, outR);
 }

@@ -258,6 +258,13 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     const int mode = static_cast<int>(apvts.getRawParameterValue("mode")->load());
     const bool isMidiMode = (mode == 1);
 
+    if (mPrevMode != mode)
+    {
+        mExcitationEngine.reset();
+        mFilterbankVocoder.reset();
+        mPrevMode = mode;
+    }
+
     for (int s = 0; s < num16kSamples; ++s)
     {
         const float inSample = mDownsampledBuffer[(size_t)s];
@@ -376,6 +383,18 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     float outLevelDb = apvts.getRawParameterValue("outputLevel")->load();
     float outGain = std::pow(10.0f, outLevelDb / 20.0f);
 
+    // ゲートゲインの算出 (リニア入力エンベロープに基づくソフトゲート)
+    float envVal = mInputEnvelope.load();
+    float threshold = 0.005f; // ナレーション等の合間の極小ノイズを遮断するしきい値
+    float gateGain = 1.0f;
+    if (!isMidiMode)
+    {
+        if (envVal < threshold)
+            gateGain = 0.0f;
+        else if (envVal < threshold + 0.005f)
+            gateGain = (envVal - threshold) / 0.005f; // 0.005〜0.01の間で滑らかにフェード
+    }
+
     float* writeL = buffer.getWritePointer(0);
     float* writeR = (numInputs > 1) ? buffer.getWritePointer(1) : writeL;
 
@@ -389,8 +408,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             int idx1 = std::min(num16kSamples - 1, idx0 + 1);
             float frac = (float)(mUpsampleTimeAccum - idx0);
 
-            float wetSampleL = m16kWetL[(size_t)idx0] * (1.0f - frac) + m16kWetL[(size_t)idx1] * frac;
-            float wetSampleR = m16kWetR[(size_t)idx0] * (1.0f - frac) + m16kWetR[(size_t)idx1] * frac;
+            float wetSampleL = (m16kWetL[(size_t)idx0] * (1.0f - frac) + m16kWetL[(size_t)idx1] * frac) * gateGain;
+            float wetSampleR = (m16kWetR[(size_t)idx0] * (1.0f - frac) + m16kWetR[(size_t)idx1] * frac) * gateGain;
 
             mUpsampleTimeAccum += step;
 
