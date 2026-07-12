@@ -356,10 +356,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         
         // 有声音ピッチの取得 (トラッカーの値)
         float pitchHz = mPitchTracker.isVoiced() ? mPitchTracker.getPitchHz() : 130.0f;
-        // Tracking パラメータの適用
+        // Tracking パラメータの適用 (Autoモードでも0%のときは基準ピッチに固定しうねりを防止)
         float tracking = apvts.getRawParameterValue("tracking")->load() * 0.01f;
-        // MIDIモードでない場合は Tracking=100% の時に入力ピッチを完璧に追従
-        float activePitch = isMidiMode ? (130.0f + (pitchHz - 130.0f) * tracking) : pitchHz;
+        float activePitch = 130.0f + (pitchHz - 130.0f) * tracking;
 
         mExcitationEngine.processSample(carrierL, carrierR, activePitch, isMidiMode);
 

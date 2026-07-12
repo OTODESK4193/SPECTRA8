@@ -120,12 +120,10 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
         }
 
         // エンベロープ追従（キャラクター値でアタック/リリースタイムを調整）
-        // character: 0.0 (遅い) 〜 1.0 (極めて速い)
+        // character: 0.0 (遅い / 約12ms) 〜 1.0 (極めて速い / 約1.2ms) の時定数へ
         float env = std::abs(analOut);
-        float baseAttack = 0.02f;  // 約20ms相当
-        float baseRelease = 0.003f; // 約150ms相当
-        float att = juce::jlimit(0.001f, 0.2f, baseAttack * (character * 4.0f + 0.1f));
-        float rel = juce::jlimit(0.0002f, 0.05f, baseRelease * (character * 4.0f + 0.1f));
+        float att = 0.005f + character * 0.045f;
+        float rel = 0.001f + character * 0.009f;
 
         float coeff = (env > mEnvValues[(size_t)i]) ? att : rel;
         mEnvValues[(size_t)i] += coeff * (env - mEnvValues[(size_t)i]);
