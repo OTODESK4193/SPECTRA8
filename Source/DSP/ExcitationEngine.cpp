@@ -37,6 +37,9 @@ void ExcitationEngine::reset()
         v.envValue = 0.0f;
         v.releaseStartVal = 0.0f;
     }
+
+    mNoiseFilterL.reset();
+    mNoiseFilterR.reset();
 }
 
 void ExcitationEngine::noteOn(int noteNumber, float velocity) noexcept
@@ -76,13 +79,15 @@ void ExcitationEngine::allNotesOff() noexcept
 
 void ExcitationEngine::syncParameters(int waveform, float wtPos, float pulseWidth, float detuneCents, 
                                     float noiseMix, float lofi, float portaTimeSec,
-                                    float attackSec, float decaySec, float sustainVal, float releaseSec) noexcept
+                                    float attackSec, float decaySec, float sustainVal, float releaseSec,
+                                    float noiseColorHz) noexcept
 {
     mWaveform = juce::jlimit(0, 2, waveform);
     mWtPos = juce::jlimit(0.0f, 1.0f, wtPos);
     mPulseWidth = juce::jlimit(0.05f, 0.95f, pulseWidth);
     mDetuneCents = juce::jlimit(0.0f, 1200.0f, detuneCents);
     mNoiseMix = juce::jlimit(0.0f, 1.0f, noiseMix);
+    mNoiseColor = juce::jlimit(100.0f, 10000.0f, noiseColorHz);
     mLofi = juce::jlimit(0.0f, 1.0f, lofi);
     mPortaTime = juce::jlimit(0.0f, 2.0f, portaTimeSec);
 
@@ -370,6 +375,10 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
     // -1.0 〜 +1.0 のホワイトノイズ
     float noiseSampleL = mRng.nextFloat() * 2.0f - 1.0f;
     float noiseSampleR = mRng.nextFloat() * 2.0f - 1.0f;
+
+    // バンドパスフィルタでノイズの音程（色）を変更
+    noiseSampleL = mNoiseFilterL.processBPF(noiseSampleL, mNoiseColor, (float)kInternalSampleRate);
+    noiseSampleR = mNoiseFilterR.processBPF(noiseSampleR, mNoiseColor, (float)kInternalSampleRate);
 
     // ポリフォニック合算音がクリップしないようにスケーリング
     float voiceScale = (activeVoiceCount > 1) ? (1.0f / std::sqrt((float)activeVoiceCount)) : 1.0f;

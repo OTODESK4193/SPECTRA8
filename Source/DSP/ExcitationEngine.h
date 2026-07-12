@@ -34,11 +34,31 @@ public:
 
     void syncParameters(int waveform, float wtPos, float pulseWidth, float detuneCents, 
                         float noiseMix, float lofi, float portaTimeSec,
-                        float attackSec, float decaySec, float sustainVal, float releaseSec) noexcept;
+                        float attackSec, float decaySec, float sustainVal, float releaseSec,
+                        float noiseColorHz) noexcept;
 
     void processSample(float& outL, float& outR, float externalPitchHz, bool isMidiMode) noexcept;
 
 private:
+    struct SvfFilter
+    {
+        float s1 = 0.0f;
+        float s2 = 0.0f;
+        void reset() { s1 = 0.0f; s2 = 0.0f; }
+        float processBPF(float in, float fc, float sampleRate) noexcept
+        {
+            float g = std::tan(3.14159265f * fc / sampleRate);
+            float r = 0.5f; // Q = 1.0相当 (1/(2Q))
+            float h = 1.0f / (1.0f + g * (g + 2.0f * r));
+            float v0 = in;
+            float v1 = (s1 + g * (v0 - s2)) * h;
+            float v2 = s2 + g * v1;
+            s1 = 2.0f * v1 - s1;
+            s2 = 2.0f * v2 - s2;
+            return v1;
+        }
+    };
+
     struct Voice
     {
         bool active = false;
@@ -78,6 +98,7 @@ private:
     float mPulseWidth = 0.5f;
     float mDetuneCents = 0.0f;
     float mNoiseMix = 0.0f;
+    float mNoiseColor = 1000.0f; // 新設: ノイズ音程 (BPF Cutoff)
     float mLofi = 0.0f;
     float mPortaTime = 0.0f;
     
@@ -91,6 +112,10 @@ private:
     float mLofiRateCounter = 0.0f;
     float mLofiLastValL = 0.0f;
     float mLofiLastValR = 0.0f;
+
+    // ノイズフィルタ
+    SvfFilter mNoiseFilterL;
+    SvfFilter mNoiseFilterR;
 
     juce::Random mRng;
 };

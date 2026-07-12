@@ -349,10 +349,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             const float decay = apvts.getRawParameterValue("decay")->load();
             const float sustain = apvts.getRawParameterValue("sustain")->load();
             const float release = apvts.getRawParameterValue("release")->load();
+            const float noiseColor = apvts.getRawParameterValue("noiseColor")->load();
 
             // モジュール側の同期
             mExcitationEngine.syncParameters(waveform, wtPos, pulseWidth, detune, noise, lofi, porta,
-                                              attack, decay, sustain, release);
+                                              attack, decay, sustain, release, noiseColor);
         }
         mControlRateCounter++;
 
@@ -360,8 +361,22 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float carrierL = 0.0f;
         float carrierR = 0.0f;
         
-        // 有声音ピッチの取得 (トラッカーの値)
-        float pitchHz = mPitchTracker.isVoiced() ? mPitchTracker.getPitchHz() : 130.0f;
+        // 有声音ピッチの取得 (最後の有声ピッチ保持 + PORTA=0時の平滑化バイパス + 揺らぎ無視デッドバンド)
+        float pitchHz = mLastVoicedPitch;
+        if (mPitchTracker.isVoiced())
+        {
+            float portaVal = apvts.getRawParameterValue("porta")->load();
+            float rawHz = (portaVal < 0.005f) ? mPitchTracker.getRawPitchHz() : mPitchTracker.getPitchHz();
+            
+            // 約20セント(1.0116倍/0.9885倍)以内の微小な揺らぎは無視する(安定化)
+            float ratio = rawHz / juce::jmax(1.0f, mLastVoicedPitch);
+            if (ratio > 1.0116f || ratio < 0.9885f)
+            {
+                pitchHz = rawHz;
+                mLastVoicedPitch = pitchHz;
+            }
+        }
+
         // Tracking パラメータの適用 (Autoモードでも0%のときは基準ピッチに固定しうねりを防止)
         float basePitch = apvts.getRawParameterValue("basePitch")->load();
         float tracking = apvts.getRawParameterValue("tracking")->load() * 0.01f;

@@ -77,6 +77,7 @@ public:
     }
 
     float getPitchHz() const noexcept { return smoothedHz; }
+    float getRawPitchHz() const noexcept { return pitchHz; }
     bool  isVoiced() const noexcept { return voiced; }
     float getClarity() const noexcept { return clarity; }
     float getUnvoicedHfRatio() const noexcept { return unvoicedHfRatio; }

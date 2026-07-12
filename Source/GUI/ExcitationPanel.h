@@ -21,7 +21,7 @@ public:
 private:
     juce::AudioProcessorValueTreeState& apvts;
 
-    // ノブ 7基
+    // ノブ 8基
     ValueKnob mKnobWtPos;
     ValueKnob mKnobPulseWidth;
     ValueKnob mKnobDetune;
@@ -29,6 +29,7 @@ private:
     ValueKnob mKnobLofi;
     ValueKnob mKnobPorta;
     ValueKnob mKnobBasePitch; // 新設: 基準ピッチ
+    ValueKnob mKnobNoiseColor; // 新設: ノイズピッチ
 
     // コンボ 1種
     juce::ComboBox mComboWaveform;
@@ -41,6 +42,7 @@ private:
     juce::Label mLblLofi { {}, "LOFI" };
     juce::Label mLblPorta { {}, "PORTA" };
     juce::Label mLblBasePitch { {}, "BASE PITCH" }; // 新設: 基準ピッチ
+    juce::Label mLblNoiseColor { {}, "NOISE COLOR" }; // 新設: ノイズピッチ
 
     // アタッチメント
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentWtPos;
@@ -50,6 +52,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentLofi;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentPorta;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentBasePitch; // 新設: 基準ピッチ
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentNoiseColor; // 新設: ノイズピッチ
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentWaveform;
 
