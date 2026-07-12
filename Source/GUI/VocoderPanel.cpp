@@ -116,7 +116,6 @@ void VocoderPanel::paint(juce::Graphics& g)
 
     // 縦セクションの区切り線
     const float w = r.getWidth();
-    const float h = r.getHeight();
     g.setColour(SpectraColors::panelLine);
     g.drawVerticalLine((int)(r.getX() + w * 0.35f), r.getY() + 10.0f, r.getBottom() - 10.0f);
     g.drawVerticalLine((int)(r.getX() + w * 0.70f), r.getY() + 10.0f, r.getBottom() - 10.0f);
@@ -126,7 +125,6 @@ void VocoderPanel::resized()
 {
     auto r = getLocalBounds().reduced(16);
     const int w = r.getWidth();
-    const int h = r.getHeight();
 
     // 左セクション: 設定 & 分析モード (width: 35%)
     auto leftArea = r.removeFromLeft((int)(w * 0.35f));

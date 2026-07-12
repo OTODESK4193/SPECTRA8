@@ -84,7 +84,6 @@ void ExcitationPanel::resized()
 {
     auto r = getLocalBounds().reduced(16);
     const int w = r.getWidth();
-    const int h = r.getHeight();
 
     // 左側: 波形選択コンボボックス
     const int comboH = 26;

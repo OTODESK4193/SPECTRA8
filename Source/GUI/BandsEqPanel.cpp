@@ -137,20 +137,29 @@ void BandsEqPanel::mouseDown(const juce::MouseEvent& e)
         confirmResetAllBands();
         return;
     }
+
+    // ダブルクリックの2回目のクリックではカーブを描き込まない
+    // (直後の mouseDoubleClick によるリセットを上書きしないため)
+    if (e.getNumberOfClicks() > 1)
+        return;
+
     handleMouse(e);
 }
 
 void BandsEqPanel::mouseDrag(const juce::MouseEvent& e)
 {
-    if (e.mods.isPopupMenu())
-        return; // 右ドラッグではカーブを描き込まない
+    // 右ドラッグ、およびダブルクリック中の微小ドラッグではカーブを描き込まない
+    if (e.mods.isPopupMenu() || e.getNumberOfClicks() > 1)
+        return;
 
     handleMouse(e);
 }
 
 void BandsEqPanel::mouseDoubleClick(const juce::MouseEvent& e)
 {
-    // ダブルクリック → そのバンドのみ 0dB にリセット
+    // 左ダブルクリック → そのバンドのみ 0dB にリセット
+    if (e.mods.isPopupMenu()) return;
+
     const int bandIdx = bandIndexAt(e);
     if (bandIdx < 0) return;
 
@@ -173,13 +182,15 @@ int BandsEqPanel::bandIndexAt(const juce::MouseEvent& e) const
 
 void BandsEqPanel::confirmResetAllBands()
 {
+    // プラグインウィンドウでは JUCE製 AlertWindow が表示されない・背面に隠れる事例があるため、
+    // OSネイティブのメッセージボックス (Windows: Win32 MessageBox) を使用する
     auto options = juce::MessageBoxOptions::makeOptionsYesNo(
         juce::MessageBoxIconType::QuestionIcon,
         "BANDS EQ Reset",
         "Reset all band gains to 0 dB?",
         "Yes", "No", this);
 
-    juce::AlertWindow::showAsync(options,
+    juce::NativeMessageBox::showAsync(options,
         [safeThis = juce::Component::SafePointer<BandsEqPanel>(this)](int result)
         {
             // result: 1 = Yes, 0 = No (JUCEの2ボタン規約)
@@ -198,13 +209,12 @@ void BandsEqPanel::handleMouse(const juce::MouseEvent& e)
     if (!r.contains(e.getPosition())) return;
 
     const float w = (float)r.getWidth();
-    const float h = (float)r.getHeight();
 
-    const int activeBands = juce::jlimit(8, kMaxBands, 
+    const int activeBands = juce::jlimit(8, kMaxBands,
         static_cast<int>(apvts.getRawParameterValue("bandCount")->load()));
 
     const float bandW = w / (float)activeBands;
-    
+
     // X座標からバンドを特定
     int bandIdx = (int)(((float)(e.x - r.getX())) / bandW);
     bandIdx = juce::jlimit(0, activeBands - 1, bandIdx);

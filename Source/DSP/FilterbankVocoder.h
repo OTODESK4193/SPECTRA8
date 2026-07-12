@@ -47,16 +47,18 @@ private:
     };
 
     // Subtractive モードのメイクアップゲイン (分析側エンベロープに適用)
-    // BPF Bank は SVF-BP 2段カスケード (利得 Q^2=100/側) の高利得構造のため、
-    // 正規化済み(ピーク0dB)のLR4バンクとの聴感レベル整合に +36dB を与える (数値実測による較正)
-    static constexpr float kSubMakeup = 64.0f;
+    // BPF Bank は SVF-BP 2段カスケード (利得 Q^2=100/側) の高利得構造で常時リミッター駆動のため、
+    // 正規化済み(ピーク0dB)の減算型バンクとの聴感レベル整合に +48dB を与える
+    // (ユーザー実測: BPF +1.58dB(クリップ레일) vs 旧Sub -18.5dB → 差約20dB を補正した較正値)
+    static constexpr float kSubMakeup = 256.0f;
 
-    struct LR4State
+    struct SubBandState
     {
-        // 減算型バンド = LR4-HPF(下端エッジ) → LR4-LPF(上端エッジ) の直列 + ピーク正規化
-        SVFState hiLp1, hiLp2; // 上端エッジ用 LR4-LPF (2次Butterworth×2段)
-        SVFState loHp1, loHp2; // 下端エッジ用 LR4-HPF (2次Butterworth×2段)
-        void reset() { hiLp1.reset(); hiLp2.reset(); loHp1.reset(); loHp2.reset(); }
+        // 減算型バンド = 8次HPF(下端エッジ) → 8次LPF(上端エッジ) の直列 + ピーク正規化
+        // (2次Butterworth Q=0.707 を4段カスケード、スロープ48dB/oct)
+        std::array<SVFState, 4> hiLp; // 上端エッジ用 LPF セクション
+        std::array<SVFState, 4> loHp; // 下端エッジ用 HPF セクション
+        void reset() { for (auto& s : hiLp) s.reset(); for (auto& s : loHp) s.reset(); }
     };
 
     void computeFilterCoeffs(float fc, float Q, float& g, float& k, float& a1) noexcept
@@ -88,15 +90,17 @@ private:
     }
 
     // バンド中心 (エッジの幾何平均) での利得を 0dB に揃える正規化ゲインの解析計算
-    // |LR4-LPF(f)| = 1/(1+(f/fc)^4), |LR4-HPF(f)| = (f/fc)^4/(1+(f/fc)^4) を利用
+    // Butterworth2次×2段: |LPF| = 1/(1+(f/fc)^4), |HPF| = (f/fc)^4/(1+(f/fc)^4)
+    // 4段カスケード(8次)はその2乗
     static float computeBandNorm(float eLo, float eHi) noexcept
     {
         const float fc = std::sqrt(eLo * eHi);
         const float tl = fc / eLo, th = fc / eHi;
         const float tl2 = tl * tl, th2 = th * th;
         const float xl4 = tl2 * tl2, xh4 = th2 * th2;
-        const float magSq = (xl4 / (1.0f + xl4)) * (1.0f / (1.0f + xh4));
-        return (magSq > 0.01f) ? (1.0f / magSq) : 100.0f; // 安全上限 +40dB
+        const float m1 = (xl4 / (1.0f + xl4)) * (1.0f / (1.0f + xh4));
+        const float mag = m1 * m1; // 8次 = 4次特性の2乗
+        return (mag > 0.005f) ? (1.0f / mag) : 200.0f; // 安全上限 +46dB
     }
 
     double mSampleRate = 44100.0;
@@ -112,12 +116,12 @@ private:
 
     // フィルタ状態変数
     std::array<std::array<SVFState, 2>, kMaxBands> mAnalSvf {}; // 2段カスケード用
-    std::array<LR4State, kMaxBands> mAnalLr4 {};
+    std::array<SubBandState, kMaxBands> mAnalSub {};
 
     std::array<std::array<SVFState, 2>, kMaxBands> mSynthSvfL {};
     std::array<std::array<SVFState, 2>, kMaxBands> mSynthSvfR {};
-    std::array<LR4State, kMaxBands> mSynthLr4L {};
-    std::array<LR4State, kMaxBands> mSynthLr4R {};
+    std::array<SubBandState, kMaxBands> mSynthSubL {};
+    std::array<SubBandState, kMaxBands> mSynthSubR {};
 
     // 包絡線追従
     std::array<float, kMaxBands> mEnvValues {};

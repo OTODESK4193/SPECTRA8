@@ -11,7 +11,8 @@ ExcitationEngine::ExcitationEngine()
 
 void ExcitationEngine::prepare(double sampleRate)
 {
-    // 内部は常に 16kHz で動作するため、サンプルレート低減等の一部の定数を調整
+    // 内部は常に 16kHz で動作するため、ホストサンプルレートは未使用
+    juce::ignoreUnused(sampleRate);
     reset();
 }
 

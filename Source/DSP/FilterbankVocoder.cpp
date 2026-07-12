@@ -55,15 +55,15 @@ void FilterbankVocoder::reset()
     {
         mAnalSvf[(size_t)i][0].reset();
         mAnalSvf[(size_t)i][1].reset();
-        mAnalLr4[(size_t)i].reset();
+        mAnalSub[(size_t)i].reset();
 
         mSynthSvfL[(size_t)i][0].reset();
         mSynthSvfL[(size_t)i][1].reset();
         mSynthSvfR[(size_t)i][0].reset();
         mSynthSvfR[(size_t)i][1].reset();
 
-        mSynthLr4L[(size_t)i].reset();
-        mSynthLr4R[(size_t)i].reset();
+        mSynthSubL[(size_t)i].reset();
+        mSynthSubR[(size_t)i].reset();
 
         mEnvValues[(size_t)i] = 0.0f;
     }
@@ -118,18 +118,17 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
 
             analOut = y_bp_2;
         }
-        else // Subtractive / LR4 (バンド端エッジのLR4-HPF→LR4-LPF直列 + ピーク正規化)
+        else // Subtractive (バンド端エッジの8次HPF→8次LPF直列 + ピーク正規化)
         {
-            auto& lr4 = mAnalLr4[(size_t)i];
+            auto& sub = mAnalSub[(size_t)i];
             const float gLo  = mEdgeG[(size_t)i];      // 下端エッジ (HPF)
             const float a1Lo = mEdgeA1[(size_t)i];
             const float gHi  = mEdgeG[(size_t)i + 1];  // 上端エッジ (LPF)
             const float a1Hi = mEdgeA1[(size_t)i + 1];
 
-            float y = processLpfSection(lr4.hiLp1, modulator, gHi, a1Hi);
-            y       = processLpfSection(lr4.hiLp2, y,         gHi, a1Hi);
-            y       = processHpfSection(lr4.loHp1, y,         gLo, a1Lo);
-            y       = processHpfSection(lr4.loHp2, y,         gLo, a1Lo);
+            float y = modulator;
+            for (int sec = 0; sec < 4; ++sec) y = processLpfSection(sub.hiLp[(size_t)sec], y, gHi, a1Hi);
+            for (int sec = 0; sec < 4; ++sec) y = processHpfSection(sub.loHp[(size_t)sec], y, gLo, a1Lo);
 
             // 正規化(ピーク0dB) + BPF Bankとの聴感レベル整合メイクアップ
             analOut = y * mBandNorm[(size_t)i] * kSubMakeup;
@@ -196,7 +195,7 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
 
             carrierOutR = y_bp_R2;
         }
-        else // Subtractive / LR4 (合成側もバンド端エッジのLR4-HPF→LR4-LPF直列 + ピーク正規化)
+        else // Subtractive (合成側もバンド端エッジの8次HPF→8次LPF直列 + ピーク正規化)
         {
             // フォルマント・シフト/ストレッチをバンド端周波数に適用
             float eHi = mBandEdges[(size_t)i + 1] * formantStretch * shiftFactor;
@@ -211,19 +210,17 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
             const float norm_s = computeBandNorm(eLo, eHi);
 
             // LEFT
-            auto& lr4L = mSynthLr4L[(size_t)i];
-            float yL = processLpfSection(lr4L.hiLp1, carrierL, gHi_s, a1Hi_s);
-            yL       = processLpfSection(lr4L.hiLp2, yL,       gHi_s, a1Hi_s);
-            yL       = processHpfSection(lr4L.loHp1, yL,       gLo_s, a1Lo_s);
-            yL       = processHpfSection(lr4L.loHp2, yL,       gLo_s, a1Lo_s);
+            auto& subL = mSynthSubL[(size_t)i];
+            float yL = carrierL;
+            for (int sec = 0; sec < 4; ++sec) yL = processLpfSection(subL.hiLp[(size_t)sec], yL, gHi_s, a1Hi_s);
+            for (int sec = 0; sec < 4; ++sec) yL = processHpfSection(subL.loHp[(size_t)sec], yL, gLo_s, a1Lo_s);
             carrierOutL = yL * norm_s;
 
             // RIGHT
-            auto& lr4R = mSynthLr4R[(size_t)i];
-            float yR = processLpfSection(lr4R.hiLp1, carrierR, gHi_s, a1Hi_s);
-            yR       = processLpfSection(lr4R.hiLp2, yR,       gHi_s, a1Hi_s);
-            yR       = processHpfSection(lr4R.loHp1, yR,       gLo_s, a1Lo_s);
-            yR       = processHpfSection(lr4R.loHp2, yR,       gLo_s, a1Lo_s);
+            auto& subR = mSynthSubR[(size_t)i];
+            float yR = carrierR;
+            for (int sec = 0; sec < 4; ++sec) yR = processLpfSection(subR.hiLp[(size_t)sec], yR, gHi_s, a1Hi_s);
+            for (int sec = 0; sec < 4; ++sec) yR = processHpfSection(subR.loHp[(size_t)sec], yR, gLo_s, a1Lo_s);
             carrierOutR = yR * norm_s;
         }
 
