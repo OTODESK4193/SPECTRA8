@@ -193,8 +193,9 @@ void BandsEqPanel::confirmResetAllBands()
     juce::NativeMessageBox::showAsync(options,
         [safeThis = juce::Component::SafePointer<BandsEqPanel>(this)](int result)
         {
-            // result: 1 = Yes, 0 = No (JUCEの2ボタン規約)
-            if (result == 1 && safeThis != nullptr)
+            // result はボタンの登録順インデックス (0始まり): 0 = Yes, 1 = No
+            // (JUCE 8 Windowsネイティブ実装 TaskDialogIndirect はボタンIDに0始まりの連番を使用)
+            if (result == 0 && safeThis != nullptr)
             {
                 for (auto& g : safeThis->mBandGains)
                     g.store(1.0f);
