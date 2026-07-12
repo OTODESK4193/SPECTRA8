@@ -400,8 +400,34 @@ namespace {
             __m256 excitationL = _mm256_add_ps(_mm256_mul_ps(oneMinusNoiseMix, voicedExcL), _mm256_mul_ps(noiseMix, noiseBuffer));
             __m256 excitationR = _mm256_add_ps(_mm256_mul_ps(oneMinusNoiseMix, voicedExcR), _mm256_mul_ps(noiseMix, noiseBuffer));
 
-            __m256 yL = excitationL;
-            __m256 yR = excitationR;
+            // 非アクティブなボイススロットの履歴をゼロクリア (発振・初期爆発防止)
+            __m256 preEmpL_val = _mm256_load_ps(state.lpcPreEmphasisL);
+            __m256 preEmpR_val = _mm256_load_ps(state.lpcPreEmphasisR);
+            _mm256_store_ps(state.lpcPreEmphasisL, _mm256_and_ps(preEmpL_val, activeVoicesMask));
+            _mm256_store_ps(state.lpcPreEmphasisR, _mm256_and_ps(preEmpR_val, activeVoicesMask));
+
+            for (int i = 0; i < 16; ++i)
+            {
+                __m256 hL = _mm256_load_ps(&state.lpcHistoryL[i][0]);
+                __m256 hR = _mm256_load_ps(&state.lpcHistoryR[i][0]);
+                _mm256_store_ps(&state.lpcHistoryL[i][0], _mm256_and_ps(hL, activeVoicesMask));
+                _mm256_store_ps(&state.lpcHistoryR[i][0], _mm256_and_ps(hR, activeVoicesMask));
+            }
+
+            // プリエンファシス (高域強調) を適用して合成フィルタに入力
+            __m256 preL = _mm256_load_ps(state.lpcPreEmphasisL);
+            __m256 preR = _mm256_load_ps(state.lpcPreEmphasisR);
+            __m256 factor = _mm256_set1_ps(0.93f);
+            
+            __m256 preEmphasisExcL = _mm256_sub_ps(excitationL, _mm256_mul_ps(factor, preL));
+            __m256 preEmphasisExcR = _mm256_sub_ps(excitationR, _mm256_mul_ps(factor, preR));
+
+            // 前値履歴の保存 (現在サンプルを格納)
+            _mm256_store_ps(state.lpcPreEmphasisL, excitationL);
+            _mm256_store_ps(state.lpcPreEmphasisR, excitationR);
+
+            __m256 yL = preEmphasisExcL;
+            __m256 yR = preEmphasisExcR;
 
             // 16次のLPC合成フィルタをAVX2で一括実行
             for (int i = 0; i < 16; ++i)

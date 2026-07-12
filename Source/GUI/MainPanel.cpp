@@ -217,22 +217,24 @@ void VocoderTabPanel::resized()
     }
 
     // 右下セクション: マスターコンボ＆ノブ配置 (Dials 9〜10)
-    mLimiterLabel.setBounds(415, 235, 140, 16);
-    mLimiterCombo.setBounds(415, 255, 140, 24);
+    // カラム1 (X=415, 幅=155)
+    mLimiterLabel.setBounds(415, 235, 155, 16);
+    mLimiterCombo.setBounds(415, 255, 155, 24);
 
-    mFilterbankTypeLabel.setBounds(415, 295, 140, 16);
-    mFilterbankTypeCombo.setBounds(415, 315, 140, 24);
+    mFilterbankTypeLabel.setBounds(415, 290, 155, 16);
+    mFilterbankTypeCombo.setBounds(415, 310, 155, 24);
 
-    mWindowTypeLabel.setBounds(575, 235, 95, 16);
-    mWindowTypeCombo.setBounds(575, 255, 95, 24);
+    mWindowTypeLabel.setBounds(415, 345, 155, 16);
+    mWindowTypeCombo.setBounds(415, 365, 155, 24);
 
-    mInterpolationModeLabel.setBounds(680, 235, 95, 16);
-    mInterpolationModeCombo.setBounds(680, 255, 95, 24);
+    // カラム2 (X=585, 幅=180)
+    mInterpolationModeLabel.setBounds(585, 235, 180, 16);
+    mInterpolationModeCombo.setBounds(585, 255, 180, 24);
 
-    int masterStartX = 575;
-    int masterStartY = 310;
+    int masterStartX = 585;
+    int masterStartY = 300;
     mDials[9].slider->setBounds(masterStartX, masterStartY, dialSize, dialSize + 15);         // mix
-    mDials[10].slider->setBounds(masterStartX + dialSize + 20, masterStartY, dialSize, dialSize + 15); // outputLevel
+    mDials[10].slider->setBounds(masterStartX + dialSize + 15, masterStartY, dialSize, dialSize + 15); // outputLevel
 }
 
 

@@ -105,8 +105,10 @@ private:
 
     // リアルタイム安全な事前確保バッファ
     std::vector<float> mDownsampledBuffer;
-    std::vector<float> m16kWetBuffer;
-    std::vector<float> mWetFsBuffer;
+    std::vector<float> m16kWetBufferL;
+    std::vector<float> m16kWetBufferR;
+    std::vector<float> mWetFsBufferL;
+    std::vector<float> mWetFsBufferR;
     std::vector<float> mDryLBuffer;
 
     int mAnalysisHopSize;
@@ -153,8 +155,10 @@ private:
     // アルゴリズム切り替えクロスフェード
     juce::LinearSmoothedValue<float> mModeCrossfade;
     int mPrevVocoderMode = -1;
-    std::vector<float> mMode0WetBuffer;
-    std::vector<float> mMode1WetBuffer;
+    std::vector<float> mMode0WetBufferL;
+    std::vector<float> mMode0WetBufferR;
+    std::vector<float> mMode1WetBufferL;
+    std::vector<float> mMode1WetBufferR;
 
     // Band EQ およびアナライザーレベル
     std::array<std::atomic<float>, 48> mBandGains;

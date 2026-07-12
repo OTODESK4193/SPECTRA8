@@ -184,8 +184,10 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
     int safeAllocationSize = std::max(samplesPerBlock * 3, 4096);
     mDownsampledBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
-    m16kWetBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
-    mWetFsBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    m16kWetBufferL.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    m16kWetBufferR.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    mWetFsBufferL.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    mWetFsBufferR.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
     mDryLBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
 
     mControlRateCounter = 0;
@@ -215,8 +217,10 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     
     mModeCrossfade.reset(sampleRate, 0.030);
     mPrevVocoderMode = -1;
-    mMode0WetBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
-    mMode1WetBuffer.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    mMode0WetBufferL.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    mMode0WetBufferR.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    mMode1WetBufferL.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
+    mMode1WetBufferR.assign(static_cast<size_t>(safeAllocationSize), 0.0f);
     
     mSmoothedGain = 1.0f;
     mLimiterGain = 1.0f;
@@ -613,7 +617,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                     r[k] = sum;
                 }
 
-                // Levinson-Durbin
+                // 正確な Levinson-Durbin 再帰
                 float a[17] = { 0.0f };
                 float E = r[0];
                 a[0] = 1.0f;
@@ -624,18 +628,16 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                     lpcSuccess = true;
                     for (int i = 1; i <= 16; ++i)
                     {
-                        float lambda = 0.0f;
-                        for (int j = 0; j < i; ++j)
+                        float sum = 0.0f;
+                        for (int j = 1; j < i; ++j)
                         {
-                            lambda -= a[j] * r[i - j];
+                            sum += a[j] * r[i - j];
                         }
-                        lambda /= E;
+                        
+                        float lambda = - (r[i] + sum) / E;
 
-                        if (std::abs(lambda) >= 0.999f)
-                        {
-                            lpcSuccess = false;
-                            break;
-                        }
+                        // 反射係数を絶対的に安定な 0.98 に制限して発振を完全防止
+                        lambda = std::clamp(lambda, -0.98f, 0.98f);
 
                         float next_a[17];
                         next_a[0] = 1.0f;
@@ -655,10 +657,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                     }
                 }
 
-                // 帯域拡張
+                // 帯域拡張 (gamma=0.96f により極を内側に引き込み、LSPの消失を防止)
                 for (int i = 1; i <= 16; ++i)
                 {
-                    a[i] *= std::pow(0.985f, static_cast<float>(i));
+                    a[i] *= std::pow(0.96f, static_cast<float>(i));
                 }
 
                 // LSP/LAR変換とフリーズ
@@ -779,9 +781,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mPitchStep = (mTargetPitchHz - mCurrentPitchHz) / static_cast<float>(mControlRateBlockSize);
 
             // --- キャリアボイスのパラメータ同期 (コントロールレート) ---
+            float detuneCents = detuneWidth * 100.0f;
             if (isMidiMode)
             {
-                mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, tracking, mCurrentPitchHz);
+                mVoiceManager.syncToDspState(mDspState, detuneCents, pitchTranspose, tracking, mCurrentPitchHz, noiseParam);
             }
             else
             {
@@ -789,7 +792,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 mVoiceManager.setVoiceFrequency(0, activePitch);
                 mVoiceManager.setVoiceFrequency(1, activePitch);
                 mVoiceManager.setVoiceFrequency(2, activePitch);
-                mVoiceManager.syncToDspState(mDspState, detuneWidth, pitchTranspose, 0.0f, activePitch);
+                mVoiceManager.syncToDspState(mDspState, detuneCents, pitchTranspose, 0.0f, activePitch, noiseParam);
             }
         }
         mControlRateCounter++;
@@ -930,27 +933,32 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             );
         }
 
-        if (sample16k < static_cast<int>(m16kWetBuffer.size()))
+        if (sample16k < static_cast<int>(m16kWetBufferL.size()))
         {
-            mMode0WetBuffer[sample16k] = 0.5f * (mode0_L + mode0_R);
-            mMode1WetBuffer[sample16k] = 0.5f * (mode1_L + mode1_R);
+            mMode0WetBufferL[sample16k] = mode0_L;
+            mMode0WetBufferR[sample16k] = mode0_R;
+            mMode1WetBufferL[sample16k] = mode1_L;
+            mMode1WetBufferR[sample16k] = mode1_R;
         }
     }
 
     // 6. Wet信号のクロスフェード & RMSゲインマッチング
     if (num16kSamples > 0)
     {
-        // 6-A. クロスフェードの適用
+        // 6-A. クロスフェードの適用 (ステレオL/R独立)
         for (int i = 0; i < num16kSamples; ++i)
         {
-            float w0 = mMode0WetBuffer[i];
-            float w1 = mMode1WetBuffer[i];
+            float w0_L = mMode0WetBufferL[i];
+            float w0_R = mMode0WetBufferR[i];
+            float w1_L = mMode1WetBufferL[i];
+            float w1_R = mMode1WetBufferR[i];
             
             float blend = mModeCrossfade.getNextValue();
             float targetCross = static_cast<float>(vocoderMode);
             mModeCrossfade.setTargetValue(targetCross);
 
-            m16kWetBuffer[i] = (1.0f - blend) * w0 + blend * w1;
+            m16kWetBufferL[i] = (1.0f - blend) * w0_L + blend * w1_L;
+            m16kWetBufferR[i] = (1.0f - blend) * w0_R + blend * w1_R;
         }
 
         // 6-B. RMS ゲインマッチング
@@ -959,7 +967,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         for (int i = 0; i < num16kSamples; ++i)
         {
             sumSqIn += mDownsampledBuffer[i] * mDownsampledBuffer[i];
-            sumSqWet += m16kWetBuffer[i] * m16kWetBuffer[i];
+            sumSqWet += (m16kWetBufferL[i] * m16kWetBufferL[i] + m16kWetBufferR[i] * m16kWetBufferR[i]) * 0.5f;
         }
         float rmsIn = std::sqrt(sumSqIn / num16kSamples);
         float rmsWet = std::sqrt(sumSqWet / num16kSamples);
@@ -982,16 +990,18 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             float blend = mModeCrossfade.getCurrentValue();
             float finalGain = (1.0f - blend) + blend * mSmoothedGain;
 
-            m16kWetBuffer[i] *= finalGain;
+            m16kWetBufferL[i] *= finalGain;
+            m16kWetBufferR[i] *= finalGain;
         }
     }
 
     // 7. 16kHz Wet信号をホストサンプリングレートへアップサンプリング
-    juce::FloatVectorOperations::clear(mWetFsBuffer.data(), numSamples);
+    juce::FloatVectorOperations::clear(mWetFsBufferL.data(), numSamples);
+    juce::FloatVectorOperations::clear(mWetFsBufferR.data(), numSamples);
     if (numSamples > 0 && num16kSamples > 0)
     {
         double upRatio = static_cast<double>(num16kSamples) / static_cast<double>(numSamples);
-        int maxWetFsSize = static_cast<int>(mWetFsBuffer.size());
+        int maxWetFsSize = static_cast<int>(mWetFsBufferL.size());
 
         for (int i = 0; i < numSamples; ++i)
         {
@@ -1002,7 +1012,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
             if (i < maxWetFsSize)
             {
-                mWetFsBuffer[i] = m16kWetBuffer[idx0] * (1.0f - frac) + m16kWetBuffer[idx1] * frac;
+                mWetFsBufferL[i] = m16kWetBufferL[idx0] * (1.0f - frac) + m16kWetBufferL[idx1] * frac;
+                mWetFsBufferR[i] = m16kWetBufferR[idx0] * (1.0f - frac) + m16kWetBufferR[idx1] * frac;
             }
         }
     }
@@ -1022,15 +1033,17 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float drySampleL = mDryLBuffer[sample];
         float drySampleR = (numInputs > 1 && buffer.getNumChannels() > 1) ? buffer.getReadPointer(1)[sample] : drySampleL;
 
-        float wetVal = mWetFsBuffer[sample];
+        float wetValL = mWetFsBufferL[sample];
+        float wetValR = mWetFsBufferR[sample];
 
         if (mInputEnvelope < 0.00005f)
         {
-            wetVal = 0.0f;
+            wetValL = 0.0f;
+            wetValR = 0.0f;
         }
 
-        float wetSampleL = wetVal;
-        float wetSampleR = wetVal;
+        float wetSampleL = wetValL;
+        float wetSampleR = wetValR;
 
         // LPC Mode のステレオ全通 (APF) デコレレーター
         if (vocoderMode == 1)
@@ -1041,21 +1054,21 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             // 左側 APF (delay = 13)
             int rPtrL = (mApfWritePtrL - 13 + 64) % 64;
             float delayed_xL = mApfBufferL[rPtrL];
-            float apfOutL = -0.6f * wetVal + delayed_xL;
-            mApfBufferL[mApfWritePtrL] = wetVal + 0.6f * apfOutL;
+            float apfOutL = -0.6f * wetValL + delayed_xL;
+            mApfBufferL[mApfWritePtrL] = wetValL + 0.6f * apfOutL;
             mApfWritePtrL = (mApfWritePtrL + 1) % 64;
 
             // 右側 APF (delay = 17)
             int rPtrR = (mApfWritePtrR - 17 + 64) % 64;
             float delayed_xR = mApfBufferR[rPtrR];
-            float apfOutR = -0.6f * wetVal + delayed_xR;
-            mApfBufferR[mApfWritePtrR] = wetVal + 0.6f * apfOutR;
+            float apfOutR = -0.6f * wetValR + delayed_xR;
+            mApfBufferR[mApfWritePtrR] = wetValR + 0.6f * apfOutR;
             mApfWritePtrR = (mApfWritePtrR + 1) % 64;
 
             // 相関度合い C_LR に基づく非相関ステレオ化
             float beta = stereoWidth * std::sqrt(1.0f - inputCorrelation * inputCorrelation);
-            wetSampleL = g_L * wetVal + beta * apfOutL;
-            wetSampleR = g_R * wetVal - beta * apfOutR;
+            wetSampleL = g_L * wetValL + beta * apfOutL;
+            wetSampleR = g_R * wetValR - beta * apfOutR;
         }
 
         // Lo-Fi プロセッシング (左右独立して適用)
@@ -1067,11 +1080,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             int holdSamples = static_cast<int>(1.0f + 31.0f * (1.0f - character));
             int holdStartIdx = std::clamp((sample / holdSamples) * holdSamples, 0, numSamples - 1);
 
-            // サンプルホールド
-            wetSampleL = mWetFsBuffer[holdStartIdx];
-            wetSampleR = mWetFsBuffer[holdStartIdx];
+            // サンプルホールド (L/R 独立)
+            wetSampleL = mWetFsBufferL[holdStartIdx];
+            wetSampleR = mWetFsBufferR[holdStartIdx];
 
-            // 量子化
+            // 量子化 (L/R 独立)
             wetSampleL = std::round(wetSampleL * steps) / steps;
             wetSampleR = std::round(wetSampleR * steps) / steps;
         }

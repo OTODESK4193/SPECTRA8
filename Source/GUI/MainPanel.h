@@ -20,6 +20,8 @@ public:
     void resized() override;
 
 private:
+    ArcDialLookAndFeel mArcLookAndFeel;
+
     struct DialInfo {
         juce::String paramID;
         juce::String label;
@@ -56,8 +58,6 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mFilterbankTypeAttachment;
     juce::Label mFilterbankTypeLabel;
 
-    ArcDialLookAndFeel mArcLookAndFeel;
-
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VocoderTabPanel)
 };
 
@@ -71,6 +71,8 @@ public:
     void resized() override;
 
 private:
+    ArcDialLookAndFeel mArcLookAndFeel;
+
     struct DialInfo {
         juce::String paramID;
         juce::String label;
@@ -86,8 +88,6 @@ private:
     juce::ComboBox mWaveformCombo;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mWaveformAttachment;
     juce::Label mWaveformLabel;
-
-    ArcDialLookAndFeel mArcLookAndFeel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ExcitationTabPanel)
 };

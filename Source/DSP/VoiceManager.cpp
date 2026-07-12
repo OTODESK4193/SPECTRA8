@@ -247,11 +247,13 @@ void VoiceManager::updateVoices(float attackTime, float decayTime, float sustain
     }
 }
 
-void VoiceManager::syncToDspState(PolyphonicVoiceSoA& dspState, float detuneWidthCents, float pitchTranspose, float tracking, float currentF0)
+void VoiceManager::syncToDspState(PolyphonicVoiceSoA& dspState, float detuneWidthCents, float pitchTranspose, float tracking, float currentF0, float noiseParam)
 {
     // ノートに基づく位相増分の算出
     for (int i = 0; i < 8; ++i)
     {
+        mNoiseMix[i] = noiseParam;
+
         if (mActiveStates[i] == 1.0f)
         {
             // MIDIノート+トランスポーズから周波数を算出
