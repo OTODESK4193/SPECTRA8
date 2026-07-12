@@ -7,20 +7,20 @@
 
 ArcDialLookAndFeel::ArcDialLookAndFeel()
 {
-    setColour(juce::Slider::textBoxTextColourId, GUI::ColorPalette::textHeader);
+    setColour(juce::Slider::textBoxTextColourId, SpectraColors::text);
     setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    setColour(juce::ComboBox::backgroundColourId, GUI::ColorPalette::panelBg);
-    setColour(juce::ComboBox::textColourId, GUI::ColorPalette::textHeader);
-    setColour(juce::ComboBox::outlineColourId, GUI::ColorPalette::panelBorder);
-    setColour(juce::ComboBox::arrowColourId, GUI::ColorPalette::textBody);
-    setColour(juce::PopupMenu::backgroundColourId, GUI::ColorPalette::panelBg);
-    setColour(juce::PopupMenu::textColourId, GUI::ColorPalette::textHeader);
-    setColour(juce::PopupMenu::highlightedBackgroundColourId, GUI::ColorPalette::lilac.withAlpha(0.3f));
-    setColour(juce::PopupMenu::highlightedTextColourId, GUI::ColorPalette::textHeader);
-    setColour(juce::ToggleButton::textColourId, GUI::ColorPalette::textHeader);
-    setColour(juce::ToggleButton::tickColourId, GUI::ColorPalette::mint);
-    setColour(juce::ToggleButton::tickDisabledColourId, GUI::ColorPalette::textMuted);
-    setColour(juce::Label::textColourId, GUI::ColorPalette::textBody);
+    setColour(juce::ComboBox::backgroundColourId, SpectraColors::panel);
+    setColour(juce::ComboBox::textColourId, SpectraColors::text);
+    setColour(juce::ComboBox::outlineColourId, SpectraColors::panelLine);
+    setColour(juce::ComboBox::arrowColourId, SpectraColors::textDim);
+    setColour(juce::PopupMenu::backgroundColourId, SpectraColors::panel);
+    setColour(juce::PopupMenu::textColourId, SpectraColors::text);
+    setColour(juce::PopupMenu::highlightedBackgroundColourId, SpectraColors::lavender.withAlpha(0.3f));
+    setColour(juce::PopupMenu::highlightedTextColourId, SpectraColors::text);
+    setColour(juce::ToggleButton::textColourId, SpectraColors::text);
+    setColour(juce::ToggleButton::tickColourId, SpectraColors::mint);
+    setColour(juce::ToggleButton::tickDisabledColourId, SpectraColors::textDim);
+    setColour(juce::Label::textColourId, SpectraColors::textDim);
 }
 
 void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
@@ -37,10 +37,11 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
     const auto arcThickness = 5.0f;
 
     // 1. 背景トラック
-    g.setColour(GUI::ColorPalette::sliderTrack);
+    g.setColour(SpectraColors::knobTrack);
     g.drawEllipse(rx, ry, rw, rw, arcThickness);
 
-    // 1.5 モジュレーション・レンジ帯（値アークの下にピンクのハロー）
+    // 1.5 モジュレーション・レンジ帯（値アークの下の白いハロー）
+    //     GUI側が mod_active / mod_min / mod_max / mod_live プロパティを毎フレーム更新
     const auto& props = slider.getProperties();
     const bool modActive = props.getWithDefault("mod_active", false);
     if (modActive)
@@ -60,7 +61,7 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
         }
     }
 
-    // 2. 値アーク
+    // 2. 値アーク（セクション色ベースのパステルグラデーション）
     juce::Path p;
     p.addArc(rx, ry, rw, rw, rotaryStartAngle, angle, true);
 
@@ -81,10 +82,10 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
     const auto pointerLength = radius * 0.4f;
     p2.addRoundedRectangle(-1.5f, -radius + 1.5f, 3.0f, pointerLength, 1.5f);
     p2.applyTransform(juce::AffineTransform::rotation(angle).translated(centreX, centreY));
-    g.setColour(GUI::ColorPalette::textHeader);
+    g.setColour(SpectraColors::text);
     g.fillPath(p2);
 
-    // 5. ライブ変調ドット
+    // 5. ライブ変調ドット（変調後の現在値をアーク上の白点で表示）
     if (modActive)
     {
         const float live = juce::jlimit(0.0f, 1.0f, (float)props.getWithDefault("mod_live", sliderPos));

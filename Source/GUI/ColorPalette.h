@@ -1,31 +1,37 @@
+// ==========================================
+// File: ColorPalette.h
+// SPECTRA8 パステル・カラーパレット（Granular 準拠 / Midnight テーマ固定）
+// 表示のみのグローバル設定。オーディオ処理には一切関与しない。
+// ==========================================
 #pragma once
-#include <juce_graphics/juce_graphics.h>
 
-namespace GUI {
+#include <JuceHeader.h>
 
-namespace ColorPalette {
-    // 背景・基本色 (Midnight風パステルダーク)
-    static inline const juce::Colour background      = juce::Colour(0xff17141f);
-    static inline const juce::Colour panelBg         = juce::Colour(0xff201c2b);
-    static inline const juce::Colour panelBorder     = juce::Colour(0x22ffffff);
-    static inline const juce::Colour grid            = juce::Colour(0x14ffffff);
-    static inline const juce::Colour textHeader      = juce::Colour(0xffe9e3f2);
-    static inline const juce::Colour textBody        = juce::Colour(0xff8d86a0);
-    static inline const juce::Colour textMuted       = juce::Colour(0xff605870);
+namespace SpectraColors
+{
+    // 背景・基本色
+    inline const juce::Colour bg        { 0xff17141f };
+    inline const juce::Colour panel     { 0xff201c2b };
+    inline const juce::Colour panelLine { 0x22ffffff };
+    inline const juce::Colour grid      { 0x14ffffff };
+    inline const juce::Colour text      { 0xffe9e3f2 };
+    inline const juce::Colour textDim   { 0xff8d86a0 };
+    inline const juce::Colour knobTrack { 0xff2a2536 };
 
-    // パステルアクセント (Granular準拠)
-    static inline const juce::Colour mint            = juce::Colour(0xffb5ead7); // BANDS/EQ
-    static inline const juce::Colour pink            = juce::Colour(0xffffb7c5); // EXCITATION
-    static inline const juce::Colour lavender        = juce::Colour(0xffc7ceea); // Main / Pitch
-    static inline const juce::Colour peach           = juce::Colour(0xffffdac1); // Envelope
-    static inline const juce::Colour babyBlue        = juce::Colour(0xffaed9f7); // Tracking
-    static inline const juce::Colour sage            = juce::Colour(0xffe2f0cb);
-    static inline const juce::Colour rose            = juce::Colour(0xffffb7b2);
-    static inline const juce::Colour lilac           = juce::Colour(0xffe0c3fc);
+    // パステルパレット
+    inline const juce::Colour mint      { 0xffb5ead7 };
+    inline const juce::Colour pink      { 0xffffb7c5 };
+    inline const juce::Colour lavender  { 0xffc7ceea };
+    inline const juce::Colour peach     { 0xffffdac1 };
+    inline const juce::Colour babyBlue  { 0xffaed9f7 };
+    inline const juce::Colour sage      { 0xffe2f0cb };
+    inline const juce::Colour rose      { 0xffffb7b2 };
+    inline const juce::Colour lilac     { 0xffe0c3fc };
 
-    // フェーダー・ノブ用スライダーカラー
-    static inline const juce::Colour sliderTrack     = juce::Colour(0xff2a2536);
-    static inline const juce::Colour sliderThumb     = juce::Colour(0xffe9e3f2);
+    // セクションアクセント
+    inline const juce::Colour accentVocoder    = lavender;  // VOCODER タブ
+    inline const juce::Colour accentExcitation = pink;      // EXCITATION タブ
+    inline const juce::Colour accentMod        = lilac;     // MOD MATRIX タブ
+    inline const juce::Colour accentBands      = mint;      // BANDS EQ タブ
+    inline const juce::Colour accentEnv        = peach;     // ADSR
 }
-
-} // namespace GUI

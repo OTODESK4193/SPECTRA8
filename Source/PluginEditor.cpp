@@ -1,57 +1,56 @@
+// ==========================================
+// File: PluginEditor.cpp
+// SPECTRA8 エディター層 (4タブ + HUD / Granular 準拠)
+// ==========================================
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include "GUI/ColorPalette.h"
 
 SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcessor& p)
     : AudioProcessorEditor(&p),
       audioProcessor(p),
       mVocoderPanel(p.apvts),
       mExcitationPanel(p.apvts),
-      mBandsEqPanel(p)
+      mModPanel(p.apvts),
+      mBandsEqPanel(p.apvts, p.getBandGains(), p.getBandLevelsForUi())
 {
-    // 各パネルを子コンポーネントとして追加
-    addChildComponent(mVocoderPanel);
-    addChildComponent(mExcitationPanel);
-    addChildComponent(mBandsEqPanel);
-
-    // タブボタン設定
-    auto setupTabButton = [this](juce::TextButton& btn, const juce::String& text, int tabIdx)
+    // ボタンのスタイルとリスナー初期化
+    auto setupTabButton = [this](juce::TextButton& btn, int tabIdx)
     {
-        addAndMakeVisible(btn);
-        btn.setButtonText(text);
-        btn.setRadioGroupId(1001);
+        btn.setButtonText(btn.getButtonText());
+        btn.setColour(juce::TextButton::buttonColourId, SpectraColors::knobTrack);
+        btn.setColour(juce::TextButton::textColourOffId, SpectraColors::textDim);
+        btn.setColour(juce::TextButton::textColourOnId, SpectraColors::text);
         btn.setClickingTogglesState(true);
-        btn.setColour(juce::TextButton::textColourOffId, GUI::ColorPalette::textMuted);
-        btn.setColour(juce::TextButton::buttonOnColourId, GUI::ColorPalette::panelBg);
-        btn.setColour(juce::TextButton::buttonColourId, GUI::ColorPalette::background);
-        btn.setColour(juce::ComboBox::outlineColourId, GUI::ColorPalette::panelBorder);
-
-        btn.onClick = [this, tabIdx]
-        {
-            mActiveTab = tabIdx;
-            updateTabVisibility();
-            resized();
-        };
+        btn.setRadioGroupId(1001); // 同一グループで排他トグル
+        btn.onClick = [this, tabIdx] { selectTab(tabIdx); };
+        addAndMakeVisible(btn);
     };
 
-    setupTabButton(mTabVocoderBtn, "VOCODER", 0);
-    setupTabButton(mTabExcitationBtn, "EXCITATION", 1);
-    setupTabButton(mTabBandsEqBtn, "BANDS EQ", 2);
+    setupTabButton(mTabVocoderBtn, 0);
+    setupTabButton(mTabExcitationBtn, 1);
+    setupTabButton(mTabModBtn, 2);
+    setupTabButton(mTabBandsEqBtn, 3);
 
-    // デフォルトでVOCODERを選択状態にする
-    mTabVocoderBtn.setToggleState(true, juce::sendNotificationSync);
+    // タブパネルを追加
+    addChildComponent(mVocoderPanel);
+    addChildComponent(mExcitationPanel);
+    addChildComponent(mModPanel);
+    addChildComponent(mBandsEqPanel);
 
-    // デバッグ用ラベルの設定
-    addAndMakeVisible(mDebugLabel);
-    mDebugLabel.setColour(juce::Label::backgroundColourId, juce::Colours::black.withAlpha(0.8f));
-    mDebugLabel.setColour(juce::Label::textColourId, juce::Colours::red.brighter());
-    mDebugLabel.setFont(juce::Font(14.0f, juce::Font::bold));
+    // HUD の初期化
+    mDebugLabel.setColour(juce::Label::backgroundColourId, SpectraColors::panel);
+    mDebugLabel.setColour(juce::Label::textColourId, SpectraColors::textDim);
+    mDebugLabel.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
     mDebugLabel.setJustificationType(juce::Justification::centred);
-    mDebugLabel.setText("No errors. Running fine.", juce::dontSendNotification);
-    mDebugLabel.setInterceptsMouseClicks(false, false);
+    addAndMakeVisible(mDebugLabel);
 
-    startTimer(100);
-    setSize(800, 480);
+    // 初期タブの選択
+    mTabVocoderBtn.setToggleState(true, juce::sendNotification);
+
+    // ウィンドウサイズ設定 (Granular準拠のワイド表示)
+    setSize(780, 380);
+
+    startTimer(100); // 10HzでHUD更新
 }
 
 SPECTRA8AudioProcessorEditor::~SPECTRA8AudioProcessorEditor()
@@ -61,29 +60,52 @@ SPECTRA8AudioProcessorEditor::~SPECTRA8AudioProcessorEditor()
 
 void SPECTRA8AudioProcessorEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(GUI::ColorPalette::background);
+    g.fillAll(SpectraColors::bg);
 
-    // タブボタンの下に仕切り線を描画
-    g.setColour(GUI::ColorPalette::panelBorder);
-    g.drawHorizontalLine(36, 0.0f, static_cast<float>(getWidth()));
+    // ヘッダー背景
+    auto headerRect = getLocalBounds().removeFromTop(36);
+    g.setColour(SpectraColors::panel);
+    g.fillRect(headerRect);
+    g.setColour(SpectraColors::panelLine);
+    g.drawHorizontalLine(headerRect.getBottom() - 1, 0.0f, (float)getWidth());
+
+    // プラグインタイトル
+    g.setColour(SpectraColors::text);
+    g.setFont(juce::Font(juce::FontOptions(16.0f, juce::Font::bold)));
+    g.drawText("SPECTRA 8", 16, 0, 120, headerRect.getHeight(), juce::Justification::centredLeft);
+
+    g.setColour(SpectraColors::textDim);
+    g.setFont(10.0f);
+    g.drawText("v0.2.0 Hybrid Vocoder", 124, 2, 120, headerRect.getHeight(), juce::Justification::centredLeft);
 }
 
 void SPECTRA8AudioProcessorEditor::resized()
 {
-    auto bounds = getLocalBounds();
-    mDebugLabel.setBounds(bounds.removeFromBottom(30)); // 下部30ピクセルはデバッグ表示
+    auto r = getLocalBounds();
 
-    // 上部36ピクセルをタブボタン領域に
-    auto tabArea = bounds.removeFromTop(36);
-    int tabW = getWidth() / 3;
-    mTabVocoderBtn.setBounds(tabArea.removeFromLeft(tabW));
-    mTabExcitationBtn.setBounds(tabArea.removeFromLeft(tabW));
-    mTabBandsEqBtn.setBounds(tabArea);
+    // 1. ヘッダー部のレイアウト
+    auto headerArea = r.removeFromTop(36);
+    
+    // タブ選択ボタンの配置 (ヘッダーの右半分に並べる)
+    const int tabW = 96;
+    const int tabH = 24;
+    int tabX = getWidth() - (tabW * 4) - 16;
+    const int tabY = (headerArea.getHeight() - tabH) / 2;
 
-    // 残りの領域にアクティブなパネルを配置
-    mVocoderPanel.setBounds(bounds);
-    mExcitationPanel.setBounds(bounds);
-    mBandsEqPanel.setBounds(bounds);
+    mTabVocoderBtn.setBounds(tabX, tabY, tabW, tabH);
+    mTabExcitationBtn.setBounds(tabX + tabW, tabY, tabW, tabH);
+    mTabModBtn.setBounds(tabX + tabW * 2, tabY, tabW, tabH);
+    mTabBandsEqBtn.setBounds(tabX + tabW * 3, tabY, tabW, tabH);
+
+    // 2. HUD（下部）のレイアウト
+    auto hudArea = r.removeFromBottom(20);
+    mDebugLabel.setBounds(hudArea);
+
+    // 3. メインパネル（中央）のレイアウト
+    mVocoderPanel.setBounds(r);
+    mExcitationPanel.setBounds(r);
+    mModPanel.setBounds(r);
+    mBandsEqPanel.setBounds(r);
 }
 
 void SPECTRA8AudioProcessorEditor::timerCallback()
@@ -91,14 +113,33 @@ void SPECTRA8AudioProcessorEditor::timerCallback()
     mDebugLabel.setText(audioProcessor.getDebugMessage(), juce::dontSendNotification);
 }
 
-void SPECTRA8AudioProcessorEditor::updateTabVisibility()
+void SPECTRA8AudioProcessorEditor::selectTab(int tabIndex)
 {
+    mActiveTab = tabIndex;
+
     mVocoderPanel.setVisible(mActiveTab == 0);
     mExcitationPanel.setVisible(mActiveTab == 1);
-    mBandsEqPanel.setVisible(mActiveTab == 2);
+    mModPanel.setVisible(mActiveTab == 2);
+    mBandsEqPanel.setVisible(mActiveTab == 3);
 
-    // ボタンのテキスト色をテーマに合わせて更新
-    mTabVocoderBtn.setColour(juce::TextButton::textColourOnId, GUI::ColorPalette::lavender);
-    mTabExcitationBtn.setColour(juce::TextButton::textColourOnId, GUI::ColorPalette::pink);
-    mTabBandsEqBtn.setColour(juce::TextButton::textColourOnId, GUI::ColorPalette::mint);
+    // タブに合わせたボタンのトグル状態の再設定
+    mTabVocoderBtn.setToggleState(mActiveTab == 0, juce::dontSendNotification);
+    mTabExcitationBtn.setToggleState(mActiveTab == 1, juce::dontSendNotification);
+    mTabModBtn.setToggleState(mActiveTab == 2, juce::dontSendNotification);
+    mTabBandsEqBtn.setToggleState(mActiveTab == 3, juce::dontSendNotification);
+
+    // タブごとのカラーアクセントをボタンに反映して視覚的フィードバックを高める
+    auto setBtnHighlight = [](juce::TextButton& btn, bool active, juce::Colour accent)
+    {
+        btn.setColour(juce::TextButton::buttonColourId, active ? accent.withAlpha(0.24f) : SpectraColors::knobTrack);
+        btn.setColour(juce::TextButton::buttonOnColourId, accent.withAlpha(0.24f));
+        btn.setColour(juce::TextButton::textColourOnId, active ? SpectraColors::text : SpectraColors::textDim);
+    };
+
+    setBtnHighlight(mTabVocoderBtn, mActiveTab == 0, SpectraColors::accentVocoder);
+    setBtnHighlight(mTabExcitationBtn, mActiveTab == 1, SpectraColors::accentExcitation);
+    setBtnHighlight(mTabModBtn, mActiveTab == 2, SpectraColors::accentMod);
+    setBtnHighlight(mTabBandsEqBtn, mActiveTab == 3, SpectraColors::accentBands);
+
+    repaint();
 }

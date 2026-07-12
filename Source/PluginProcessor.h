@@ -1,17 +1,24 @@
+// ==========================================
+// File: PluginProcessor.h
+// SPECTRA8 プロセッサー層 (フェーズ1軽量化設計)
+// ==========================================
 #pragma once
 
-#include <juce_audio_processors/juce_audio_processors.h>
+#include <JuceHeader.h>
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <array>
 
-#include "VoiceState.h"
-#include "MidiQueue.h"
-#include "OscillatorBank.h"
-#include "NoiseGenerator.h"
-#include "VoiceManager.h"
+// 新モジュール
+#include "DSP/FilterbankVocoder.h"
+#include "DSP/ExcitationEngine.h"
+#include "DSP/ModMatrix.h"
+#include "DSP/PitchTracker.h"
+#include "DSP/Limiter.h"
 
-class SPECTRA8AudioProcessor : public juce::AudioProcessor {
+class SPECTRA8AudioProcessor : public juce::AudioProcessor 
+{
 public:
     SPECTRA8AudioProcessor();
     ~SPECTRA8AudioProcessor() override;
@@ -43,143 +50,51 @@ public:
 
     juce::String getDebugMessage() const
     {
-        int errState = mErrorState.load();
-        if (errState == 1) return "ERR: NaN/Inf detected! (Muted)";
-
-        float inEnv = mInputEnvelope;
-        int activeVoices = mVoiceManager.getNumActiveVoices();
-
         juce::String msg = "Status: ";
+        const float inEnv = mInputEnvelope.load();
         if (inEnv < 0.0001f)
-        {
-            msg += "No Input (Dry Only) | ";
-        }
+            msg += "Idle | ";
         else
-        {
-            msg += "InLvl: " + juce::String(inEnv * 100.0f, 2) + "% | ";
-        }
-
-        if (activeVoices == 0)
-        {
-            msg += "NO ACTIVE VOICES";
-        }
-        else
-        {
-            msg += "Voices Active: " + juce::String(activeVoices);
-        }
+            msg += "InLvl: " + juce::String(inEnv * 100.0f, 1) + "% | ";
 
         int vMode = static_cast<int>(apvts.getRawParameterValue("vocoderMode")->load());
-        msg += " [" + juce::String(vMode == 0 ? "Filterbank" : "LPC") + "]";
+        msg += "[" + juce::String(vMode == 0 ? "Filterbank" : "LPC (Phase2)") + "]";
 
         return msg;
     }
 
-    // Band EQ およびアナライザー用メソッド
-    void setBandGain(int bandIdx, float gain) { mBandGains[bandIdx].store(gain); }
-    float getBandGain(int bandIdx) const { return mBandGains[bandIdx].load(); }
-    float getBandLevel(int bandIdx) const { return mBandLevelsForUi[bandIdx].load(); }
+    // Band EQ API (UIとの橋渡し)
+    std::array<std::atomic<float>, 48>& getBandGains() { return mBandGains; }
+    const std::array<std::atomic<float>, 48>& getBandLevelsForUi() const { return mBandLevelsForUi; }
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    DSP::MidiQueue mMidiQueue;
-    DSP::VoiceManager mVoiceManager;
-    DSP::OscillatorBank mOscillatorBank;
-    DSP::NoiseGenerator mNoiseGenerator;
+    // モジュールインスタンス
+    FilterbankVocoder mFilterbankVocoder;
+    ExcitationEngine mExcitationEngine;
+    ModMatrix mModMatrix;
+    PitchTracker mPitchTracker;
+    BrickLimiter mLimiter;
 
-    alignas(32) DSP::PolyphonicVoiceSoA mDspState;
-
-    std::vector<float> mBandEnvelopes;
-    std::vector<float> mTargetBandEnvelopes;
-
-    std::vector<float> mAnalFilterS1;
-    std::vector<float> mAnalFilterS2;
-
-    std::vector<float> mBandF0;
-
-    std::vector<float> mBandCoeffsG;
-    std::vector<float> mBandCoeffsK;
-    std::vector<float> mBandCoeffsA1;
-
-    juce::LinearSmoothedValue<float> mFormantShiftSmoother;
-
-    // リアルタイム安全な事前確保バッファ
-    std::vector<float> mDownsampledBuffer;
-    std::vector<float> m16kWetBufferL;
-    std::vector<float> m16kWetBufferR;
-    std::vector<float> mWetFsBufferL;
-    std::vector<float> mWetFsBufferR;
-    std::vector<float> mDryLBuffer;
-
-    int mAnalysisHopSize;
-    int mAnalysisWindowSize;
-
-    int mControlRateBlockSize;
-    int mControlRateCounter;
-
-    float mCurrentUnvoicedRatio;
-    float mTargetUnvoicedRatio;
-
-    bool mMidiActiveMode = false;
-    float mInputEnvelope = 0.0f;
-    double mDownsampleTimeAccum = 0.0;
-    double mStoredSampleRate = 0.0;
-
-    // ★フェイルセーフ：Autoモード時のボイスONエッジ検出用フラグ
-    bool mWasAutoVoiceActive = false;
-
-    // LPC / LSP 分析・合成用
-    std::vector<float> mLpcAnalysisBuffer;
-    std::vector<float> mCurrentLpcCoeffs;
-    std::vector<float> mCurrentLsp;
-    std::vector<float> mCurrentLspSmoothed;
-    std::vector<float> mLspStep;
-    std::vector<float> mFrozenLsp;
-    std::vector<float> mCurrentLar;
-    std::vector<float> mCurrentLarSmoothed;
-    std::vector<float> mLarStep;
-    std::vector<float> mFrozenLar;
-    bool mFormantFreezeActive = false;
-
-    // ピッチ検出 & V/UV判定用
-    float mCurrentPitchHz = 130.0f;
-    float mTargetPitchHz = 130.0f;
-    float mPitchSmoothed = 130.0f;
-    bool mIsVoiced = false;
-    int mVoicedDebounceCounter = 0;
-    std::vector<float> mPitchHistory;
-
-    // 残差信号 (Residual) バッファ
-    std::vector<float> mLpcResidualBuffer;
-
-    // アルゴリズム切り替えクロスフェード
-    juce::LinearSmoothedValue<float> mModeCrossfade;
-    int mPrevVocoderMode = -1;
-    std::vector<float> mMode0WetBufferL;
-    std::vector<float> mMode0WetBufferR;
-    std::vector<float> mMode1WetBufferL;
-    std::vector<float> mMode1WetBufferR;
-
-    // Band EQ およびアナライザーレベル
+    // バンドEQデータ (UIおよびDSP共有)
     std::array<std::atomic<float>, 48> mBandGains;
     std::array<std::atomic<float>, 48> mBandLevelsForUi;
 
-    // 最終段リミッター用状態
-    float mSmoothedGain = 1.0f;
-    float mLimiterGain = 1.0f;
+    // パラメータ同期用のモジュレーションマトリクス値保持バッファ
+    ModMatrix::Params mModParams;
 
-    // MSクロスマトリクスおよびデコレレーター用状態
-    float mMsFilterState = 0.0f;
-    float mMsPrevInput = 0.0f;
-    std::vector<float> mMsDelayBuffer;
-    int mMsDelayWritePtr = 0;
+    // 16kHzダウンサンプリング/アップサンプリング用状態
+    double mStoredSampleRate = 44100.0;
+    double mDownsampleTimeAccum = 0.0;
+    double mUpsampleTimeAccum = 0.0;
 
-    std::vector<float> mApfBufferL;
-    std::vector<float> mApfBufferR;
-    int mApfWritePtrL = 0;
-    int mApfWritePtrR = 0;
+    std::vector<float> mDownsampledBuffer;
+    std::vector<float> m16kWetL;
+    std::vector<float> m16kWetR;
 
-    std::atomic<int> mErrorState{ 0 };
+    int mControlRateCounter = 0;
+    std::atomic<float> mInputEnvelope { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessor)
 };

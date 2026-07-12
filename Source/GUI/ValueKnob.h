@@ -1,6 +1,6 @@
 // ==========================================
 // File: ValueKnob.h
-// 右クリックで数値を直接入力できるロータリースライダー
+// 右クリックで数値を直接入力できるロータリースライダー（Granular 準拠）
 // ==========================================
 #pragma once
 
@@ -28,10 +28,10 @@ private:
         auto editor = std::make_unique<juce::TextEditor>();
         editor->setSize(96, 26);
         editor->setJustification(juce::Justification::centred);
-        editor->setColour(juce::TextEditor::backgroundColourId, GUI::ColorPalette::panelBg);
-        editor->setColour(juce::TextEditor::textColourId, GUI::ColorPalette::textHeader);
-        editor->setColour(juce::TextEditor::outlineColourId, GUI::ColorPalette::panelBorder);
-        editor->setColour(juce::TextEditor::focusedOutlineColourId, GUI::ColorPalette::mint.withAlpha(0.7f));
+        editor->setColour(juce::TextEditor::backgroundColourId, SpectraColors::panel);
+        editor->setColour(juce::TextEditor::textColourId, SpectraColors::text);
+        editor->setColour(juce::TextEditor::outlineColourId, SpectraColors::panelLine);
+        editor->setColour(juce::TextEditor::focusedOutlineColourId, SpectraColors::mint.withAlpha(0.7f));
         editor->setInputRestrictions(12, "0123456789.-");
         editor->setText(juce::String(getValue(), 3), juce::dontSendNotification);
         editor->setSelectAllWhenFocused(true);

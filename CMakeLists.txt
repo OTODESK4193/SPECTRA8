@@ -1,12 +1,11 @@
 cmake_minimum_required(VERSION 3.22)
 
 # ============================================================================
-#  SPECTRA8  -  Formant-Separation Voice Modeling Synthesizer (OTODESK)
+#  SPECTRA8  -  Hybrid Formant Vocoder (OTODESK)
 #  JUCE 8.0 系 / VST3 + Standalone
-#  8-voice polyphonic LPC synthesis engine / Character (Lo-Fi <-> Hi-Fi)
-#  最適化: AVX2 SIMD, /fp:fast
+#  開発計画書 第2版準拠: C++スカラー設計（AVX2廃止）/ Ableton Live最適化
 # ============================================================================
-project(SPECTRA8 VERSION 0.1.0 LANGUAGES C CXX)
+project(SPECTRA8 VERSION 0.2.0 LANGUAGES C CXX)
 
 # ----------------------------------------------------------------------------
 #  C++20
@@ -29,7 +28,7 @@ juce_add_plugin(SPECTRA8
     PLUGIN_CODE              "Sp8v"
     FORMATS                  VST3 Standalone
     PRODUCT_NAME             "SPECTRA8"
-    PLUGIN_DESCRIPTION       "Formant-Separation Voice Modeling Synthesizer"
+    PLUGIN_DESCRIPTION       "Hybrid Formant Vocoder"
     IS_SYNTH                 FALSE
     NEEDS_MIDI_INPUT         TRUE
     NEEDS_MIDI_OUTPUT        FALSE
@@ -37,11 +36,11 @@ juce_add_plugin(SPECTRA8
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     VST3_AUTO_MANIFEST       FALSE
     COPY_PLUGIN_AFTER_BUILD  TRUE
-    VERSION                  "0.1.0"
+    VERSION                  "0.2.0"
 )
 
 # ----------------------------------------------------------------------------
-#  ソース (Sourceフォルダ経由)
+#  ソース
 # ----------------------------------------------------------------------------
 target_sources(SPECTRA8 PRIVATE
     # --- プラグインコア ---
@@ -50,26 +49,30 @@ target_sources(SPECTRA8 PRIVATE
     Source/PluginEditor.h
     Source/PluginEditor.cpp
 
-    # --- DSP モジュール (シンプル直書き化) ---
-    Source/DSP/SimdUtils.h
-    Source/DSP/VoiceState.h
-    Source/DSP/MidiQueue.h
-    Source/DSP/OscillatorBank.h
-    Source/DSP/OscillatorBank.cpp
-    Source/DSP/NoiseGenerator.h
-    Source/DSP/VoiceManager.h
-    Source/DSP/VoiceManager.cpp
+    # --- DSP モジュール ---
+    Source/DSP/ModMatrix.h
+    Source/DSP/Wavetable.h
+    Source/DSP/PitchTracker.h
+    Source/DSP/ExcitationEngine.h
+    Source/DSP/ExcitationEngine.cpp
+    Source/DSP/FilterbankVocoder.h
+    Source/DSP/FilterbankVocoder.cpp
+    Source/DSP/Limiter.h
 
     # --- GUI モジュール ---
     Source/GUI/ColorPalette.h
     Source/GUI/ArcDial.h
     Source/GUI/ArcDial.cpp
-    Source/GUI/MainPanel.h
-    Source/GUI/MainPanel.cpp
     Source/GUI/ValueKnob.h
     Source/GUI/GlowToggle.h
-    Source/GUI/BandEditorPanel.h
-    Source/GUI/BandEditorPanel.cpp
+    Source/GUI/VocoderPanel.h
+    Source/GUI/VocoderPanel.cpp
+    Source/GUI/ExcitationPanel.h
+    Source/GUI/ExcitationPanel.cpp
+    Source/GUI/ModPanel.h
+    Source/GUI/ModPanel.cpp
+    Source/GUI/BandsEqPanel.h
+    Source/GUI/BandsEqPanel.cpp
 )
 
 # ----------------------------------------------------------------------------
@@ -79,11 +82,6 @@ target_include_directories(SPECTRA8 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Source
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/DSP
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/GUI
-)
-
-# サードパーティは SYSTEM 扱い (/external:I) にして警告対象から外す
-target_include_directories(SPECTRA8 SYSTEM PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/third_party
 )
 
 # ----------------------------------------------------------------------------
@@ -119,7 +117,7 @@ target_compile_definitions(SPECTRA8 PRIVATE
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1
-    SPECTRA8_VERSION="0.1.0"
+    SPECTRA8_VERSION="0.2.0"
 )
 
 # ----------------------------------------------------------------------------
@@ -128,11 +126,10 @@ target_compile_definitions(SPECTRA8 PRIVATE
 juce_generate_juce_header(SPECTRA8)
 
 # ----------------------------------------------------------------------------
-#  MSVC コンパイルオプション (AVX2 SIMD 有効)
+#  MSVC コンパイルオプション（スカラー設計: /arch:AVX2 は使用しない）
 # ----------------------------------------------------------------------------
 if(MSVC)
     target_compile_options(SPECTRA8 PRIVATE
-        /arch:AVX2
         /fp:fast
         /utf-8
         /W3

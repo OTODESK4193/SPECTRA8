@@ -1,6 +1,6 @@
 // ==========================================
 // File: GlowToggle.h
-// LED点灯式トグルボタン（ON時にアクセント色でグロー）
+// LED点灯式トグルボタン（ON時にアクセント色でグロー / Granular 準拠）
 // ==========================================
 #pragma once
 
@@ -20,11 +20,11 @@ public:
 
         // 背景
         g.setColour(on ? accent.withAlpha(0.16f)
-                       : (highlighted ? GUI::ColorPalette::sliderTrack.brighter(0.15f) : GUI::ColorPalette::sliderTrack));
+                       : (highlighted ? SpectraColors::knobTrack.brighter(0.15f) : SpectraColors::knobTrack));
         g.fillRoundedRectangle(r, 6.0f);
 
         // 枠
-        g.setColour(on ? accent.withAlpha(0.9f) : GUI::ColorPalette::panelBorder);
+        g.setColour(on ? accent.withAlpha(0.9f) : SpectraColors::panelLine);
         g.drawRoundedRectangle(r, 6.0f, on ? 1.5f : 1.0f);
 
         // LEDインジケーター
@@ -35,11 +35,11 @@ public:
             g.setColour(accent.withAlpha(0.35f)); // グロー
             g.fillEllipse(ledX - 6.5f, ledY - 6.5f, 13.0f, 13.0f);
         }
-        g.setColour(on ? accent : GUI::ColorPalette::textMuted.withAlpha(0.45f));
+        g.setColour(on ? accent : SpectraColors::textDim.withAlpha(0.45f));
         g.fillEllipse(ledX - 3.0f, ledY - 3.0f, 6.0f, 6.0f);
 
         // テキスト
-        g.setColour(on ? GUI::ColorPalette::textBody : GUI::ColorPalette::textMuted);
+        g.setColour(on ? SpectraColors::text : SpectraColors::textDim);
         g.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
         g.drawText(getButtonText(), (int)ledX + 9, 0, getWidth() - (int)ledX - 11, getHeight(),
                    juce::Justification::centredLeft);

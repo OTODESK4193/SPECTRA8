@@ -1,11 +1,19 @@
+// ==========================================
+// File: PluginEditor.h
+// SPECTRA8 エディター層 (4タブ + HUD / Granular 準拠)
+// ==========================================
 #pragma once
-#include <juce_gui_basics/juce_gui_basics.h>
+
+#include <JuceHeader.h>
 #include "PluginProcessor.h"
-#include "MainPanel.h"
-#include "BandEditorPanel.h"
+#include "GUI/VocoderPanel.h"
+#include "GUI/ExcitationPanel.h"
+#include "GUI/ModPanel.h"
+#include "GUI/BandsEqPanel.h"
 
 class SPECTRA8AudioProcessorEditor : public juce::AudioProcessorEditor,
-                                     public juce::Timer {
+                                     public juce::Timer 
+{
 public:
     SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcessor&);
     ~SPECTRA8AudioProcessorEditor() override;
@@ -15,23 +23,25 @@ public:
     void timerCallback() override;
 
 private:
-    void updateTabVisibility();
+    void selectTab(int tabIndex);
 
     SPECTRA8AudioProcessor& audioProcessor;
     
-    // タブ選択ボタン
-    juce::TextButton mTabVocoderBtn;
-    juce::TextButton mTabExcitationBtn;
-    juce::TextButton mTabBandsEqBtn;
+    // タブ選択ボタン (4つ)
+    juce::TextButton mTabVocoderBtn   { "VOCODER" };
+    juce::TextButton mTabExcitationBtn { "EXCITATION" };
+    juce::TextButton mTabModBtn        { "MOD MATRIX" };
+    juce::TextButton mTabBandsEqBtn    { "BANDS EQ" };
 
-    int mActiveTab = 0; // 0: VOCODER, 1: EXCITATION, 2: BANDS EQ
+    int mActiveTab = 0; // 0: VOCODER, 1: EXCITATION, 2: MOD, 3: BANDS EQ
 
-    // タブパネル
-    GUI::VocoderTabPanel mVocoderPanel;
-    GUI::ExcitationTabPanel mExcitationPanel;
-    GUI::BandEditorPanel mBandsEqPanel;
+    // タブパネルの実体
+    VocoderPanel mVocoderPanel;
+    ExcitationPanel mExcitationPanel;
+    ModPanel mModPanel;
+    BandsEqPanel mBandsEqPanel;
 
-    // デバッグ情報表示用ラベル
+    // HUD (デバッグ・ステータス表示用)
     juce::Label mDebugLabel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessorEditor)
