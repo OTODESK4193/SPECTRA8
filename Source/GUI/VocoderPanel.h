@@ -44,6 +44,8 @@ private:
     juce::ComboBox mComboLpcInterpolation;
     juce::ComboBox mComboFilterbankType;
     juce::ComboBox mComboLpcOrder;        // フェーズ2: LPC次数
+    juce::ComboBox mComboFrameRate;       // フェーズ2 M5: フレームレート
+    juce::ComboBox mComboQuantBits;       // フェーズ2 M5: k量子化ビット数
 
     // vocoderMode に応じた有効/無効表示 (LPC選択時のみ ORDER 等を有効化)
     void updateEnablement();
@@ -86,6 +88,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentLpcInterpolation;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentFilterbankType;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentLpcOrder;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentFrameRate;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentQuantBits;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> mAttachmentFormantFreeze;
 

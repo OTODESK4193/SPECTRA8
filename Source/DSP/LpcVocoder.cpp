@@ -66,10 +66,12 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
     if (mFilled < kRingSize)
         ++mFilled;
 
-    // 2. フレーム毎の分析（ターゲット更新）
-    if (++mHopCounter >= kHopSamples)
+    // 2. フレーム毎の分析（ターゲット更新）。ホップ長はフレームレート依存(M5)。
+    if (++mHopCounter >= mHopSamples)
     {
         mHopCounter = 0;
+        // freeze(明示) または frameRate=0 のときは分析更新を停止
+        const bool doFreeze = freeze || mRateFreeze;
 
         // FMT SHIFT: 分析窓を factor=2^(st/12) 倍のステップでリサンプルして読み出す。
         //  factor>1 → 声道形状を時間圧縮して分析 → フォルマント上昇（テープ早回し相当）。
@@ -78,7 +80,7 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
         const double span   = (double)(LpcAnalyzer::kWindowSize - 1) * factor; // 必要な過去履歴長
         const int    needed = std::min(kRingSize - 2, (int)std::ceil(span) + 2);
 
-        if (!freeze && mFilled >= needed)
+        if (!doFreeze && mFilled >= needed)
         {
             if (std::abs(factor - 1.0) < 1e-6)
             {
@@ -106,6 +108,18 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
 
             const float g = mAnalyzer.analyzeFrame(mFrame.data(), order, mKTarget.data(), (double)gamma);
             mGTarget = g * mExcNorm;   // 励起レベル正規化（per-sample残差RMS相当へ）
+
+            // M5: 反射係数kのビット量子化（BitSpeek風レトロ）。
+            //  0を表現できる対称量子化 Q=2^(bits-1)-1。量子化後は安定域±0.995へ再クランプ。
+            if (mQuantBits >= 2)
+            {
+                const float Q = (float)((1 << (mQuantBits - 1)) - 1);
+                for (int p = 0; p < order; ++p)
+                {
+                    float kq = std::round(mKTarget[(size_t)p] * Q) / Q;
+                    mKTarget[(size_t)p] = std::min(0.995f, std::max(-0.995f, kq));
+                }
+            }
         }
     }
 

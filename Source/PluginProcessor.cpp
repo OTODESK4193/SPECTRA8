@@ -79,6 +79,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("lpcOrder", 1), "LPC Order", juce::StringArray{ "8", "10", "12", "16" }, 3));
 
+    // フェーズ2 M5: BitSpeekレトロ層
+    //  FRAME RATE: 分析フレーム更新レート。低いほど声が「カクつく」トイ感。Freeze=更新停止。
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("frameRate", 1), "Frame Rate",
+        juce::StringArray{ "Freeze", "8 Hz", "15 Hz", "25 Hz", "50 Hz", "80 Hz" }, 4)); // 既定50Hz
+    //  K QUANT: 反射係数のビット量子化。少ないほど声道が粗くBitSpeek的レトロ音に。
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("lpcQuantBits", 1), "K Quant",
+        juce::StringArray{ "Off", "6 bit", "5 bit", "4 bit", "3 bit" }, 0));
+
     // --- キャリアパラメータ ---
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("waveform", 1), "Waveform", juce::StringArray{ "Saw", "Pulse", "Wavetable" }, 0));
@@ -324,6 +334,14 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     const int lpcOrder = kLpcOrderMap[lpcOrderIdx];
     const bool lpcFreeze = (apvts.getRawParameterValue("formantFreeze")->load() >= 0.5f);
     mLpcVocoder.setWindowType((int)apvts.getRawParameterValue("windowType")->load());
+
+    // M5: FRAME RATE / k量子化（ブロック毎に設定）
+    static constexpr float kFrameRateMap[6] = { 0.0f, 8.0f, 15.0f, 25.0f, 50.0f, 80.0f };
+    const int frIdx = juce::jlimit(0, 5, (int)apvts.getRawParameterValue("frameRate")->load());
+    mLpcVocoder.setFrameRate(kFrameRateMap[frIdx]);
+    static constexpr int kQuantBitsMap[5] = { 0, 6, 5, 4, 3 };
+    const int qbIdx = juce::jlimit(0, 4, (int)apvts.getRawParameterValue("lpcQuantBits")->load());
+    mLpcVocoder.setQuantBits(kQuantBitsMap[qbIdx]);
 
     // ポストEQ(LPC出力用)の係数をブロック毎に更新。BANDS EQの帯域ゲインを反映する。
     mPostEq.updateCoeffs((int)apvts.getRawParameterValue("bandCount")->load(), mBandGains);

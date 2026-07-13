@@ -36,6 +36,17 @@ public:
 
     void setWindowType(int type) noexcept;
 
+    // M5: フレームレート(Hz)。0以下でフリーズ(分析更新停止)。既定50Hz。
+    void setFrameRate(float hz) noexcept
+    {
+        if (hz < 0.5f) { mRateFreeze = true;  mHopSamples = kHopSamples; }
+        else           { mRateFreeze = false;
+                         mHopSamples = std::max(1, (int)std::lround(kInternalSampleRate / (double)hz)); }
+    }
+
+    // M5: 反射係数kのビット量子化。0=無効。少ないほどレトロ(粗い声道)。
+    void setQuantBits(int bits) noexcept { mQuantBits = (bits < 2) ? 0 : std::min(16, bits); }
+
     // 1サンプル処理（16kHz領域）
     //  modulator : 分析側入力
     //  carrierL/R: 合成側キャリア
@@ -71,6 +82,11 @@ private:
     int mCtrlCounter = 0;
     int mCurOrder = 16;
     int mWindowType = 0;
+
+    // M5: レトロ層
+    int  mHopSamples = kHopSamples;  // 可変ホップ(フレームレート)
+    bool mRateFreeze = false;        // frameRate=0 相当のフリーズ
+    int  mQuantBits  = 0;            // k量子化ビット数(0=無効)
 
     float mExcNorm = 1.0f;   // 1/sqrt(Σw²)（窓タイプ依存）
     float mGAttCoef = 0.0f;  // att 5ms @ コントロールレート

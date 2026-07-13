@@ -60,6 +60,8 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
     setupCombo(mComboLpcInterpolation, { "LSP Interp", "LAR Interp" });
     setupCombo(mComboFilterbankType, { "BPF Bank", "Subtractive LR4" });
     setupCombo(mComboLpcOrder, { "Order 8", "Order 10", "Order 12", "Order 16" });
+    setupCombo(mComboFrameRate, { "Freeze", "8 Hz", "15 Hz", "25 Hz", "50 Hz", "80 Hz" });
+    setupCombo(mComboQuantBits, { "K: Off", "K: 6bit", "K: 5bit", "K: 4bit", "K: 3bit" });
 
     addAndMakeVisible(mBtnFormantFreeze);
 
@@ -86,6 +88,8 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
 
     mAttachmentFormantFreeze   = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(apvts, "formantFreeze", mBtnFormantFreeze);
     mAttachmentLpcOrder        = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "lpcOrder", mComboLpcOrder);
+    mAttachmentFrameRate       = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "frameRate", mComboFrameRate);
+    mAttachmentQuantBits       = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "lpcQuantBits", mComboQuantBits);
 
     // モード変更に応じた有効/無効表示の連動
     // (ComboBoxAttachment は Listener 経由なので onChange ラムダとは競合しない)
@@ -100,6 +104,8 @@ void VocoderPanel::updateEnablement()
     // LPCモード専用
     mComboLpcOrder.setEnabled(lpc);
     mComboAnalysisWindow.setEnabled(lpc);       // 分析窓はLPCモードで初めて音に効く
+    mComboFrameRate.setEnabled(lpc);            // M5: レトロ層はLPC専用
+    mComboQuantBits.setEnabled(lpc);
 
     // Filterbankモード専用
     mComboFilterbankType.setEnabled(!lpc);
@@ -150,21 +156,26 @@ void VocoderPanel::resized()
 
     // 左セクション: 設定 & 分析モード (width: 35%)
     auto leftArea = r.removeFromLeft((int)(w * 0.35f));
-    const int comboH = 26;
+    const int comboH = 24;
     const int comboW = leftArea.getWidth() - 16;
-    
-    // コンボボックス配置
-    mComboVocoderMode.setBounds(leftArea.getX() + 8, leftArea.getY() + 12, comboW, comboH);
-    mComboVoicingMode.setBounds(leftArea.getX() + 8, leftArea.getY() + 48, comboW, comboH);
-    mComboFilterbankType.setBounds(leftArea.getX() + 8, leftArea.getY() + 84, comboW, comboH);
-    mComboAnalysisWindow.setBounds(leftArea.getX() + 8, leftArea.getY() + 120, comboW, comboH);
-    mComboLpcInterpolation.setBounds(leftArea.getX() + 8, leftArea.getY() + 156, comboW, comboH);
-    mComboLimiter.setBounds(leftArea.getX() + 8, leftArea.getY() + 192, comboW, comboH);
+    const int cx = leftArea.getX() + 8;
+    const int step = 30;                 // M5でコンボが増えたため行間を圧縮
+    int cy = leftArea.getY() + 8;
+
+    // コンボボックス配置 (上から: モード系 → LPC分析系 → M5レトロ系 → 補間/リミッタ)
+    mComboVocoderMode.setBounds(cx, cy, comboW, comboH);       cy += step;
+    mComboVoicingMode.setBounds(cx, cy, comboW, comboH);       cy += step;
+    mComboFilterbankType.setBounds(cx, cy, comboW, comboH);    cy += step;
+    mComboAnalysisWindow.setBounds(cx, cy, comboW, comboH);    cy += step;
+    mComboFrameRate.setBounds(cx, cy, comboW, comboH);         cy += step;  // M5
+    mComboQuantBits.setBounds(cx, cy, comboW, comboH);         cy += step;  // M5
+    mComboLpcInterpolation.setBounds(cx, cy, comboW, comboH);  cy += step;
+    mComboLimiter.setBounds(cx, cy, comboW, comboH);           cy += step;
 
     // フリーズボタン + LPC次数コンボ (左右分割)
     const int halfW = (comboW - 8) / 2;
-    mBtnFormantFreeze.setBounds(leftArea.getX() + 8, leftArea.getY() + 234, halfW, comboH + 4);
-    mComboLpcOrder.setBounds(leftArea.getX() + 8 + halfW + 8, leftArea.getY() + 236, halfW, comboH);
+    mBtnFormantFreeze.setBounds(cx, cy, halfW, comboH + 4);
+    mComboLpcOrder.setBounds(cx + halfW + 8, cy + 2, halfW, comboH);
 
     // 中央セクション: フォルマント & トラッキング (width: 35%)
     auto midArea = r.removeFromLeft((int)(w * 0.35f));
