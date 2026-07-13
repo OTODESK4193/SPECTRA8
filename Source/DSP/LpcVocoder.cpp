@@ -44,7 +44,8 @@ void LpcVocoder::setWindowType(int type) noexcept
 
 void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                                float& outL, float& outR,
-                               int order, bool freeze, float gamma) noexcept
+                               int order, bool freeze, float gamma,
+                               float formantShiftSemitones) noexcept
 {
     order = std::min(LpcAnalyzer::kMaxOrder, std::max(1, order));
 
@@ -69,11 +70,39 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
     if (++mHopCounter >= kHopSamples)
     {
         mHopCounter = 0;
-        if (!freeze && mFilled >= LpcAnalyzer::kWindowSize)
+
+        // FMT SHIFT: 分析窓を factor=2^(st/12) 倍のステップでリサンプルして読み出す。
+        //  factor>1 → 声道形状を時間圧縮して分析 → フォルマント上昇（テープ早回し相当）。
+        //  合成は 16kHz でそのまま行うためピッチ(キャリア)は不変。
+        const double factor = std::pow(2.0, (double)formantShiftSemitones / 12.0);
+        const double span   = (double)(LpcAnalyzer::kWindowSize - 1) * factor; // 必要な過去履歴長
+        const int    needed = std::min(kRingSize - 2, (int)std::ceil(span) + 2);
+
+        if (!freeze && mFilled >= needed)
         {
-            const int start = (mWritePos - LpcAnalyzer::kWindowSize + kRingSize) & (kRingSize - 1);
-            for (int n = 0; n < LpcAnalyzer::kWindowSize; ++n)
-                mFrame[(size_t)n] = mRing[(size_t)((start + n) & (kRingSize - 1))];
+            if (std::abs(factor - 1.0) < 1e-6)
+            {
+                // シフト無し: 従来通り等間隔読み出し（数値完全一致）
+                const int start = (mWritePos - LpcAnalyzer::kWindowSize + kRingSize) & (kRingSize - 1);
+                for (int n = 0; n < LpcAnalyzer::kWindowSize; ++n)
+                    mFrame[(size_t)n] = mRing[(size_t)((start + n) & (kRingSize - 1))];
+            }
+            else
+            {
+                // 分数ステップ読み出し（線形補間）。窓の最後尾を最新サンプルに揃える。
+                const int newest = (mWritePos - 1 + kRingSize) & (kRingSize - 1);
+                for (int n = 0; n < LpcAnalyzer::kWindowSize; ++n)
+                {
+                    const double back = (double)(LpcAnalyzer::kWindowSize - 1 - n) * factor;
+                    const double pos  = (double)newest - back;      // ring index（負もあり得る）
+                    const double fp   = std::floor(pos);
+                    const double fr   = pos - fp;
+                    const int i0 = (((int)fp) % kRingSize + kRingSize) & (kRingSize - 1);
+                    const int i1 = (i0 + 1) & (kRingSize - 1);
+                    mFrame[(size_t)n] = (float)((double)mRing[(size_t)i0] * (1.0 - fr)
+                                              + (double)mRing[(size_t)i1] * fr);
+                }
+            }
 
             const float g = mAnalyzer.analyzeFrame(mFrame.data(), order, mKTarget.data(), (double)gamma);
             mGTarget = g * mExcNorm;   // 励起レベル正規化（per-sample残差RMS相当へ）

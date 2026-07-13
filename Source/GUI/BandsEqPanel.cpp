@@ -65,14 +65,23 @@ void BandsEqPanel::paint(juce::Graphics& g)
     }
 
     // ----------------------------------------------------
-    // レベルメーターの描画 (上向きのバー)
+    // レベルメーターの描画 (背景のアナライザー / 上向きのバー)
+    //   ※ EQカーブ(緑=mint)と誤認されないよう、暗い別色(青系)＋低不透明度で
+    //     「あくまで背景の入力レベル表示」であることを視覚的に明確化する。
+    //     さらに表示値を時間平滑化してガタつきを抑える。
     // ----------------------------------------------------
-    g.setColour(SpectraColors::accentBands.withAlpha(0.24f));
+    g.setColour(SpectraColors::babyBlue.withAlpha(0.14f));
     for (int i = 0; i < activeBands; ++i)
     {
         const float level = mBandLevelsForUi[(size_t)i].load(); // リニア振幅 (通常 0.0〜1.0)
+
+        // 表示平滑化 (立ち上がりは速め・減衰は緩やか)
+        float& sm = mMeterSmooth[(size_t)i];
+        const float rate = (level > sm) ? 0.5f : 0.2f;
+        sm += rate * (level - sm);
+
         // デシベル変換 (メーター用)
-        float db = (level > 1e-5f) ? (20.0f * std::log10(level)) : -60.0f;
+        float db = (sm > 1e-5f) ? (20.0f * std::log10(sm)) : -60.0f;
         db = juce::jlimit(-48.0f, 12.0f, db);
 
         // Y座標算出 (下限を -48dB に設定)
@@ -105,14 +114,14 @@ void BandsEqPanel::paint(juce::Graphics& g)
         points.push_back({ x, y });
     }
 
-    // 線で結ぶ
+    // 線で結ぶ (EQカーブ＝操作対象。メーターより手前・太めで明確に主役化)
     g.setColour(SpectraColors::accentBands);
     path.startNewSubPath(points[0]);
     for (size_t i = 1; i < points.size(); ++i)
     {
         path.lineTo(points[i]);
     }
-    g.strokePath(path, juce::PathStrokeType(2.0f));
+    g.strokePath(path, juce::PathStrokeType(2.6f));
 
     // ドットを描画
     g.setColour(SpectraColors::text);

@@ -471,7 +471,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         const float lpcGamma = 0.970f + 0.028f * juce::jlimit(0.0f, 1.0f, effectiveCharacter);
         auto renderLpc = [&](float& l, float& r)
         {
-            mLpcVocoder.processSample(inSample, carrierL, carrierR, l, r, lpcOrder, lpcFreeze, lpcGamma);
+            // FMT SHIFT(effectiveFormantShift 半音)は分析窓のリサンプル比としてLPCへ渡す
+            mLpcVocoder.processSample(inSample, carrierL, carrierR, l, r, lpcOrder, lpcFreeze,
+                                      lpcGamma, effectiveFormantShift);
             // BANDS EQ をポストEQとしてLPC出力へ適用 (クロスフェード時もLPC側のみに掛かる)
             mPostEq.process(l, r);
         };

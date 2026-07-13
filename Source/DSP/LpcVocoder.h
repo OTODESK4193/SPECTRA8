@@ -22,7 +22,9 @@ public:
     static constexpr double kInternalSampleRate = 16000.0;
     static constexpr int kHopSamples = 320;   // 既定 FRAME RATE 50Hz（M5でパラメータ化）
     static constexpr int kCtrlBlock = 32;     // 補間ブロック（PluginProcessorの制御レートと同一）
-    static constexpr int kRingSize = 512;     // 2の冪、> kWindowSize
+    // 2の冪、> kWindowSize。FMT SHIFT上げ(最大+24st=×4)時の分析窓スパン
+    // (kWindowSize-1)*4≒1020サンプルの履歴を賄うため 2048 とする。
+    static constexpr int kRingSize = 2048;
     static constexpr int kLatency16k = LpcAnalyzer::kWindowSize / 2; // PDC報告用 (128smp = 8ms)
 
     // 励起メイクアップ（スタブ実測較正: 母音入力+ノコギリキャリアで
@@ -40,9 +42,12 @@ public:
     //  order     : LPC次数 1..16
     //  freeze    : k/G フレーム更新停止
     //  gamma     : 帯域拡張係数（1.0=無効。character→γ で 0.97〜0.998）
+    //  formantShiftSemitones : FMT SHIFT。分析窓を 2^(st/12) 倍のステップで
+    //            リサンプルして読み出す(テープ変速式)。+でフォルマント上昇。ピッチは不変。
     void processSample(float modulator, float carrierL, float carrierR,
                        float& outL, float& outR,
-                       int order, bool freeze, float gamma = 1.0f) noexcept;
+                       int order, bool freeze, float gamma = 1.0f,
+                       float formantShiftSemitones = 0.0f) noexcept;
 
 private:
     LpcAnalyzer mAnalyzer;

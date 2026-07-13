@@ -38,6 +38,9 @@ private:
     std::array<std::atomic<float>, kMaxBands>& mBandGains;
     const std::array<std::atomic<float>, kMaxBands>& mBandLevelsForUi;
 
+    // メーター表示用の平滑化値（描画スレッドのみが触る。ガタつき低減）
+    std::array<float, kMaxBands> mMeterSmooth {};
+
     // メーター再描画のためのタイマー
     class MeterTimer : public juce::Timer
     {
