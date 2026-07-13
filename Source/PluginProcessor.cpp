@@ -92,8 +92,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("detune", 1), "Detune", 0.0f, 1200.0f, 5.0f));
 
+    // Noise: BitSpeek式の双方向コントロール。
+    //  Filterbank : 0〜100% がキャリアへのノイズ混入（負値は0扱い＝従来と同一）
+    //  LPC        : -100%=ノイズ除去(純トーン) / 0%=自動V/UV追従 / +100%=全ノイズ(ウィスパー)
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("noise", 1), "Noise", 0.0f, 100.0f, 0.0f));
+        juce::ParameterID("noise", 1), "Noise", -100.0f, 100.0f, 0.0f));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("lofi", 1), "LoFi", 0.0f, 1.0f, 0.0f));
@@ -181,6 +184,7 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     // (LPCモードは分析窓の群遅延 128smp@16kHz = 8ms)
     mCurVocoderMode = -1;
     mVocXfadeRemaining = 0;
+    mVoicedSmooth = 0.0f;
     {
         const int vm = (int)apvts.getRawParameterValue("vocoderMode")->load();
         setLatencySamples(vm == 1 ? (int)std::round(0.008 * sampleRate) : 0);
@@ -392,8 +396,25 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             const float wtPos = juce::jlimit(0.0f, 1.0f, getModVal("wavetablePosition", ModMatrix::DstWtPos));
             const float pulseWidth = juce::jlimit(5.0f, 95.0f, getModVal("pulseWidth", ModMatrix::DstPulseWidth)) * 0.01f;
             const float detune = juce::jlimit(0.0f, 1200.0f, getModVal("detune", ModMatrix::DstDetune));
-            const float noise = juce::jlimit(0.0f, 100.0f, getModVal("noise", ModMatrix::DstNoise)) * 0.01f;
             const float lofi = juce::jlimit(0.0f, 1.0f, getModVal("lofi", ModMatrix::DstLofi));
+
+            // --- NOISE± (BitSpeek式) → ExcitationEngineへ渡す実効ノイズmix(0..1)を算出 ---
+            const float noiseSigned = juce::jlimit(-100.0f, 100.0f, getModVal("noise", ModMatrix::DstNoise)) * 0.01f; // -1..+1
+            // 有声度の平滑化(入力音声のV/UV)。無声ほど自動でノイズ励起へ。
+            const float voicedNow = mPitchTracker.isVoiced() ? 1.0f : 0.0f;
+            mVoicedSmooth += 0.25f * (voicedNow - mVoicedSmooth);
+            float noise; // ExcitationEngine::syncParameters が受け取る 0..1 のmix
+            if (mCurVocoderMode == 1) // LPCモード: -1=除去 / 0=自動V/UV / +1=全ノイズ
+            {
+                const float autoMix = 1.0f - mVoicedSmooth;            // 無声=1.0, 有声=0.0
+                noise = (noiseSigned >= 0.0f)
+                          ? autoMix + noiseSigned * (1.0f - autoMix)   // 0→auto, +1→1.0
+                          : autoMix * (1.0f + noiseSigned);            // 0→auto, -1→0.0
+            }
+            else // Filterbankモード: 従来通り(負値は0)
+            {
+                noise = juce::jmax(0.0f, noiseSigned);
+            }
 
             const float porta = apvts.getRawParameterValue("porta")->load();
             const int waveform = (int)(apvts.getRawParameterValue("waveform")->load());

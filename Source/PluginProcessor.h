@@ -107,6 +107,7 @@ private:
     alignas(8) std::atomic<float> mInputEnvelope { 0.0f };
     int mPrevMode = -1;
     float mLastVoicedPitch = 130.0f;
+    float mVoicedSmooth = 0.0f;   // 平滑化した有声度(0..1)。LPCのNOISE± 自動V/UV用
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessor)
 };
