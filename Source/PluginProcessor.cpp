@@ -171,6 +171,7 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
     mFilterbankVocoder.prepare(sampleRate);
     mLpcVocoder.prepare(sampleRate);
+    mPostEq.prepare(LpcVocoder::kInternalSampleRate);   // ポストEQは16kHz内部レートで動作
     mExcitationEngine.prepare(sampleRate);
     mModMatrix.prepare(sampleRate);
     mPitchTracker.prepare(sampleRate);
@@ -320,6 +321,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     const bool lpcFreeze = (apvts.getRawParameterValue("formantFreeze")->load() >= 0.5f);
     mLpcVocoder.setWindowType((int)apvts.getRawParameterValue("windowType")->load());
 
+    // ポストEQ(LPC出力用)の係数をブロック毎に更新。BANDS EQの帯域ゲインを反映する。
+    mPostEq.updateCoeffs((int)apvts.getRawParameterValue("bandCount")->load(), mBandGains);
+
     for (int s = 0; s < num16kSamples; ++s)
     {
         const float inSample = mDownsampledBuffer[(size_t)s];
@@ -463,9 +467,13 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                                              bandCount, effectiveCharacter, effectiveFormantShift, effectiveFormantStretch,
                                              filterbankType, 1.0f, mBandGains, mBandLevelsForUi);
         };
+        // character(0..1) → 帯域拡張γ(0.97=ぼやけ 〜 0.998=シャープ) へマッピング (M3)
+        const float lpcGamma = 0.970f + 0.028f * juce::jlimit(0.0f, 1.0f, effectiveCharacter);
         auto renderLpc = [&](float& l, float& r)
         {
-            mLpcVocoder.processSample(inSample, carrierL, carrierR, l, r, lpcOrder, lpcFreeze);
+            mLpcVocoder.processSample(inSample, carrierL, carrierR, l, r, lpcOrder, lpcFreeze, lpcGamma);
+            // BANDS EQ をポストEQとしてLPC出力へ適用 (クロスフェード時もLPC側のみに掛かる)
+            mPostEq.process(l, r);
         };
 
         if (mVocXfadeRemaining > 0)

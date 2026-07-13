@@ -62,6 +62,7 @@ target_sources(SPECTRA8 PRIVATE
     Source/DSP/LpcLattice.h
     Source/DSP/LpcVocoder.h
     Source/DSP/LpcVocoder.cpp
+    Source/DSP/PostBandEq.h
     Source/DSP/Limiter.h
 
     # --- GUI モジュール ---

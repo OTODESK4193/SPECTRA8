@@ -39,8 +39,10 @@ public:
     //  x     : kWindowSize サンプル（16kHz）
     //  order : 1..kMaxOrder
     //  kOut  : order 個の反射係数を書き込む（無音時は全0）
+    //  gamma : 帯域拡張係数（1.0=無効。<1.0で極半径を γ 倍に縮小しフォルマントを平滑化）
+    //          a_k ← a_k·γ^k と等価。character ノブ(M3)から 0.97〜0.998 が渡る。
     //  戻り値: ゲイン G = sqrt(E_P)（無音時は 0）
-    float analyzeFrame(const float* x, int order, float* kOut) noexcept;
+    float analyzeFrame(const float* x, int order, float* kOut, double gamma = 1.0) noexcept;
 
     // 窓エネルギー Σw² （励起レベル正規化 G/sqrt(Σw²) 用）
     float getWindowEnergy(int type) const noexcept

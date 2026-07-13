@@ -39,9 +39,10 @@ public:
     //  carrierL/R: 合成側キャリア
     //  order     : LPC次数 1..16
     //  freeze    : k/G フレーム更新停止
+    //  gamma     : 帯域拡張係数（1.0=無効。character→γ で 0.97〜0.998）
     void processSample(float modulator, float carrierL, float carrierR,
                        float& outL, float& outR,
-                       int order, bool freeze) noexcept;
+                       int order, bool freeze, float gamma = 1.0f) noexcept;
 
 private:
     LpcAnalyzer mAnalyzer;

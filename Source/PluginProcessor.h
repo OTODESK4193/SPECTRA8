@@ -13,6 +13,7 @@
 // 新モジュール
 #include "DSP/FilterbankVocoder.h"
 #include "DSP/LpcVocoder.h"
+#include "DSP/PostBandEq.h"
 #include "DSP/ExcitationEngine.h"
 #include "DSP/ModMatrix.h"
 #include "DSP/PitchTracker.h"
@@ -75,6 +76,7 @@ private:
     // モジュールインスタンス
     FilterbankVocoder mFilterbankVocoder;
     LpcVocoder mLpcVocoder;               // フェーズ2: LPCモード
+    PostBandEq mPostEq;                   // フェーズ2 M3: LPC出力へBANDS EQをポスト適用
     ExcitationEngine mExcitationEngine;
     ModMatrix mModMatrix;
     PitchTracker mPitchTracker;

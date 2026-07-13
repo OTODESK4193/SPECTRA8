@@ -34,7 +34,7 @@ void LpcAnalyzer::prepare()
     }
 }
 
-float LpcAnalyzer::analyzeFrame(const float* x, int order, float* kOut) noexcept
+float LpcAnalyzer::analyzeFrame(const float* x, int order, float* kOut, double gamma) noexcept
 {
     order = std::min(kMaxOrder, std::max(1, order));
 
@@ -70,6 +70,7 @@ float LpcAnalyzer::analyzeFrame(const float* x, int order, float* kOut) noexcept
     double a[kMaxOrder + 1] = {};     // a[1..i]、A(z)=1+Σa_i z^-i
     double anew[kMaxOrder + 1] = {};
     double E = r[0];
+    int reached = 0;                  // 実際に完了した次数（E打ち切り対応）
 
     for (int i = 1; i <= order; ++i)
     {
@@ -87,11 +88,39 @@ float LpcAnalyzer::analyzeFrame(const float* x, int order, float* kOut) noexcept
         for (int j = 1; j <= i; ++j)
             a[j] = anew[j];
 
+        reached = i;
         E *= (1.0 - ki * ki);
         if (E < 1e-9)
         {
             E = std::max(E, 0.0);
             break;                    // 以降の k は 0 のまま（前フレーム保持はしない）
+        }
+    }
+
+    // 4b. 帯域拡張（M3 character→γ）: a_k ← a_k·γ^k で極半径を γ 倍に縮小。
+    //     ラティス合成は反射係数 k を使うため、拡張後の a を step-down で k へ再変換する。
+    //     γ<1 は極を単位円内へ縮めるので |k|<1 が保たれ安定。
+    if (gamma < 0.99999 && reached >= 1)
+    {
+        double ae[kMaxOrder + 1] = {};
+        double g = 1.0;
+        for (int i = 1; i <= reached; ++i) { g *= gamma; ae[i] = a[i] * g; }
+
+        // step-down 再帰（Levinson の逆写像）: 各段の反射係数 = その段の最高次係数
+        for (int i = reached; i >= 1; --i)
+        {
+            double ki = ae[i];
+            ki = std::min(kReflClamp, std::max(-kReflClamp, ki));
+            kOut[i - 1] = (float)ki;
+
+            const double d = 1.0 - ki * ki;
+            if (d < 1e-9)
+                break;                // 数値的に不安定な段以降は現状の k を保持
+            double aprev[kMaxOrder + 1] = {};
+            for (int j = 1; j < i; ++j)
+                aprev[j] = (ae[j] - ki * ae[i - j]) / d;
+            for (int j = 1; j < i; ++j)
+                ae[j] = aprev[j];
         }
     }
 

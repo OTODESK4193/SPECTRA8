@@ -44,7 +44,7 @@ void LpcVocoder::setWindowType(int type) noexcept
 
 void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                                float& outL, float& outR,
-                               int order, bool freeze) noexcept
+                               int order, bool freeze, float gamma) noexcept
 {
     order = std::min(LpcAnalyzer::kMaxOrder, std::max(1, order));
 
@@ -75,7 +75,7 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
             for (int n = 0; n < LpcAnalyzer::kWindowSize; ++n)
                 mFrame[(size_t)n] = mRing[(size_t)((start + n) & (kRingSize - 1))];
 
-            const float g = mAnalyzer.analyzeFrame(mFrame.data(), order, mKTarget.data());
+            const float g = mAnalyzer.analyzeFrame(mFrame.data(), order, mKTarget.data(), (double)gamma);
             mGTarget = g * mExcNorm;   // 励起レベル正規化（per-sample残差RMS相当へ）
         }
     }
