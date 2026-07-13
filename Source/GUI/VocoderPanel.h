@@ -36,13 +36,17 @@ private:
     ValueKnob mKnobOutLevel;
     ValueKnob mKnobPitchQuantize; // 新設: ケロケロ
 
-    // コンボ 6種
+    // コンボ 7種
     juce::ComboBox mComboVocoderMode;
     juce::ComboBox mComboVoicingMode;
     juce::ComboBox mComboLimiter;
     juce::ComboBox mComboAnalysisWindow;
     juce::ComboBox mComboLpcInterpolation;
     juce::ComboBox mComboFilterbankType;
+    juce::ComboBox mComboLpcOrder;        // フェーズ2: LPC次数
+
+    // vocoderMode に応じた有効/無効表示 (LPC選択時のみ ORDER 等を有効化)
+    void updateEnablement();
 
     // ボタン
     GlowToggle mBtnFormantFreeze;
@@ -81,6 +85,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentAnalysisWindow;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentLpcInterpolation;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentFilterbankType;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentLpcOrder;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> mAttachmentFormantFreeze;
 

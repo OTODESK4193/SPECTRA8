@@ -12,6 +12,7 @@
 
 // 新モジュール
 #include "DSP/FilterbankVocoder.h"
+#include "DSP/LpcVocoder.h"
 #include "DSP/ExcitationEngine.h"
 #include "DSP/ModMatrix.h"
 #include "DSP/PitchTracker.h"
@@ -59,7 +60,7 @@ public:
             msg += "InLvl: " + juce::String(inEnv * 100.0f, 1) + "% | ";
 
         int vMode = static_cast<int>(apvts.getRawParameterValue("vocoderMode")->load());
-        msg += "[" + juce::String(vMode == 0 ? "Filterbank" : "LPC (Phase2)") + "]";
+        msg += "[" + juce::String(vMode == 0 ? "Filterbank" : "LPC") + "]";
 
         return msg;
     }
@@ -73,10 +74,16 @@ private:
 
     // モジュールインスタンス
     FilterbankVocoder mFilterbankVocoder;
+    LpcVocoder mLpcVocoder;               // フェーズ2: LPCモード
     ExcitationEngine mExcitationEngine;
     ModMatrix mModMatrix;
     PitchTracker mPitchTracker;
     BrickLimiter mLimiter;
+
+    // ボコーダーモード切替 (30ms等パワークロスフェード @16kHz)
+    static constexpr int kVocXfadeLen = 480;
+    int mCurVocoderMode = -1;
+    int mVocXfadeRemaining = 0;
 
     // バンドEQデータ (UIおよびDSP共有)
     std::array<std::atomic<float>, 48> mBandGains;

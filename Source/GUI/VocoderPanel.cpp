@@ -59,6 +59,7 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
     setupCombo(mComboAnalysisWindow, { "Hann Window", "Hamming Window", "Blackman Window" });
     setupCombo(mComboLpcInterpolation, { "LSP Interp", "LAR Interp" });
     setupCombo(mComboFilterbankType, { "BPF Bank", "Subtractive LR4" });
+    setupCombo(mComboLpcOrder, { "Order 8", "Order 10", "Order 12", "Order 16" });
 
     addAndMakeVisible(mBtnFormantFreeze);
 
@@ -84,6 +85,27 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
     mAttachmentFilterbankType  = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "filterbankType", mComboFilterbankType);
 
     mAttachmentFormantFreeze   = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(apvts, "formantFreeze", mBtnFormantFreeze);
+    mAttachmentLpcOrder        = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "lpcOrder", mComboLpcOrder);
+
+    // モード変更に応じた有効/無効表示の連動
+    // (ComboBoxAttachment は Listener 経由なので onChange ラムダとは競合しない)
+    mComboVocoderMode.onChange = [this] { updateEnablement(); };
+    updateEnablement();
+}
+
+void VocoderPanel::updateEnablement()
+{
+    const bool lpc = (mComboVocoderMode.getSelectedItemIndex() == 1);
+
+    // LPCモード専用
+    mComboLpcOrder.setEnabled(lpc);
+    mComboAnalysisWindow.setEnabled(lpc);       // 分析窓はLPCモードで初めて音に効く
+
+    // Filterbankモード専用
+    mComboFilterbankType.setEnabled(!lpc);
+
+    // LSP/LAR補間はフェーズ2 M4で実装予定のため常時無効 (計画書v2 §4.3)
+    mComboLpcInterpolation.setEnabled(false);
 }
 
 VocoderPanel::~VocoderPanel()
@@ -139,8 +161,10 @@ void VocoderPanel::resized()
     mComboLpcInterpolation.setBounds(leftArea.getX() + 8, leftArea.getY() + 156, comboW, comboH);
     mComboLimiter.setBounds(leftArea.getX() + 8, leftArea.getY() + 192, comboW, comboH);
 
-    // フリーズボタン
-    mBtnFormantFreeze.setBounds(leftArea.getX() + 8, leftArea.getY() + 234, comboW, comboH + 4);
+    // フリーズボタン + LPC次数コンボ (左右分割)
+    const int halfW = (comboW - 8) / 2;
+    mBtnFormantFreeze.setBounds(leftArea.getX() + 8, leftArea.getY() + 234, halfW, comboH + 4);
+    mComboLpcOrder.setBounds(leftArea.getX() + 8 + halfW + 8, leftArea.getY() + 236, halfW, comboH);
 
     // 中央セクション: フォルマント & トラッキング (width: 35%)
     auto midArea = r.removeFromLeft((int)(w * 0.35f));

@@ -75,6 +75,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("filterbankType", 1), "Filterbank Type", juce::StringArray{ "Bandpass", "Subtractive" }, 0));
 
+    // フェーズ2: LPC次数 (BitSpeekレトロ=10 / 高品位=16)
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("lpcOrder", 1), "LPC Order", juce::StringArray{ "8", "10", "12", "16" }, 3));
+
     // --- キャリアパラメータ ---
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("waveform", 1), "Waveform", juce::StringArray{ "Saw", "Pulse", "Wavetable" }, 0));
@@ -166,10 +170,20 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mStoredSampleRate = sampleRate;
 
     mFilterbankVocoder.prepare(sampleRate);
+    mLpcVocoder.prepare(sampleRate);
     mExcitationEngine.prepare(sampleRate);
     mModMatrix.prepare(sampleRate);
     mPitchTracker.prepare(sampleRate);
     mLimiter.prepare(sampleRate);
+
+    // ボコーダーモード切替状態の初期化 + PDC報告
+    // (LPCモードは分析窓の群遅延 128smp@16kHz = 8ms)
+    mCurVocoderMode = -1;
+    mVocXfadeRemaining = 0;
+    {
+        const int vm = (int)apvts.getRawParameterValue("vocoderMode")->load();
+        setLatencySamples(vm == 1 ? (int)std::round(0.008 * sampleRate) : 0);
+    }
 
     mDownsampleTimeAccum = 0.0;
     mUpsampleTimeAccum = 0.0;
@@ -280,8 +294,31 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     {
         mExcitationEngine.reset();
         mFilterbankVocoder.reset();
+        mLpcVocoder.reset();
         mPrevMode = mode;
     }
+
+    // ボコーダーモード切替の検出 (30ms等パワークロスフェード + PDC更新)
+    const int vocoderMode = (int)apvts.getRawParameterValue("vocoderMode")->load();
+    if (mCurVocoderMode < 0)
+    {
+        mCurVocoderMode = vocoderMode;   // 初回は即時適用
+    }
+    else if (vocoderMode != mCurVocoderMode)
+    {
+        mCurVocoderMode = vocoderMode;
+        mVocXfadeRemaining = kVocXfadeLen;
+        // 切り替わり先モジュールの状態をクリアしてから立ち上げる
+        if (vocoderMode == 1) mLpcVocoder.reset(); else mFilterbankVocoder.reset();
+        setLatencySamples(vocoderMode == 1 ? (int)std::round(0.008 * mStoredSampleRate) : 0);
+    }
+
+    // LPCモード用パラメータ (ブロック毎に1回読む)
+    static constexpr int kLpcOrderMap[4] = { 8, 10, 12, 16 };
+    const int lpcOrderIdx = juce::jlimit(0, 3, (int)apvts.getRawParameterValue("lpcOrder")->load());
+    const int lpcOrder = kLpcOrderMap[lpcOrderIdx];
+    const bool lpcFreeze = (apvts.getRawParameterValue("formantFreeze")->load() >= 0.5f);
+    mLpcVocoder.setWindowType((int)apvts.getRawParameterValue("windowType")->load());
 
     for (int s = 0; s < num16kSamples; ++s)
     {
@@ -413,16 +450,52 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
         mExcitationEngine.processSample(carrierL, carrierR, activePitch, isMidiMode);
 
-        // ボコーディング処理
+        // ボコーディング処理 (vocoderMode: 0=Filterbank / 1=LPC)
         float wetL = 0.0f;
         float wetR = 0.0f;
 
         const int bandCount = (int)apvts.getRawParameterValue("bandCount")->load();
         const int filterbankType = (int)apvts.getRawParameterValue("filterbankType")->load();
 
-        mFilterbankVocoder.processSample(inSample, carrierL, carrierR, wetL, wetR,
-                                         bandCount, effectiveCharacter, effectiveFormantShift, effectiveFormantStretch,
-                                         filterbankType, 1.0f, mBandGains, mBandLevelsForUi);
+        auto renderFilterbank = [&](float& l, float& r)
+        {
+            mFilterbankVocoder.processSample(inSample, carrierL, carrierR, l, r,
+                                             bandCount, effectiveCharacter, effectiveFormantShift, effectiveFormantStretch,
+                                             filterbankType, 1.0f, mBandGains, mBandLevelsForUi);
+        };
+        auto renderLpc = [&](float& l, float& r)
+        {
+            mLpcVocoder.processSample(inSample, carrierL, carrierR, l, r, lpcOrder, lpcFreeze);
+        };
+
+        if (mVocXfadeRemaining > 0)
+        {
+            // 30ms等パワークロスフェード (旧→新)
+            float oldL = 0.0f, oldR = 0.0f, newL = 0.0f, newR = 0.0f;
+            if (mCurVocoderMode == 1) { renderFilterbank(oldL, oldR); renderLpc(newL, newR); }
+            else                      { renderLpc(oldL, oldR); renderFilterbank(newL, newR); }
+
+            const float t = 1.0f - (float)mVocXfadeRemaining / (float)kVocXfadeLen;
+            const float gOld = std::cos(t * juce::MathConstants<float>::halfPi);
+            const float gNew = std::sin(t * juce::MathConstants<float>::halfPi);
+            wetL = oldL * gOld + newL * gNew;
+            wetR = oldR * gOld + newR * gNew;
+            --mVocXfadeRemaining;
+        }
+        else if (mCurVocoderMode == 1)
+        {
+            renderLpc(wetL, wetR);
+            // LPCモードはフィルターバンク合成を行わないため、そのままだと
+            // BANDS EQ のアナライザー(帯域レベルメーター)が更新されず止まってしまう。
+            // 分析専用パスを呼び、入力音声の帯域レベルだけをメーターへ反映する。
+            // (クロスフェード中は renderFilterbank 側で分析が走るので、ここでは呼ばない=二重処理を防止)
+            mFilterbankVocoder.analyzeForMeter(inSample, bandCount, effectiveCharacter,
+                                               filterbankType, mBandLevelsForUi);
+        }
+        else
+        {
+            renderFilterbank(wetL, wetR);
+        }
 
         m16kWetL[(size_t)s] = wetL;
         m16kWetR[(size_t)s] = wetR;

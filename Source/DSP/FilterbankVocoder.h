@@ -38,7 +38,78 @@ public:
                        const std::array<std::atomic<float>, kMaxBands>& bandGains,
                        std::array<std::atomic<float>, kMaxBands>& bandLevelsForUi) noexcept;
 
+    // 分析専用パス (合成は行わない)。
+    // LPCモードのようにフィルターバンク合成を実行しないときでも、
+    // BANDS EQ のアナライザー(入力音声の帯域レベルメーター)を動かし続けるために使う。
+    // 内部の分析フィルタ状態と mEnvValues、そして bandLevelsForUi のみを更新する。
+    void analyzeForMeter(float modulator, int bandCount, float character, int filterbankType,
+                         std::array<std::atomic<float>, kMaxBands>& bandLevelsForUi) noexcept
+    {
+        const int activeBands = juce::jlimit(8, kMaxBands, bandCount);
+        for (int i = 0; i < activeBands; ++i)
+        {
+            updateAnalysisBand(i, modulator, filterbankType, character);
+            bandLevelsForUi[(size_t)i].store(mEnvValues[(size_t)i]);
+        }
+    }
+
 private:
+    // 分析側(モジュレーター)の1バンド分の処理。mEnvValues[i] を更新する。
+    // processSample と analyzeForMeter の両方から呼ばれる共通ロジック。
+    inline void updateAnalysisBand(int i, float modulator, int filterbankType, float character) noexcept
+    {
+        const float f0 = mBandF0[(size_t)i];
+        const float Q = 10.0f; // BPF用のクオリティファクタ
+
+        float analOut = 0.0f;
+        float g_anal, k_anal, a1_anal;
+        computeFilterCoeffs(f0, Q, g_anal, k_anal, a1_anal);
+
+        if (filterbankType == 0) // Bandpass Bank
+        {
+            // ZDF SVF 1段目 (BPF)
+            auto& s1 = mAnalSvf[(size_t)i][0];
+            float v1 = a1_anal * (s1.s1 + g_anal * (modulator - s1.s2));
+            float y_bp = v1;
+            float y_lp = s1.s2 + g_anal * v1;
+            s1.s1 = 2.0f * y_bp - s1.s1;
+            s1.s2 = 2.0f * y_lp - s1.s2;
+
+            // ZDF SVF 2段目 (BPF)
+            auto& s2 = mAnalSvf[(size_t)i][1];
+            float v1_2 = a1_anal * (s2.s1 + g_anal * (y_bp - s2.s2));
+            float y_bp_2 = v1_2;
+            float y_lp_2 = s2.s2 + g_anal * v1_2;
+            s2.s1 = 2.0f * y_bp_2 - s2.s1;
+            s2.s2 = 2.0f * y_lp_2 - s2.s2;
+
+            analOut = y_bp_2;
+        }
+        else // Subtractive (バンド端エッジの8次HPF→8次LPF直列 + ピーク正規化)
+        {
+            auto& sub = mAnalSub[(size_t)i];
+            const float gLo  = mEdgeG[(size_t)i];      // 下端エッジ (HPF)
+            const float a1Lo = mEdgeA1[(size_t)i];
+            const float gHi  = mEdgeG[(size_t)i + 1];  // 上端エッジ (LPF)
+            const float a1Hi = mEdgeA1[(size_t)i + 1];
+
+            float y = modulator;
+            for (int sec = 0; sec < 4; ++sec) y = processLpfSection(sub.hiLp[(size_t)sec], y, gHi, a1Hi);
+            for (int sec = 0; sec < 4; ++sec) y = processHpfSection(sub.loHp[(size_t)sec], y, gLo, a1Lo);
+
+            // 正規化(ピーク0dB) + BPF Bankとの聴感レベル整合メイクアップ
+            analOut = y * mBandNorm[(size_t)i] * kSubMakeup;
+        }
+
+        // エンベロープ追従（キャラクター値でアタック/リリースタイムを調整）
+        float env = std::abs(analOut);
+        float att = 0.005f + character * 0.045f;
+        float rel = 0.001f + character * 0.009f;
+
+        float coeff = (env > mEnvValues[(size_t)i]) ? att : rel;
+        mEnvValues[(size_t)i] += coeff * (env - mEnvValues[(size_t)i]);
+    }
+
     struct SVFState
     {
         float s1 = 0.0f;
