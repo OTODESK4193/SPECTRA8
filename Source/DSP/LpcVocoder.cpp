@@ -45,7 +45,7 @@ void LpcVocoder::setWindowType(int type) noexcept
 void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                                float& outL, float& outR,
                                int order, bool freeze, float gamma,
-                               float formantShiftSemitones) noexcept
+                               float formantShiftSemitones, float formantStretch) noexcept
 {
     order = std::min(LpcAnalyzer::kMaxOrder, std::max(1, order));
 
@@ -108,6 +108,33 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
 
             const float g = mAnalyzer.analyzeFrame(mFrame.data(), order, mKTarget.data(), (double)gamma);
             mGTarget = g * mExcNorm;   // 励起レベル正規化（per-sample残差RMS相当へ）
+
+            // M4: FMT STRETCH（LSP領域でフォルマント間隔を伸縮）。
+            //  k→a→LSF へ変換し、中心π/2を軸にLSF間隔を stretch 倍→a→k へ戻す。
+            //  変換失敗(根喪失/不安定)時は元のkを保持（前フレーム相当のフォールバック）。
+            if (std::abs(formantStretch - 1.0f) > 0.01f)
+            {
+                double aS[LpcAnalyzer::kMaxOrder + 1];
+                double lsf[LpcAnalyzer::kMaxOrder];
+                LspConverter::reflToLpc(mKTarget.data(), order, aS);
+                if (LspConverter::lpcToLsf(aS, order, lsf))
+                {
+                    constexpr double PIV = 3.14159265358979 * 0.5;
+                    for (int i = 0; i < order; ++i)
+                    {
+                        double v = PIV + (lsf[i] - PIV) * (double)formantStretch;
+                        lsf[i] = std::min(3.12, std::max(0.02, v));
+                    }
+                    for (int i = 1; i < order; ++i)
+                        if (lsf[i] <= lsf[i - 1]) lsf[i] = lsf[i - 1] + 1e-3;
+
+                    double a2[LpcAnalyzer::kMaxOrder + 1];
+                    LspConverter::lsfToLpc(lsf, order, a2);
+                    float kS[LpcAnalyzer::kMaxOrder];
+                    if (LspConverter::lpcToRefl(a2, order, kS))
+                        for (int p = 0; p < order; ++p) mKTarget[(size_t)p] = kS[p];
+                }
+            }
 
             // M5: 反射係数kのビット量子化（BitSpeek風レトロ）。
             //  0を表現できる対称量子化 Q=2^(bits-1)-1。量子化後は安定域±0.995へ再クランプ。

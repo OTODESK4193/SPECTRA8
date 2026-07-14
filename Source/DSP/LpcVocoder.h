@@ -14,6 +14,7 @@
 
 #include "LpcAnalyzer.h"
 #include "LpcLattice.h"
+#include "LspConverter.h"
 #include <array>
 
 class LpcVocoder
@@ -55,10 +56,13 @@ public:
     //  gamma     : 帯域拡張係数（1.0=無効。character→γ で 0.97〜0.998）
     //  formantShiftSemitones : FMT SHIFT。分析窓を 2^(st/12) 倍のステップで
     //            リサンプルして読み出す(テープ変速式)。+でフォルマント上昇。ピッチは不変。
+    //  formantStretch : FMT STRETCH。LSP(線スペクトル対)領域でフォルマント間隔を伸縮
+    //                   (1.0=無効, >1=間隔拡大, <1=圧縮)。M4。
     void processSample(float modulator, float carrierL, float carrierR,
                        float& outL, float& outR,
                        int order, bool freeze, float gamma = 1.0f,
-                       float formantShiftSemitones = 0.0f) noexcept;
+                       float formantShiftSemitones = 0.0f,
+                       float formantStretch = 1.0f) noexcept;
 
 private:
     LpcAnalyzer mAnalyzer;
