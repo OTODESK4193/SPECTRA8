@@ -132,8 +132,11 @@ void VocoderPanel::updateEnablement()
 
     // FilterBank専用の表示
     mComboFilterbankType.setVisible(!lpc);
-    mKnobBands.setVisible(!lpc);
-    mLblBands.setVisible(!lpc);
+
+    // BANDS は両モードで表示。FilterBankでは帯域数(音色)、LPCではポストEQの帯域解像度を決める。
+    // → LPCでもBANDSを上げれば最大48バンドのグラフィックEQ(BANDS EQタブ)を細かく設定できる。
+    mKnobBands.setVisible(true);
+    mLblBands.setVisible(true);
 
     resized(); // 表示状態に合わせて再レイアウト
 }
@@ -192,7 +195,7 @@ void VocoderPanel::resized()
     const int knobAreaW = r.getRight() - knobAreaX;
     const int knobSize = 58, labelH = 14;
 
-    // 上段（2行）: 共通ノブ + 移設ノブ (+ FilterBank時のみ BANDS)
+    // 上段（2行）: 共通ノブ + 移設ノブ + BANDS(両モード)
     std::vector<std::pair<ValueKnob*, juce::Label*>> upper = {
         { &mKnobCharacter,     &mLblCharacter },
         { &mKnobTracking,      &mLblTracking },
@@ -203,9 +206,8 @@ void VocoderPanel::resized()
         { &mKnobBasePitch,     &mLblBasePitch },
         { &mKnobNoiseColor,    &mLblNoiseColor },
         { &mKnobNoise,         &mLblNoise },
+        { &mKnobBands,         &mLblBands },
     };
-    if (!lpc)
-        upper.push_back({ &mKnobBands, &mLblBands });
 
     const int ucols = 5;
     const int ucolW = knobAreaW / ucols;
@@ -220,10 +222,18 @@ void VocoderPanel::resized()
         upper[(size_t)i].second->setBounds(kx - 10, ky + knobSize, knobSize + 20, labelH);
     }
 
-    // 下段（1行）: ADSR + MIX + OUT + ボタン列
+    // 下段（1行）: ADSR + MIX + OUT + ボタン列。
+    // 下段エリア = 区切り線(divY) 〜 パネル下端。その中でノブ/ボタンを縦中央に配置する。
     const int lcols = 7;
     const int lcolW = knobAreaW / lcols;
-    const int ly = uy0 + 2 * urowH + 10;
+    const int lowerTop = uy0 + 2 * urowH - 2;        // paint()の区切り線と一致
+    const int lowerBottom = r.getBottom();
+    const int lowerAreaH = lowerBottom - lowerTop;
+
+    // ノブ本体+ラベルの合計高で縦センタリング
+    const int knobBlockH = knobSize + labelH;
+    const int ly = lowerTop + (lowerAreaH - knobBlockH) / 2;
+
     ValueKnob* lower[6]   = { &mKnobAttack, &mKnobDecay, &mKnobSustain, &mKnobRelease, &mKnobMix, &mKnobOutLevel };
     juce::Label* lowerL[6] = { &mLblAttack, &mLblDecay, &mLblSustain, &mLblRelease, &mLblMix, &mLblOutLevel };
     for (int i = 0; i < 6; ++i)
@@ -233,10 +243,13 @@ void VocoderPanel::resized()
         lowerL[i]->setBounds(kx - 10, ly + knobSize, knobSize + 20, labelH);
     }
 
-    // ボタン列（OUTノブの右）: LIMIT と FREEZE を上下二段
+    // ボタン列（OUTノブの右）: LIMIT と FREEZE を上下二段。二段スタックを縦センタリング。
     const int btnW = lcolW - 6;
     const int btnH = 24;
+    const int btnGap = 8;
+    const int stackH = btnH * 2 + btnGap;
+    const int by = lowerTop + (lowerAreaH - stackH) / 2;
     const int bx = knobAreaX + 6 * lcolW + 3;
-    mBtnLimiter.setBounds(bx, ly + 2, btnW, btnH);
-    mBtnFormantFreeze.setBounds(bx, ly + 2 + btnH + 6, btnW, btnH);
+    mBtnLimiter.setBounds(bx, by, btnW, btnH);
+    mBtnFormantFreeze.setBounds(bx, by + btnH + btnGap, btnW, btnH);
 }

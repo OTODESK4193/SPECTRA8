@@ -606,7 +606,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     const bool limiter = (static_cast<int>(apvts.getRawParameterValue("limiterEnable")->load()) == 1);
     if (limiter)
     {
-        mLimiter.process(writeL, writeR, numSamples, 0.985f);
+        // 天井は内部固定 -0.1 dBFS (BrickLimiter::kCeiling)。突発ピークも天井へ抑える。
+        mLimiter.process(writeL, writeR, numSamples);
     }
 }
 
