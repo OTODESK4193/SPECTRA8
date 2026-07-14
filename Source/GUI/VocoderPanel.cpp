@@ -57,11 +57,13 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
     setupCombo(mComboVoicingMode, { "Auto Mode", "MIDI Mode" });
     setupCombo(mComboLimiter, { "Limiter OFF", "Limiter ON" });
     setupCombo(mComboAnalysisWindow, { "Hann Window", "Hamming Window", "Blackman Window" });
-    setupCombo(mComboLpcInterpolation, { "LSP Interp", "LAR Interp" });
+    setupCombo(mComboLpcInterpolation, { "Step Interp", "LSP Interp", "LAR Interp" });
     setupCombo(mComboFilterbankType, { "BPF Bank", "Subtractive LR4" });
     setupCombo(mComboLpcOrder, { "Order 8", "Order 10", "Order 12", "Order 16" });
-    setupCombo(mComboFrameRate, { "Freeze", "8 Hz", "15 Hz", "25 Hz", "50 Hz", "80 Hz" });
+    setupCombo(mComboFrameRate, { "8 Hz", "15 Hz", "25 Hz", "50 Hz", "80 Hz" });
     setupCombo(mComboQuantBits, { "K: Off", "K: 6bit", "K: 5bit", "K: 4bit", "K: 3bit" });
+    // 低次数プリセット(マクロ)。先頭はプレースホルダ。選択で複数paramを一括設定し先頭へ戻る。
+    setupCombo(mComboPreset, { "PRESET...", "Hi-Fi 16", "Vintage 12", "Retro 10", "Toy 8", "BitSpeek 3bit" });
 
     addAndMakeVisible(mBtnFormantFreeze);
 
@@ -94,6 +96,45 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
     // モード変更に応じた有効/無効表示の連動
     // (ComboBoxAttachment は Listener 経由なので onChange ラムダとは競合しない)
     mComboVocoderMode.onChange = [this] { updateEnablement(); };
+
+    // プリセット選択 → 一括適用 → プレースホルダ(先頭)へ戻す
+    mComboPreset.onChange = [this]
+    {
+        const int sel = mComboPreset.getSelectedItemIndex(); // 0=プレースホルダ
+        if (sel > 0) applyPreset(sel);
+        mComboPreset.setSelectedItemIndex(0, juce::dontSendNotification);
+    };
+
+    updateEnablement();
+}
+
+void VocoderPanel::applyPreset(int idx)
+{
+    // paramを0..1正規化で設定するヘルパー(アタッチ済みコンボ/ノブにも反映される)
+    auto setChoice = [this](const char* id, int index)
+    {
+        if (auto* p = apvts.getParameter(id))
+            p->setValueNotifyingHost(p->convertTo0to1((float)index));
+    };
+
+    // 各preset: {vocoderMode(1=LPC), lpcOrder(0..3=8/10/12/16), frameRate(0..4=8/15/25/50/80Hz),
+    //            lpcQuantBits(0..4=Off/6/5/4/3bit), windowType(0=Hann),
+    //            interp(0=Step/1=LSP/2=LAR)}  ※Hi-Fi系は滑らかなLSP、レトロ系はカクつくStep
+    struct P { int mode, order, rate, quant, window, interp; };
+    static const P table[5] = {
+        { 1, 3, 3, 0, 0, 1 }, // Hi-Fi 16   : order16, 50Hz, K:Off,  LSP補間
+        { 1, 2, 3, 1, 0, 1 }, // Vintage 12 : order12, 50Hz, K:6bit, LSP補間
+        { 1, 1, 2, 2, 0, 0 }, // Retro 10   : order10, 25Hz, K:5bit, Step
+        { 1, 0, 1, 3, 0, 0 }, // Toy 8      : order8,  15Hz, K:4bit, Step
+        { 1, 1, 1, 4, 0, 0 }, // BitSpeek   : order10, 15Hz, K:3bit, Step
+    };
+    const P& pr = table[juce::jlimit(0, 4, idx - 1)];
+    setChoice("vocoderMode",       pr.mode);
+    setChoice("lpcOrder",          pr.order);
+    setChoice("frameRate",         pr.rate);
+    setChoice("lpcQuantBits",      pr.quant);
+    setChoice("windowType",        pr.window);
+    setChoice("interpolationMode", pr.interp);
     updateEnablement();
 }
 
@@ -110,8 +151,8 @@ void VocoderPanel::updateEnablement()
     // Filterbankモード専用
     mComboFilterbankType.setEnabled(!lpc);
 
-    // LSP/LAR補間はフェーズ2 M4で実装予定のため常時無効 (計画書v2 §4.3)
-    mComboLpcInterpolation.setEnabled(false);
+    // M4: フルホップ補間(Step/LSP/LAR)はLPCモード専用
+    mComboLpcInterpolation.setEnabled(lpc);
 }
 
 VocoderPanel::~VocoderPanel()
@@ -156,13 +197,14 @@ void VocoderPanel::resized()
 
     // 左セクション: 設定 & 分析モード (width: 35%)
     auto leftArea = r.removeFromLeft((int)(w * 0.35f));
-    const int comboH = 24;
+    const int comboH = 22;
     const int comboW = leftArea.getWidth() - 16;
     const int cx = leftArea.getX() + 8;
-    const int step = 30;                 // M5でコンボが増えたため行間を圧縮
-    int cy = leftArea.getY() + 8;
+    const int step = 27;                 // M5でコンボが増えたため行間を圧縮
+    int cy = leftArea.getY() + 6;
 
-    // コンボボックス配置 (上から: モード系 → LPC分析系 → M5レトロ系 → 補間/リミッタ)
+    // コンボボックス配置 (上から: プリセット → モード系 → LPC分析系 → M5レトロ系 → 補間/リミッタ)
+    mComboPreset.setBounds(cx, cy, comboW, comboH);            cy += step;  // M5 プリセット
     mComboVocoderMode.setBounds(cx, cy, comboW, comboH);       cy += step;
     mComboVoicingMode.setBounds(cx, cy, comboW, comboH);       cy += step;
     mComboFilterbankType.setBounds(cx, cy, comboW, comboH);    cy += step;

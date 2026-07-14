@@ -104,9 +104,9 @@ private:
             double cur = evalG(C, L, p, sym, w);
             if ((prev <= 0.0 && cur > 0.0) || (prev >= 0.0 && cur < 0.0))
             {
-                // 二分法で精密化
+                // 二分法で精密化 (グリッド間隔~3e-3 → 40回で~3e-15、十分)
                 double lo = prevw, hi = w, flo = prev;
-                for (int it = 0; it < 60; ++it)
+                for (int it = 0; it < 40; ++it)
                 {
                     double mid = 0.5 * (lo + hi);
                     double fm = evalG(C, L, p, sym, mid);
@@ -120,10 +120,20 @@ private:
         return n;
     }
     // C(e^{jω})·e^{j(p+1)ω/2} の実部(sym)または虚部(antisym) を返す(単位円上零点で0)
+    //  M6最適化: cos(iω)/sin(iω) は角度加算の漸化式で生成 (2L回のtrig呼び出し→4回+4L乗算)。
+    //  L≤18項の漸化式誤差は~1e-15規模で二分法精度(~1e-12)に影響しない。
     static double evalG(const double* C, int L, int p, bool sym, double w) noexcept
     {
-        double re = 0.0, im = 0.0;
-        for (int i = 0; i < L; ++i) { re += C[i] * std::cos(i * w); im -= C[i] * std::sin(i * w); }
+        const double c1 = std::cos(w), s1 = std::sin(w);
+        double cw = 1.0, sw = 0.0, re = 0.0, im = 0.0;
+        for (int i = 0; i < L; ++i)
+        {
+            re += C[i] * cw;
+            im -= C[i] * sw;
+            const double t = cw * c1 - sw * s1;
+            sw = sw * c1 + cw * s1;
+            cw = t;
+        }
         const double rot = 0.5 * (double)(p + 1) * w;
         const double cr = std::cos(rot), sr = std::sin(rot);
         // (re+j im)(cr+j sr)

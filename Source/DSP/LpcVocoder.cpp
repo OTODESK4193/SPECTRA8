@@ -32,6 +32,121 @@ void LpcVocoder::reset()
     mFilled = 0;
     mHopCounter = 0;
     mCtrlCounter = 0;
+    // M4: 補間セグメントも初期化(Stepに戻し、次フレームで再構築)
+    mSegDomain = 0;
+    mSegPos = 0;
+    mSegLen = mHopSamples;
+    mReprPrev.fill(0.0);
+    mReprTarget.fill(0.0);
+    mKSegPrev.fill(0.0f);
+}
+
+// ---- M4: フルホップ補間 ----------------------------------------
+namespace
+{
+    // k <-> LAR(対数面積比)。|k|<=0.995 なので atanh は有限(|r|<=2.994)。
+    inline double larFromK(float k) noexcept
+    {
+        const double kd = std::min(0.995, std::max(-0.995, (double)k));
+        return std::atanh(kd);
+    }
+    inline float kFromLar(double r) noexcept
+    {
+        return (float)std::min(0.995, std::max(-0.995, std::tanh(r)));
+    }
+}
+
+void LpcVocoder::setupSegment(int order) noexcept
+{
+    // 前端点 = ラティスが今まさに使っている平滑値 mKCur (不連続なし)。
+    // ほぼ完了済み(残り1制御ブロック未満)のLSPセグメントから連続する場合は
+    // 変換を省き repr を引き継ぐ(誤差はブロックランプ1回分以下=Step同等)。
+    // ※ホップ長が32の倍数でない場合 mSegPos は mSegLen に届かないため余裕を持たせる。
+    const bool prevLspDone = (mSegDomain == 1 && mSegPos + kCtrlBlock >= mSegLen);
+    for (int p = 0; p < order; ++p)
+        mKSegPrev[(size_t)p] = mKCur[(size_t)p];
+
+    mSegLen = std::max(kCtrlBlock, mHopSamples);
+    mSegPos = 0;
+    mSegDomain = 0;
+    if (mInterpMode == 0)
+        return; // Step: 従来の高速ランプ動作(数値完全一致)
+
+    if (mInterpMode == 1)
+    {
+        // LSP: 両端点を k→a→LSF 変換。どちらか失敗なら LAR へフォールバック。
+        double aT[LpcAnalyzer::kMaxOrder + 1];
+        double lt[LpcAnalyzer::kMaxOrder];
+        LspConverter::reflToLpc(mKTarget.data(), order, aT);
+        if (LspConverter::lpcToLsf(aT, order, lt))
+        {
+            if (prevLspDone)
+            {
+                // 直前セグメントの終端repr = 現在k とみなせる(ランプ完了済み)
+                for (int p = 0; p < order; ++p)
+                    mReprPrev[(size_t)p] = mReprTarget[(size_t)p];
+            }
+            else
+            {
+                double aP[LpcAnalyzer::kMaxOrder + 1];
+                double lp[LpcAnalyzer::kMaxOrder];
+                LspConverter::reflToLpc(mKSegPrev.data(), order, aP);
+                if (!LspConverter::lpcToLsf(aP, order, lp))
+                    goto fallbackLar; // 前端点の変換失敗
+                for (int p = 0; p < order; ++p)
+                    mReprPrev[(size_t)p] = lp[p];
+            }
+            for (int p = 0; p < order; ++p)
+                mReprTarget[(size_t)p] = lt[p];
+            mSegDomain = 1;
+            return;
+        }
+    }
+
+fallbackLar:
+    // LAR (要求がLARの場合、およびLSP変換失敗時のフォールバック)
+    for (int p = 0; p < order; ++p)
+    {
+        mReprPrev[(size_t)p]   = larFromK(mKSegPrev[(size_t)p]);
+        mReprTarget[(size_t)p] = larFromK(mKTarget[(size_t)p]);
+    }
+    mSegDomain = 2;
+}
+
+void LpcVocoder::computeInterpK(int order, double alpha, float* kOut) const noexcept
+{
+    if (mSegDomain == 1)
+    {
+        // LSF領域の要素毎lerp(両端が昇順なら順序は保存される)。数値安全の最小間隔を強制。
+        double lsf[LpcAnalyzer::kMaxOrder];
+        for (int p = 0; p < order; ++p)
+            lsf[p] = mReprPrev[(size_t)p] + (mReprTarget[(size_t)p] - mReprPrev[(size_t)p]) * alpha;
+        lsf[0] = std::min(3.12, std::max(0.02, lsf[0]));
+        for (int i = 1; i < order; ++i)
+        {
+            lsf[i] = std::min(3.13, std::max(0.02, lsf[i]));
+            if (lsf[i] <= lsf[i - 1] + 1e-4)
+                lsf[i] = lsf[i - 1] + 1e-4;
+        }
+        double a[LpcAnalyzer::kMaxOrder + 1];
+        LspConverter::lsfToLpc(lsf, order, a);
+        if (LspConverter::lpcToRefl(a, order, kOut))
+        {
+            for (int p = 0; p < order; ++p)
+                kOut[p] = std::min(0.995f, std::max(-0.995f, kOut[p]));
+            return;
+        }
+        // step-down失敗(まれ): kドメイン線形へフォールバック
+        for (int p = 0; p < order; ++p)
+            kOut[p] = (float)((double)mKSegPrev[(size_t)p]
+                     + ((double)mKTarget[(size_t)p] - (double)mKSegPrev[(size_t)p]) * alpha);
+        return;
+    }
+
+    // LAR
+    for (int p = 0; p < order; ++p)
+        kOut[p] = kFromLar(mReprPrev[(size_t)p]
+                 + (mReprTarget[(size_t)p] - mReprPrev[(size_t)p]) * alpha);
 }
 
 void LpcVocoder::setWindowType(int type) noexcept
@@ -58,6 +173,8 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
         mKTarget.fill(0.0f);
         mKCur.fill(0.0f);
         mKInc.fill(0.0f);
+        mSegDomain = 0;   // M4: 次数変更時は補間セグメントも破棄(次フレームで再構築)
+        mSegPos = 0;
     }
 
     // 1. モジュレーターをリングバッファへ
@@ -147,6 +264,9 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                     mKTarget[(size_t)p] = std::min(0.995f, std::max(-0.995f, kq));
                 }
             }
+
+            // M4: フルホップ補間セグメントを構築(現在値→新ターゲットをホップ全長でモーフ)
+            setupSegment(order);
         }
     }
 
@@ -158,8 +278,22 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
         mGSmooth = mGTarget + (mGSmooth - mGTarget) * coef;
 
         constexpr float inv = 1.0f / (float)kCtrlBlock;
-        for (int p = 0; p < order; ++p)
-            mKInc[(size_t)p] = (mKTarget[(size_t)p] - mKCur[(size_t)p]) * inv;
+        if (mSegDomain == 0)
+        {
+            // Step(従来): ブロック内ランプでターゲットへ即到達(旧動作と数値完全一致)
+            for (int p = 0; p < order; ++p)
+                mKInc[(size_t)p] = (mKTarget[(size_t)p] - mKCur[(size_t)p]) * inv;
+        }
+        else
+        {
+            // M4 フルホップ補間: このブロック終端時点の補間値をブロックターゲットにする
+            mSegPos = std::min(mSegLen, mSegPos + kCtrlBlock);
+            const double alpha = (double)mSegPos / (double)mSegLen;
+            float kBlk[LpcAnalyzer::kMaxOrder];
+            computeInterpK(order, alpha, kBlk);
+            for (int p = 0; p < order; ++p)
+                mKInc[(size_t)p] = (kBlk[p] - mKCur[(size_t)p]) * inv;
+        }
         mGInc = (mGSmooth - mGCur) * inv;
     }
     if (++mCtrlCounter >= kCtrlBlock)

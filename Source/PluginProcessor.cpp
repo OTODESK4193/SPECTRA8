@@ -69,8 +69,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("windowType", 1), "Window Type", juce::StringArray{ "Hann", "Hamming", "Blackman" }, 0));
 
+    // M4: フレーム間フルホップ補間ドメイン。
+    //  Step=従来のブロックランプ(低フレームレートでカクつくトイ感を保持)
+    //  LSP/LAR=ホップ全長を掛けて滑らかにモーフ(Hi-Fi向き)
     layout.add(std::make_unique<juce::AudioParameterChoice>(
-        juce::ParameterID("interpolationMode", 1), "Interpolation Mode", juce::StringArray{ "LSP", "LAR" }, 0));
+        juce::ParameterID("interpolationMode", 1), "Interpolation Mode", juce::StringArray{ "Step", "LSP", "LAR" }, 0));
 
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("filterbankType", 1), "Filterbank Type", juce::StringArray{ "Bandpass", "Subtractive" }, 0));
@@ -80,10 +83,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("lpcOrder", 1), "LPC Order", juce::StringArray{ "8", "10", "12", "16" }, 3));
 
     // フェーズ2 M5: BitSpeekレトロ層
-    //  FRAME RATE: 分析フレーム更新レート。低いほど声が「カクつく」トイ感。Freeze=更新停止。
+    //  FRAME RATE: 分析フレーム更新レート。低いほど声が「カクつく」トイ感。
+    //  ※フリーズ(更新停止)は FREEZE ボタン(formantFreeze)に一本化した。
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("frameRate", 1), "Frame Rate",
-        juce::StringArray{ "Freeze", "8 Hz", "15 Hz", "25 Hz", "50 Hz", "80 Hz" }, 4)); // 既定50Hz
+        juce::StringArray{ "8 Hz", "15 Hz", "25 Hz", "50 Hz", "80 Hz" }, 3)); // 既定50Hz
     //  K QUANT: 反射係数のビット量子化。少ないほど声道が粗くBitSpeek的レトロ音に。
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("lpcQuantBits", 1), "K Quant",
@@ -336,12 +340,15 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     mLpcVocoder.setWindowType((int)apvts.getRawParameterValue("windowType")->load());
 
     // M5: FRAME RATE / k量子化（ブロック毎に設定）
-    static constexpr float kFrameRateMap[6] = { 0.0f, 8.0f, 15.0f, 25.0f, 50.0f, 80.0f };
-    const int frIdx = juce::jlimit(0, 5, (int)apvts.getRawParameterValue("frameRate")->load());
+    static constexpr float kFrameRateMap[5] = { 8.0f, 15.0f, 25.0f, 50.0f, 80.0f };
+    const int frIdx = juce::jlimit(0, 4, (int)apvts.getRawParameterValue("frameRate")->load());
     mLpcVocoder.setFrameRate(kFrameRateMap[frIdx]);
     static constexpr int kQuantBitsMap[5] = { 0, 6, 5, 4, 3 };
     const int qbIdx = juce::jlimit(0, 4, (int)apvts.getRawParameterValue("lpcQuantBits")->load());
     mLpcVocoder.setQuantBits(kQuantBitsMap[qbIdx]);
+
+    // M4: フルホップ補間ドメイン (0=Step/1=LSP/2=LAR)。次の分析フレームから適用。
+    mLpcVocoder.setInterpolationMode((int)apvts.getRawParameterValue("interpolationMode")->load());
 
     // ポストEQ(LPC出力用)の係数をブロック毎に更新。BANDS EQの帯域ゲインを反映する。
     mPostEq.updateCoeffs((int)apvts.getRawParameterValue("bandCount")->load(), mBandGains);
