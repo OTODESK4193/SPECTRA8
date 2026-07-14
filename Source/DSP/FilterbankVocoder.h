@@ -123,6 +123,12 @@ private:
     // (ユーザー実測: BPF +1.58dB(クリップ레일) vs 旧Sub -18.5dB → 差約20dB を補正した較正値)
     static constexpr float kSubMakeup = 256.0f;
 
+    // 出力ユニティ・トリム: BPF Bank は Q²=100 の高利得構造で既定設定の出力が
+    // 約 +49.8dB(実測, Ableton)まで持ち上がる。LPCモード(≈0dB)と揃えるため、
+    // フィルターバンク合成の総和に -49.8dB のトリムを掛けて出力を約0dBへ落とす。
+    // (Subtractive は kSubMakeup で BPF に整合済みのため同じトリムで両タイプが揃う)
+    static constexpr float kOutputTrim = 0.003236f; // 10^(-49.8/20)
+
     struct SubBandState
     {
         // 減算型バンド = 8次HPF(下端エッジ) → 8次LPF(上端エッジ) の直列 + ピーク正規化

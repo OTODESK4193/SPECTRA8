@@ -28,11 +28,7 @@ ExcitationPanel::ExcitationPanel(juce::AudioProcessorValueTreeState& state)
     setupKnob(mKnobWtPos, mLblWtPos);
     setupKnob(mKnobPulseWidth, mLblPulseWidth, "%");
     setupKnob(mKnobDetune, mLblDetune, " cents");
-    setupKnob(mKnobNoise, mLblNoise, "%");
-    setupKnob(mKnobLofi, mLblLofi);
     setupKnob(mKnobPorta, mLblPorta, "s");
-    setupKnob(mKnobBasePitch, mLblBasePitch, " Hz");
-    setupKnob(mKnobNoiseColor, mLblNoiseColor, " Hz");
 
     mComboWaveform.setColour(juce::ComboBox::backgroundColourId, SpectraColors::knobTrack);
     mComboWaveform.setColour(juce::ComboBox::textColourId, SpectraColors::text);
@@ -44,17 +40,22 @@ ExcitationPanel::ExcitationPanel(juce::AudioProcessorValueTreeState& state)
     mComboWaveform.addItem("Wavetable", 3);
     addAndMakeVisible(mComboWaveform);
 
+    addAndMakeVisible(mWaveDisplay);
+
     // アタッチメント作成
     mAttachmentWtPos      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "wavetablePosition", mKnobWtPos);
     mAttachmentPulseWidth = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "pulseWidth", mKnobPulseWidth);
     mAttachmentDetune     = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "detune", mKnobDetune);
-    mAttachmentNoise      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "noise", mKnobNoise);
-    mAttachmentLofi       = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "lofi", mKnobLofi);
     mAttachmentPorta      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "porta", mKnobPorta);
-    mAttachmentBasePitch  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "basePitch", mKnobBasePitch);
-    mAttachmentNoiseColor = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "noiseColor", mKnobNoiseColor);
 
     mAttachmentWaveform   = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "waveform", mComboWaveform);
+
+    // 波形表示を各パラメータ変更に追従させる（アタッチメントのListenerとは別枠のコールバック）
+    mComboWaveform.onChange   = [this] { refreshWaveformDisplay(); };
+    mKnobPulseWidth.onValueChange = [this] { refreshWaveformDisplay(); };
+    mKnobWtPos.onValueChange      = [this] { refreshWaveformDisplay(); };
+
+    refreshWaveformDisplay();
 }
 
 ExcitationPanel::~ExcitationPanel()
@@ -62,11 +63,15 @@ ExcitationPanel::~ExcitationPanel()
     mKnobWtPos.setLookAndFeel(nullptr);
     mKnobPulseWidth.setLookAndFeel(nullptr);
     mKnobDetune.setLookAndFeel(nullptr);
-    mKnobNoise.setLookAndFeel(nullptr);
-    mKnobLofi.setLookAndFeel(nullptr);
     mKnobPorta.setLookAndFeel(nullptr);
-    mKnobBasePitch.setLookAndFeel(nullptr);
-    mKnobNoiseColor.setLookAndFeel(nullptr);
+}
+
+void ExcitationPanel::refreshWaveformDisplay()
+{
+    const int type = (int)apvts.getRawParameterValue("waveform")->load();
+    const float pw  = apvts.getRawParameterValue("pulseWidth")->load() * 0.01f;   // 5..95% → 0.05..0.95
+    const float wt  = apvts.getRawParameterValue("wavetablePosition")->load();     // 0..1
+    mWaveDisplay.setParams(type, pw, wt);
 }
 
 void ExcitationPanel::paint(juce::Graphics& g)
@@ -83,49 +88,34 @@ void ExcitationPanel::paint(juce::Graphics& g)
 void ExcitationPanel::resized()
 {
     auto r = getLocalBounds().reduced(16);
-    const int w = r.getWidth();
 
-    // 左側: 波形選択コンボボックス
+    // --- 左: 波形コンボ + 2D波形表示 ---
     const int comboH = 26;
-    const int comboW = 128;
-    mComboWaveform.setBounds(r.getX() + 32, r.getY() + 32, comboW, comboH);
+    const int comboW = 160;
+    const int leftX = r.getX() + 16;
+    mComboWaveform.setBounds(leftX, r.getY() + 20, comboW, comboH);
 
-    // 右側: パラメータノブ群を2段に配列
+    const int dispW = 288;
+    const int dispH = 160;
+    mWaveDisplay.setBounds(leftX, r.getY() + 20 + comboH + 12, dispW, dispH);
+
+    // --- 右: ノブ 4基 (2×2 グリッド) ---
     const int knobSize = 64;
     const int labelH = 14;
+    const int rightX = r.getX() + 360;
+    const int stepX = (r.getRight() - rightX) / 2;
+    const int rowY1 = r.getY() + 40;
+    const int rowY2 = r.getY() + 160;
 
-    const int startX = r.getX() + 192;
-    const int stepX = (w - 192) / 3;
-    const int rowY1 = r.getY() + 32;
-    const int rowY2 = r.getY() + 144;
+    auto place = [&](ValueKnob& k, juce::Label& l, int gx, int gy)
+    {
+        const int kx = rightX + gx * stepX + (stepX - knobSize) / 2;
+        k.setBounds(kx, gy, knobSize, knobSize);
+        l.setBounds(kx - 10, gy + knobSize, knobSize + 20, labelH);
+    };
 
-    // 上段ノブ (WT POS, PULSE WIDTH, DETUNE)
-    mKnobWtPos.setBounds(startX, rowY1, knobSize, knobSize);
-    mLblWtPos.setBounds(startX - 10, rowY1 + knobSize, knobSize + 20, labelH);
-
-    mKnobPulseWidth.setBounds(startX + stepX, rowY1, knobSize, knobSize);
-    mLblPulseWidth.setBounds(startX + stepX - 10, rowY1 + knobSize, knobSize + 20, labelH);
-
-    mKnobDetune.setBounds(startX + stepX * 2, rowY1, knobSize, knobSize);
-    mLblDetune.setBounds(startX + stepX * 2 - 10, rowY1 + knobSize, knobSize + 20, labelH);
-
-    // 下段ノブ (NOISE MIX, LOFI, PORTA)
-    mKnobNoise.setBounds(startX, rowY2, knobSize, knobSize);
-    mLblNoise.setBounds(startX - 10, rowY2 + knobSize, knobSize + 20, labelH);
-
-    mKnobLofi.setBounds(startX + stepX, rowY2, knobSize, knobSize);
-    mLblLofi.setBounds(startX + stepX - 10, rowY2 + knobSize, knobSize + 20, labelH);
-
-    mKnobPorta.setBounds(startX + stepX * 2, rowY2, knobSize, knobSize);
-    mLblPorta.setBounds(startX + stepX * 2 - 10, rowY2 + knobSize, knobSize + 20, labelH);
-
-    // 左側下段: BASE PITCHノブ と NOISE COLORノブ を並べて配置 (波形選択コンボの下)
-    const int leftX1 = r.getX() + 16;
-    const int leftX2 = r.getX() + comboW - 16;
-    
-    mKnobBasePitch.setBounds(leftX1, rowY2, knobSize, knobSize);
-    mLblBasePitch.setBounds(leftX1 - 10, rowY2 + knobSize, knobSize + 20, labelH);
-
-    mKnobNoiseColor.setBounds(leftX2, rowY2, knobSize, knobSize);
-    mLblNoiseColor.setBounds(leftX2 - 10, rowY2 + knobSize, knobSize + 20, labelH);
+    place(mKnobWtPos,      mLblWtPos,      0, rowY1);
+    place(mKnobPulseWidth, mLblPulseWidth, 1, rowY1);
+    place(mKnobDetune,     mLblDetune,     0, rowY2);
+    place(mKnobPorta,      mLblPorta,      1, rowY2);
 }

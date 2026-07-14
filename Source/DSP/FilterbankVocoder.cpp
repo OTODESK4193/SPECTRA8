@@ -202,6 +202,7 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
         sumR += modulatedR * panR;
     }
 
-    outL = sumL;
-    outR = sumR;
+    // 出力ユニティ・トリム(LPCモードと音量を揃える。§音量ユニティ化)
+    outL = sumL * kOutputTrim;
+    outR = sumR * kOutputTrim;
 }

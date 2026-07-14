@@ -28,9 +28,9 @@ public:
     static constexpr int kRingSize = 2048;
     static constexpr int kLatency16k = LpcAnalyzer::kWindowSize / 2; // PDC報告用 (128smp = 8ms)
 
-    // 励起メイクアップ（スタブ実測較正: 母音入力+ノコギリキャリアで
-    // 出力RMS ≒ 入力RMS となる値。最終段は既存BrickLimiterが保護）
-    static constexpr float kMakeupGain = 2.0f;
+    // 励起メイクアップ。旧値2.0(+6dB)は実測+6.76dB(Ableton)で、ユニティ(0dB)へ揃える較正。
+    //  2.0 × 10^(-6.76/20) ≒ 0.918 とし出力を約0dBへ。最終段は既存BrickLimiterが保護。
+    static constexpr float kMakeupGain = 0.918f;
 
     void prepare(double hostSampleRate);
     void reset();
