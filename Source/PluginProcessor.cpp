@@ -152,8 +152,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("release", 1), "Release", 0.001f, 5.0f, 0.2f));
 
-    // --- モジュレーションマトリクスパラメータ (16スロット) ---
-    for (int i = 0; i < 16; ++i)
+    // --- モジュレーションマトリクスパラメータ (12スロット = ModMatrix::kNumSlots) ---
+    for (int i = 0; i < ModMatrix::kNumSlots; ++i)
     {
         const juce::String prefix = "slot" + juce::String(i);
         layout.add(std::make_unique<juce::AudioParameterChoice>(
@@ -208,7 +208,11 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mPostEq.prepare(LpcVocoder::kInternalSampleRate);   // ポストEQは16kHz内部レートで動作
     mExcitationEngine.prepare(sampleRate);
     mModMatrix.prepare(sampleRate);
-    mPitchTracker.prepare(sampleRate);
+    // 重要: PitchTracker へは 16kHz ダウンサンプル後のサンプル (processBlock の
+    // 16kループ内 inSample) を供給しているため、prepare も 16kHz を渡す。
+    // ホストレートを渡すと内部でさらに 1/3 デシメーションされ、検出ピッチが
+    // ホスト48kHz時に常に3倍になる (Tracking使用時に音程が3倍になるバグの原因)。
+    mPitchTracker.prepare(LpcVocoder::kInternalSampleRate);
     mLimiter.prepare(sampleRate);
 
     // ボコーダーモード切替状態の初期化 + PDC報告
@@ -404,7 +408,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
             // APVTSからパラメータ値をモジュレーションマトリクス用構造体にロード
             mModParams.bpm = bpm;
-            for (int i = 0; i < 16; ++i)
+            for (int i = 0; i < ModMatrix::kNumSlots; ++i)
             {
                 const juce::String prefix = "slot" + juce::String(i);
                 mModParams.slot[(size_t)i].src = (int)(apvts.getRawParameterValue(prefix + "src")->load());

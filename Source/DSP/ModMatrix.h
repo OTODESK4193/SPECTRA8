@@ -20,7 +20,7 @@ public:
     static constexpr int kNumLfos = 4;
     static constexpr int kNumEnvs = 3;
     static constexpr int kNumMacros = 4;
-    static constexpr int kNumSlots = 16;
+    static constexpr int kNumSlots = 12;  // 2列×6行で全スロットが常時表示できる数 (旧16)
 
     enum Src
     {

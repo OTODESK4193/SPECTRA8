@@ -118,7 +118,7 @@ ModPanel::ModPanel(juce::AudioProcessorValueTreeState& state)
     mViewport.setViewedComponent(&mSlotContainer, false);
     mViewport.setScrollBarsShown(true, false);
 
-    for (int i = 0; i < 16; ++i)
+    for (int i = 0; i < 12; ++i)
     {
         auto& slot = mSlotGuis[(size_t)i];
 
@@ -172,7 +172,7 @@ void ModPanel::paint(juce::Graphics& g)
     g.drawRoundedRectangle(r, 8.0f, 1.0f);
 
     // LFO/ENVセクションとスロットセクションの区切り線
-    g.drawHorizontalLine(r.getY() + 110.0f, r.getX() + 10.0f, r.getRight() - 10.0f);
+    g.drawHorizontalLine((int)(r.getY() + 110.0f), r.getX() + 10.0f, r.getRight() - 10.0f);
 }
 
 void ModPanel::resized()
@@ -238,19 +238,19 @@ void ModPanel::resized()
     r.removeFromTop(12); // 余白
     mViewport.setBounds(r);
 
-    // スロットコンテナのサイズ (2列に配置するため、高さは 8スロット分)
+    // スロットコンテナのサイズ (2列×6行 = 12スロット、全行が常時表示される)
     const int slotH = 28;
-    const int containerH = slotH * 8 + 16;
+    const int containerH = slotH * 6 + 16;
     mSlotContainer.setSize(r.getWidth() - 16, containerH);
 
     const int containerW = mSlotContainer.getWidth();
     const int colW = containerW / 2 - 8;
 
-    for (int i = 0; i < 16; ++i)
+    for (int i = 0; i < 12; ++i)
     {
         auto& slot = mSlotGuis[(size_t)i];
-        const int col = i / 8;
-        const int row = i % 8;
+        const int col = i / 6;
+        const int row = i % 6;
 
         const int x = (col == 0) ? 4 : (containerW / 2 + 4);
         const int y = row * slotH + 8;

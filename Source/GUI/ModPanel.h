@@ -52,7 +52,7 @@ private:
     std::array<LfoGui, 4> mLfoGuis;
     std::array<EnvGui, 3> mEnvGuis;
 
-    // 16スロットのモジュレーションマトリクス
+    // 12スロットのモジュレーションマトリクス (2列×6行)
     struct SlotGui
     {
         juce::ComboBox srcCombo;
@@ -66,7 +66,7 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> uniAttach;
     };
 
-    std::array<SlotGui, 16> mSlotGuis;
+    std::array<SlotGui, 12> mSlotGuis;   // ModMatrix::kNumSlots と一致 (2列×6行)
 
     // ビューポート (スロットが画面に収まりきらない場合に備えてスクロール可能にする)
     juce::Viewport mViewport;
