@@ -27,7 +27,8 @@ ExcitationPanel::ExcitationPanel(juce::AudioProcessorValueTreeState& state)
 
     setupKnob(mKnobWtPos, mLblWtPos);
     setupKnob(mKnobPulseWidth, mLblPulseWidth, "%");
-    setupKnob(mKnobDetune, mLblDetune, " cents");
+    setupKnob(mKnobDetune, mLblDetune);   // 表示はパラメータ側の "N ct (度数)" 書式を使用
+    mKnobDetune.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 104, 16); // "1200 ct (8度)" が収まる幅
     setupKnob(mKnobPorta, mLblPorta, "s");
 
     mComboWaveform.setColour(juce::ComboBox::backgroundColourId, SpectraColors::knobTrack);

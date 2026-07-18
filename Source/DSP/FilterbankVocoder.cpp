@@ -12,37 +12,52 @@ FilterbankVocoder::FilterbankVocoder()
 void FilterbankVocoder::prepare(double sampleRate)
 {
     mSampleRate = sampleRate;
+    mCurBands = 0;              // 次のprocessで必ず再構築させる
+    rebuildLayout(kMaxBands);
+    reset();
+}
 
-    // 分析側の周波数設計 (幾何的配置: 80Hz - 7500Hz)
+// バンドレイアウト構築: bands 本で 80〜7500Hz 全域をmelスケール分割する。
+// 旧実装は48バンド固定レイアウトの下から bandCount 本だけを使っていたため、
+// BANDS を下げると高域が消えていた(8バンド時は80〜数百Hzのみ)。
+// バンド数変更時に全域を再スパンし、「8バンドでも80-7500Hzを8分割」にする。
+void FilterbankVocoder::rebuildLayout(int bands) noexcept
+{
+    bands = juce::jlimit(8, kMaxBands, bands);
+    if (bands == mCurBands)
+        return;
+    mCurBands = bands;
+
+    // 分析側の周波数設計 (melスケール配置: 80Hz - 7500Hz)
     const float fMin = 80.0f;
     const float fMax = 7500.0f;
     const float mMin = 2595.0f * std::log10(1.0f + fMin / 700.0f);
     const float mMax = 2595.0f * std::log10(1.0f + fMax / 700.0f);
 
-    for (int i = 0; i < kMaxBands; ++i)
+    for (int i = 0; i < bands; ++i)
     {
-        float mVal = mMin + (mMax - mMin) * (static_cast<float>(i) / (kMaxBands - 1));
+        float mVal = mMin + (mMax - mMin) * (static_cast<float>(i) / (float)(bands - 1));
         float freq = 700.0f * (std::pow(10.0f, mVal / 2595.0f) - 1.0f);
         mBandF0[(size_t)i] = freq;
     }
 
     // バンド端周波数: 隣接バンド中心の幾何平均 (対数軸上の中点)
-    for (int i = 1; i < kMaxBands; ++i)
+    for (int i = 1; i < bands; ++i)
         mBandEdges[(size_t)i] = std::sqrt(mBandF0[(size_t)(i - 1)] * mBandF0[(size_t)i]);
     mBandEdges[0] = mBandF0[0] * mBandF0[0] / mBandEdges[1];                     // 対数軸外挿
-    mBandEdges[kMaxBands] = juce::jmin(7800.0f,
-        mBandF0[kMaxBands - 1] * mBandF0[kMaxBands - 1] / mBandEdges[kMaxBands - 1]);
+    mBandEdges[(size_t)bands] = juce::jmin(7800.0f,
+        mBandF0[(size_t)(bands - 1)] * mBandF0[(size_t)(bands - 1)] / mBandEdges[(size_t)(bands - 1)]);
 
     // バンド間隔連動の基準Q: Q_i = f0_i / (上端エッジ - 下端エッジ)。
-    // 定オーバーラップ設計(帯域幅が常に隣接バンド間隔に一致)。
-    // mel配置では低域 ≈2 〜 中域 ≈12 〜 高域 ≈18 となり、中域は旧固定値Q=10とほぼ同じ
-    // (=旧来の音色キャラクターを中域で維持しつつ、低域の谷と高域のボヤけを解消)。
-    for (int i = 0; i < kMaxBands; ++i)
+    // 定オーバーラップ設計。バンド数が少ないほど1本あたりの帯域が広く=Qが低くなり、
+    // 少バンドでも全域が隙間なくカバーされる。
+    for (int i = 0; i < bands; ++i)
     {
         const float bw = mBandEdges[(size_t)i + 1] - mBandEdges[(size_t)i];
         mBandQ[(size_t)i] = juce::jlimit(1.5f, 24.0f, mBandF0[(size_t)i] / juce::jmax(1.0f, bw));
     }
 
+    // レイアウトが変わったのでフィルタ状態をリセット (残留状態による不整合防止)
     reset();
 }
 
@@ -71,6 +86,7 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
                                       std::array<std::atomic<float>, kMaxBands>& bandLevelsForUi) noexcept
 {
     const int activeBands = juce::jlimit(8, kMaxBands, bandCount);
+    rebuildLayout(activeBands);   // バンド数変更時のみ全域を再スパン
 
     // フォルマント・シフト倍率
     const float shiftFactor = std::pow(2.0f, formantShift / 12.0f);
@@ -165,6 +181,10 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
 
     // 出力メイクアップ。分析・合成の中心利得0dB正規化後に、
     // 旧実装と同一の最終音量へ揃える較正値(§音量ユニティ化)。
-    outL = sumL * kBpfMakeup;
-    outR = sumR * kBpfMakeup;
+    // バンド数補償: バンドが少ないほど隣接オーバーラップの加算利得が減るため、
+    // sqrt(48/bands) で概ね一定の出力レベルに揃える (48バンド時=1.0で従来同一)。
+    const float bandComp = std::sqrt((float)kMaxBands / (float)activeBands);
+    const float mk = kBpfMakeup * bandComp;
+    outL = sumL * mk;
+    outR = sumR * mk;
 }

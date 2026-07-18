@@ -12,7 +12,7 @@
 import numpy as np
 
 FS = 16000
-N_WIN = 256          # 窓長 16ms @16kHz
+N_WIN = 320          # 窓長 20ms @16kHz (C++ LpcAnalyzer::kWindowSize と一致させること)
 HOP = 320            # 既定 FRAME RATE 50Hz
 K_CLAMP = 0.995
 SIGMA_LAG = 50.0     # ラグ窓 σ=50Hz

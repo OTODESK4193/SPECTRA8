@@ -20,6 +20,8 @@ void ExcitationEngine::reset()
 {
     mTriggerCounter = 0;
     mLastTriggeredFreq = 130.0f;
+    mDetuneSm = mDetuneCents;
+    mNoiseSm = mNoiseMix;
     mLofiRateCounter = 0.0f;
     mLofiLastValL = 0.0f;
     mLofiLastValR = 0.0f;
@@ -254,6 +256,12 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
     float voiceSumR = 0.0f;
     int activeVoiceCount = 0;
 
+    // Detune/NoiseMix の一次平滑 (τ≈5ms@16k)。制御ブロック毎(2ms)の
+    // 階段状変化によるクリック/ジッパーノイズを防ぐ。
+    constexpr float kSmCoef = 0.0124f;   // 1-exp(-1/(0.005*16000))
+    mDetuneSm += kSmCoef * (mDetuneCents - mDetuneSm);
+    mNoiseSm  += kSmCoef * (mNoiseMix  - mNoiseSm);
+
     // ポルタメント係数
     const float portaCoeff = (mPortaTime > 0.001f)
         ? static_cast<float>(1.0 - std::exp(-1.0 / (mPortaTime * kInternalSampleRate)))
@@ -299,7 +307,7 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
 
         // 2. デチューン計算
         // ボイスペアにステレオ広がりと分厚さを出すためのユニゾンデチューン
-        float detuneCents = mDetuneCents;
+        float detuneCents = mDetuneSm;
         // ボイスインデックスに基づくデチューン比率の分散
         float detuneSign = (i % 2 == 0) ? -1.0f : 1.0f;
         float detuneScale = 0.15f + 0.1f * static_cast<float>(i / 2);
@@ -390,8 +398,8 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
     voiceSumL *= voiceScale;
     voiceSumR *= voiceScale;
 
-    outL = (1.0f - mNoiseMix) * voiceSumL + mNoiseMix * noiseSampleL;
-    outR = (1.0f - mNoiseMix) * voiceSumR + mNoiseMix * noiseSampleR;
+    outL = (1.0f - mNoiseSm) * voiceSumL + mNoiseSm * noiseSampleL;
+    outR = (1.0f - mNoiseSm) * voiceSumR + mNoiseSm * noiseSampleR;
 
     // MIDIモード時、鍵盤を弾いていない（アクティブなボイスが0）ときはキャリアを完全ミュート（常時ノイズ出力を防止）
     if (isMidiMode && activeVoiceCount == 0)

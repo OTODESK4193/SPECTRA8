@@ -27,6 +27,10 @@ public:
     void prepare(double sampleRate);
     void reset();
 
+    // バンドレイアウト構築 (bands本で80-7500Hz全域をmel分割)。
+    // バンド数が変わったときのみ再計算+状態リセット。同数なら何もしない。
+    void rebuildLayout(int bands) noexcept;
+
     // 1サンプル処理
     // modulator: 分析側に入力する音声サンプル
     // carrierL/R: 合成側のステレオキャリア入力サンプル
@@ -49,6 +53,7 @@ public:
                          std::array<std::atomic<float>, kMaxBands>& bandLevelsForUi) noexcept
     {
         const int activeBands = juce::jlimit(8, kMaxBands, bandCount);
+        rebuildLayout(activeBands);   // バンド数変更時のみ全域を再スパン
         for (int i = 0; i < activeBands; ++i)
         {
             updateAnalysisBand(i, modulator, character, resonance);
@@ -126,6 +131,7 @@ private:
     }
 
     double mSampleRate = 44100.0;
+    int mCurBands = 0;   // 現在構築済みのバンド数 (rebuildLayout用)
 
     // 分析側バンド周波数
     std::array<float, kMaxBands> mBandF0 {};

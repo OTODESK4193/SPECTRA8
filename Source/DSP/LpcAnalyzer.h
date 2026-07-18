@@ -19,7 +19,9 @@ class LpcAnalyzer
 {
 public:
     static constexpr int    kMaxOrder = 16;
-    static constexpr int    kWindowSize = 256;            // 16ms @16kHz
+    // 20ms @16kHz。旧256(16ms)は既定ホップ320(50Hz)より短く、フレーム間に
+    // 4msの未分析区間が生じて子音の取りこぼしの原因だった。窓長≥ホップ長に。
+    static constexpr int    kWindowSize = 320;
     static constexpr double kInternalSampleRate = 16000.0;
     static constexpr double kReflClamp = 0.995;           // |k|クランプ
     static constexpr double kSigmaLagHz = 50.0;           // ラグ窓 σ

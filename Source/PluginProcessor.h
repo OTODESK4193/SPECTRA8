@@ -116,5 +116,11 @@ private:
     // PITCH Q ヒステリシス用: 現在保持中のスナップ先ノート (-1=未保持)
     int mQuantNoteHeld = -1;
 
+    // パラメータ・スムージング (ジッパーノイズ対策)
+    juce::LinearSmoothedValue<float> mMixSm;      // MIX (ホストレート, 20ms)
+    juce::LinearSmoothedValue<float> mOutGainSm;  // OUT LEVEL リニアゲイン (同上)
+    float mFmtShiftSm = 0.0f;     // FMT SHIFT (16k一次平滑 τ≈5ms)
+    float mFmtStretchSm = 1.0f;   // FMT STRETCH (同上)
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessor)
 };

@@ -111,6 +111,10 @@ private:
     float mSustain = 0.8f;
     float mRelease = 0.2f;
 
+    // パラメータ・スムージング (制御ブロック毎の階段状変化→サンプル毎一次平滑 τ≈5ms)
+    float mDetuneSm = 0.0f;
+    float mNoiseSm = 0.0f;
+
     // LoFiサンプルレートダウン用ステート
     float mLofiRateCounter = 0.0f;
     float mLofiLastValL = 0.0f;

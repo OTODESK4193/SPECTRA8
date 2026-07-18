@@ -26,7 +26,12 @@ public:
     // 2の冪、> kWindowSize。FMT SHIFT上げ(最大+24st=×4)時の分析窓スパン
     // (kWindowSize-1)*4≒1020サンプルの履歴を賄うため 2048 とする。
     static constexpr int kRingSize = 2048;
-    static constexpr int kLatency16k = LpcAnalyzer::kWindowSize / 2; // PDC報告用 (128smp = 8ms)
+    static constexpr int kLatency16k = LpcAnalyzer::kWindowSize / 2; // PDC報告用 (160smp = 10ms)
+
+    // プリエンファシス係数 (TMS5220系の古典値 15/16)。
+    // 分析前に 1-αz^-1 で高域を持ち上げ高次フォルマントの推定精度を上げ、
+    // 合成後に 1/(1-αz^-1) で戻す。こもりが減り子音の明瞭度が向上する。
+    static constexpr float kPreemph = 0.9375f;
 
     // 励起メイクアップ。旧値2.0(+6dB)は実測+6.76dB(Ableton)で、ユニティ(0dB)へ揃える較正。
     //  2.0 × 10^(-6.76/20) ≒ 0.918 とし出力を約0dBへ。最終段は既存BrickLimiterが保護。
@@ -113,6 +118,9 @@ private:
     void setupSegment(int order) noexcept;
     // セグメント位置alpha(0..1)における補間kを算出
     void computeInterpK(int order, double alpha, float* kOut) const noexcept;
+
+    float mDeempL = 0.0f;    // デエンファシス状態 (L)
+    float mDeempR = 0.0f;    // デエンファシス状態 (R)
 
     float mExcNorm = 1.0f;   // 1/sqrt(Σw²)（窓タイプ依存）
     float mGAttCoef = 0.0f;  // att 5ms @ コントロールレート

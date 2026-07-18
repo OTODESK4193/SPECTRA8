@@ -120,8 +120,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("pulseWidth", 1), "Pulse Width", 5.0f, 95.0f, 50.0f));
 
+    // Detune: cent値と度数(音程名)の併記表示
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("detune", 1), "Detune", 0.0f, 1200.0f, 5.0f));
+        juce::ParameterID("detune", 1), "Detune",
+        juce::NormalisableRange<float>(0.0f, 1200.0f), 5.0f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction(
+            [](float v, int)
+            {
+                static const char* names[13] = {
+                    "1度", "短2度", "長2度", "短3度", "長3度",
+                    "完全4度", "増4度", "完全5度", "短6度",
+                    "長6度", "短7度", "長7度", "8度" };
+                const int st = juce::jlimit(0, 12, (int)std::lround(v / 100.0f));
+                return juce::String((int)std::lround(v)) + " ct (" + juce::String(juce::CharPointer_UTF8(names[st])) + ")";
+            })));
 
     // Noise: BitSpeek式の双方向コントロール。
     //  Filterbank : 0〜100% がキャリアへのノイズ混入（負値は0扱い＝従来と同一）
@@ -216,15 +228,25 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mLimiter.prepare(sampleRate);
 
     // ボコーダーモード切替状態の初期化 + PDC報告
-    // (LPCモードは分析窓の群遅延 128smp@16kHz = 8ms)
+    // (LPCモードは分析窓の群遅延 kLatency16k = 窓長/2 @16kHz)
     mCurVocoderMode = -1;
     mVocXfadeRemaining = 0;
     mVoicedSmooth = 0.0f;
     mPitchLogSmooth = -1.0f;   // Trackingピッチ平滑の再初期化
     mQuantNoteHeld = -1;       // PITCH Q保持音の再初期化
+
+    // パラメータ・スムージング初期化 (20msランプ)
+    mMixSm.reset(sampleRate, 0.02);
+    mOutGainSm.reset(sampleRate, 0.02);
+    mMixSm.setCurrentAndTargetValue(apvts.getRawParameterValue("mix")->load() * 0.01f);
+    mOutGainSm.setCurrentAndTargetValue(
+        std::pow(10.0f, apvts.getRawParameterValue("outputLevel")->load() / 20.0f));
+    mFmtShiftSm = apvts.getRawParameterValue("formantShift")->load();
+    mFmtStretchSm = apvts.getRawParameterValue("formantStretch")->load();
     {
+        const double lpcLatencySec = (double)LpcVocoder::kLatency16k / LpcVocoder::kInternalSampleRate;
         const int vm = (int)apvts.getRawParameterValue("vocoderMode")->load();
-        setLatencySamples(vm == 1 ? (int)std::round(0.008 * sampleRate) : 0);
+        setLatencySamples(vm == 1 ? (int)std::round(lpcLatencySec * sampleRate) : 0);
     }
 
     mDownsampleTimeAccum = 0.0;
@@ -352,7 +374,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mVocXfadeRemaining = kVocXfadeLen;
         // 切り替わり先モジュールの状態をクリアしてから立ち上げる
         if (vocoderMode == 1) mLpcVocoder.reset(); else mFilterbankVocoder.reset();
-        setLatencySamples(vocoderMode == 1 ? (int)std::round(0.008 * mStoredSampleRate) : 0);
+        const double lpcLatencySec = (double)LpcVocoder::kLatency16k / LpcVocoder::kInternalSampleRate;
+        setLatencySamples(vocoderMode == 1 ? (int)std::round(lpcLatencySec * mStoredSampleRate) : 0);
     }
 
     // LPCモード用パラメータ (ブロック毎に1回読む)
@@ -568,6 +591,12 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mQuantNoteHeld = -1; // PITCH Q無効時は保持解除
         }
 
+        // FMT SHIFT/STRETCH の一次平滑 (τ≈5ms@16k)。制御ブロック毎(2ms)の階段状変化に
+        // よるフィルタ係数ジャンプ/ジッパーノイズを防ぐ。
+        constexpr float kFmtSmCoef = 0.0124f;   // 1-exp(-1/(0.005*16000))
+        mFmtShiftSm   += kFmtSmCoef * (effectiveFormantShift   - mFmtShiftSm);
+        mFmtStretchSm += kFmtSmCoef * (effectiveFormantStretch - mFmtStretchSm);
+
         mExcitationEngine.processSample(carrierL, carrierR, activePitch, isMidiMode);
 
         // ボコーディング処理 (vocoderMode: 0=Filterbank / 1=LPC)
@@ -581,7 +610,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         {
             mFilterbankVocoder.processSample(inSample, carrierL, carrierR, l, r,
                                              bandCount, effectiveCharacter, resonance,
-                                             effectiveFormantShift, effectiveFormantStretch,
+                                             mFmtShiftSm, mFmtStretchSm,
                                              1.0f, mBandGains, mBandLevelsForUi);
         };
         // character(0..1) → 帯域拡張γ(0.97=ぼやけ 〜 0.998=シャープ) へマッピング (M3)
@@ -590,7 +619,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         {
             // FMT SHIFT(リサンプル比) / FMT STRETCH(LSP領域の間隔伸縮)をLPCへ渡す
             mLpcVocoder.processSample(inSample, carrierL, carrierR, l, r, lpcOrder, lpcFreeze,
-                                      lpcGamma, effectiveFormantShift, effectiveFormantStretch);
+                                      lpcGamma, mFmtShiftSm, mFmtStretchSm);
             // BANDS EQ をポストEQとしてLPC出力へ適用 (クロスフェード時もLPC側のみに掛かる)
             mPostEq.process(l, r);
         };
@@ -629,9 +658,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     }
 
     // 5. アップサンプリング & ドライ・ウェットブレンド
-    float mix = apvts.getRawParameterValue("mix")->load() * 0.01f;
-    float outLevelDb = apvts.getRawParameterValue("outputLevel")->load();
-    float outGain = std::pow(10.0f, outLevelDb / 20.0f);
+    //    MIX/OUT LEVEL は20msランプでサンプル毎に平滑 (ジッパーノイズ対策)
+    mMixSm.setTargetValue(apvts.getRawParameterValue("mix")->load() * 0.01f);
+    mOutGainSm.setTargetValue(
+        std::pow(10.0f, apvts.getRawParameterValue("outputLevel")->load() / 20.0f));
 
     // ゲートゲインの算出 (リニア入力エンベロープに基づくソフトゲート)
     float envVal = mInputEnvelope.load();
@@ -666,7 +696,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             float dryL = writeL[i];
             float dryR = (numInputs > 1) ? writeR[i] : dryL;
 
-            // ブレンド & ゲイン
+            // ブレンド & ゲイン (サンプル毎スムージング)
+            const float mix = mMixSm.getNextValue();
+            const float outGain = mOutGainSm.getNextValue();
             writeL[i] = (dryL * (1.0f - mix) + wetSampleL * mix) * outGain;
             writeR[i] = (dryR * (1.0f - mix) + wetSampleR * mix) * outGain;
         }

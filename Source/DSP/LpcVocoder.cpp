@@ -28,6 +28,7 @@ void LpcVocoder::reset()
     mKCur.fill(0.0f);
     mKInc.fill(0.0f);
     mGTarget = mGSmooth = mGCur = mGInc = 0.0f;
+    mDeempL = mDeempR = 0.0f;
     mWritePos = 0;
     mFilled = 0;
     mHopCounter = 0;
@@ -223,6 +224,13 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                 }
             }
 
+            // プリエンファシス (1 - kPreemph·z^-1) を窓に適用してから分析。
+            // 高域を持ち上げてLPCの極を高次フォルマントにも配分させる。
+            // 出力側のデエンファシスと対で周波数特性は復元される。
+            // frame[0]は前サンプル不明のためそのまま(窓端はほぼ0のため影響なし)。
+            for (int n = LpcAnalyzer::kWindowSize - 1; n >= 1; --n)
+                mFrame[(size_t)n] -= kPreemph * mFrame[(size_t)(n - 1)];
+
             const float g = mAnalyzer.analyzeFrame(mFrame.data(), order, mKTarget.data(), (double)gamma);
             mGTarget = g * mExcNorm;   // 励起レベル正規化（per-sample残差RMS相当へ）
 
@@ -271,7 +279,12 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                                 re += aa[i] * std::cos(w * (double)i);
                                 im -= aa[i] * std::sin(w * (double)i);
                             }
-                            const double h2 = 1.0 / std::max(1e-18, re * re + im * im);
+                            // デエンファシス 1/(1-a z^-1) の利得も含めた
+                            // 「実際に聴こえる」応答で評価する
+                            const double dr = 1.0 - (double)kPreemph * std::cos(w);
+                            const double di = (double)kPreemph * std::sin(w);
+                            const double d2 = 1.0 / std::max(1e-12, dr * dr + di * di);
+                            const double h2 = d2 / std::max(1e-18, re * re + im * im);
                             wE += (1.0 / (f * f)) * h2;
                             if (h2 > maxH2) maxH2 = h2;
                         }
@@ -297,9 +310,15 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                         evalFilter(a3, mh, e);
                         if (mh <= mh0 * 15.85 || at == 5)   // +12dB (パワー比15.85) まで許容
                         {
-                            // ゲイン補償: 励起重み付きエネルギー比で聴感レベルを維持
-                            if (e > 1e-18 && e0 > 1e-18)
-                                mGTarget *= (float)std::min(20.0, std::max(0.05, std::sqrt(e0 / e)));
+                            // ゲイン補償: 励起重み付きエネルギー比で聴感レベルを維持しつつ、
+                            // max|H|比によるピーク境界で「非ストレッチ時のピーク+3.5dB」を
+                            // 超えないよう制限 (Limiter Off でもクリップしない)
+                            if (e > 1e-18 && e0 > 1e-18 && mh > 1e-18)
+                            {
+                                const double eComp   = std::sqrt(e0 / e);
+                                const double pkBound = 1.5 * std::sqrt(mh0 / mh);
+                                mGTarget *= (float)std::min(20.0, std::max(0.01, std::min(eComp, pkBound)));
+                            }
                             for (int p = 0; p < order; ++p)
                                 mKTarget[(size_t)p] = kS[p];
                             break;
@@ -373,8 +392,12 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
         mKCur[(size_t)p] += mKInc[(size_t)p];
     mGCur += mGInc;
 
-    // 5. ラティス合成
+    // 5. ラティス合成 + デエンファシス 1/(1 - kPreemph·z^-1)
     const float g = mGCur * kMakeupGain;
-    outL = mLatticeL.processSample(g * carrierL, mKCur.data(), order);
-    outR = mLatticeR.processSample(g * carrierR, mKCur.data(), order);
+    const float yL = mLatticeL.processSample(g * carrierL, mKCur.data(), order);
+    const float yR = mLatticeR.processSample(g * carrierR, mKCur.data(), order);
+    mDeempL = yL + kPreemph * mDeempL;
+    mDeempR = yR + kPreemph * mDeempR;
+    outL = mDeempL;
+    outR = mDeempR;
 }
