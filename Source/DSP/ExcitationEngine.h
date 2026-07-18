@@ -5,7 +5,7 @@
 //  - 8音ポリフォニック（古い順スチール・アロケータ）
 //  - PolyBLEPによるアンチエイリアシング (Saw / Pulse)
 //  - Wavetableモーフィング (MorphWavetableを使用)
-//  - Lo-Fiエフェクト (量子化、サンプルレートダウン、ピッチ量子化)
+//  - Lo-Fiエフェクト (ビット量子化 + ピッチ同期サンプル&ホールド)
 //  - ADSRエンベロープ
 // ==========================================
 #pragma once
@@ -86,7 +86,8 @@ private:
     void triggerVoice(int noteNumber, float velocity) noexcept;
     float processVoiceSample(Voice& v, int channel, float phaseInc) noexcept;
     float applyPolyBlep(float phase, float phaseInc) const noexcept;
-    void applyLoFi(float& l, float& r) noexcept;
+    // pitchHz: ピッチ同期S&Hの基準基音 (ホールドレート = N×pitchHz)
+    void applyLoFi(float& l, float& r, float pitchHz) noexcept;
 
     MorphWavetable mWavetable; // 共有ウェーブテーブル
 

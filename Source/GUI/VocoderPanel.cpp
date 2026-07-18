@@ -39,6 +39,7 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
     setupKnob(mKnobNoiseColor, mLblNoiseColor, " Hz");
     setupKnob(mKnobNoise, mLblNoise, "%");
     setupKnob(mKnobBands, mLblBands);
+    setupKnob(mKnobResonance, mLblResonance, "x");
     // 下段ノブ
     setupKnob(mKnobAttack, mLblAttack, "s");
     setupKnob(mKnobDecay, mLblDecay, "s");
@@ -62,6 +63,7 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
 
     setupCombo(mComboVocoderMode, { "Filterbank", "LPC Mode" });
     setupCombo(mComboVoicingMode, { "Auto Mode", "MIDI Mode" });
+    setupCombo(mComboTrackResponse, { "Track: Fast", "Track: Natural", "Track: Smooth" });
     setupCombo(mComboFilterbankType, { "BPF Bank", "Subtractive LR4" });
     setupCombo(mComboLpcOrder, { "Order 8", "Order 10", "Order 12", "Order 16" });
     setupCombo(mComboAnalysisWindow, { "Hann Window", "Hamming Window", "Blackman Window" });
@@ -84,6 +86,7 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
     mAttachmentNoiseColor    = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "noiseColor", mKnobNoiseColor);
     mAttachmentNoise         = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "noise", mKnobNoise);
     mAttachmentBands         = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "bandCount", mKnobBands);
+    mAttachmentResonance     = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "resonance", mKnobResonance);
     mAttachmentAttack        = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "attack", mKnobAttack);
     mAttachmentDecay         = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "decay", mKnobDecay);
     mAttachmentSustain       = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "sustain", mKnobSustain);
@@ -93,6 +96,7 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
 
     mAttachmentVocoderMode      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "vocoderMode", mComboVocoderMode);
     mAttachmentVoicingMode      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "mode", mComboVoicingMode);
+    mAttachmentTrackResponse    = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "trackResponse", mComboTrackResponse);
     mAttachmentFilterbankType   = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "filterbankType", mComboFilterbankType);
     mAttachmentLpcOrder         = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "lpcOrder", mComboLpcOrder);
     mAttachmentAnalysisWindow   = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "windowType", mComboAnalysisWindow);
@@ -113,8 +117,8 @@ VocoderPanel::~VocoderPanel()
 {
     for (ValueKnob* k : { &mKnobCharacter, &mKnobTracking, &mKnobPitchQuantize, &mKnobFmtShift,
                           &mKnobFmtStretch, &mKnobLofi, &mKnobBasePitch, &mKnobNoiseColor,
-                          &mKnobNoise, &mKnobBands, &mKnobAttack, &mKnobDecay, &mKnobSustain,
-                          &mKnobRelease, &mKnobMix, &mKnobOutLevel })
+                          &mKnobNoise, &mKnobBands, &mKnobResonance, &mKnobAttack, &mKnobDecay,
+                          &mKnobSustain, &mKnobRelease, &mKnobMix, &mKnobOutLevel })
         k->setLookAndFeel(nullptr);
 }
 
@@ -132,6 +136,8 @@ void VocoderPanel::updateEnablement()
 
     // FilterBank専用の表示
     mComboFilterbankType.setVisible(!lpc);
+    mKnobResonance.setVisible(!lpc);
+    mLblResonance.setVisible(!lpc);
 
     // BANDS は両モードで表示。FilterBankでは帯域数(音色)、LPCではポストEQの帯域解像度を決める。
     // → LPCでもBANDSを上げれば最大48バンドのグラフィックEQ(BANDS EQタブ)を細かく設定できる。
@@ -177,6 +183,7 @@ void VocoderPanel::resized()
 
     placeCombo(mComboVocoderMode);
     placeCombo(mComboVoicingMode);
+    placeCombo(mComboTrackResponse);
     if (lpc)
     {
         placeCombo(mComboLpcOrder);
@@ -195,7 +202,7 @@ void VocoderPanel::resized()
     const int knobAreaW = r.getRight() - knobAreaX;
     const int knobSize = 58, labelH = 14;
 
-    // 上段（2行）: 共通ノブ + 移設ノブ + BANDS(両モード)
+    // 上段（2行）: 共通ノブ + 移設ノブ + BANDS(両モード) + RESONANCE(FB専用)
     std::vector<std::pair<ValueKnob*, juce::Label*>> upper = {
         { &mKnobCharacter,     &mLblCharacter },
         { &mKnobTracking,      &mLblTracking },
@@ -208,8 +215,11 @@ void VocoderPanel::resized()
         { &mKnobNoise,         &mLblNoise },
         { &mKnobBands,         &mLblBands },
     };
+    if (!lpc)
+        upper.push_back({ &mKnobResonance, &mLblResonance });
 
-    const int ucols = 5;
+    // 11ノブ(FBモード)のときは6列に詰めて2行へ収める
+    const int ucols = ((int)upper.size() > 10) ? 6 : 5;
     const int ucolW = knobAreaW / ucols;
     const int urowH = 82;
     const int uy0 = r.getY() + 6;

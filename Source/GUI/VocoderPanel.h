@@ -39,6 +39,7 @@ private:
     ValueKnob mKnobNoiseColor;  // 移設
     ValueKnob mKnobNoise;       // 移設 (NOISE MIX)
     ValueKnob mKnobBands;       // FilterBank専用
+    ValueKnob mKnobResonance;   // FilterBank専用 (BPF Bankバンド幅スケール)
     // 下段ノブエリア（ADSR + MIX + OUT）
     ValueKnob mKnobAttack;
     ValueKnob mKnobDecay;
@@ -50,6 +51,7 @@ private:
     // --- コンボ 8種 (左1列) ---
     juce::ComboBox mComboVocoderMode;
     juce::ComboBox mComboVoicingMode;
+    juce::ComboBox mComboTrackResponse;   // Tracking応答速度 (両モード共通)
     juce::ComboBox mComboFilterbankType;  // FilterBank専用
     juce::ComboBox mComboLpcOrder;        // LPC専用
     juce::ComboBox mComboAnalysisWindow;  // LPC専用
@@ -75,6 +77,7 @@ private:
     juce::Label mLblNoiseColor { {}, "NOISE COLOR" };
     juce::Label mLblNoise { {}, "NOISE MIX" };
     juce::Label mLblBands { {}, "BANDS" };
+    juce::Label mLblResonance { {}, "RESONANCE" };
     juce::Label mLblAttack { {}, "ATTACK" };
     juce::Label mLblDecay { {}, "DECAY" };
     juce::Label mLblSustain { {}, "SUSTAIN" };
@@ -93,6 +96,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentNoiseColor;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentNoise;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentBands;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentResonance;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentAttack;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentDecay;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentSustain;
@@ -102,6 +106,7 @@ private:
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentVocoderMode;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentVoicingMode;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentTrackResponse;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentFilterbankType;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentLpcOrder;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentAnalysisWindow;

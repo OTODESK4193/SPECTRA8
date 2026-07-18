@@ -48,8 +48,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("formantStretch", 1), "Formant Stretch", 0.5f, 2.0f, 1.0f));
 
+    // BPF Bank のバンド幅スケール (バンド間隔連動Qに乗算)。1.0=標準(中域で旧Q=10相当)
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("resonance", 1), "Resonance",
+        juce::NormalisableRange<float>(0.3f, 3.0f, 0.0f, 0.5f), 1.0f));
+
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("tracking", 1), "Tracking", 0.0f, 100.0f, 0.0f)); // レポート留意点5
+
+    // Tracking応答速度: ピッチ追従のlog域平滑時定数 (Fast=2ms/Natural=6ms/Smooth=20ms)
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("trackResponse", 1), "Track Response",
+        juce::StringArray{ "Fast", "Natural", "Smooth" }, 1));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("mix", 1), "Mix", 0.0f, 100.0f, 100.0f));
@@ -199,6 +209,7 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mCurVocoderMode = -1;
     mVocXfadeRemaining = 0;
     mVoicedSmooth = 0.0f;
+    mPitchLogSmooth = -1.0f;   // Trackingピッチ平滑の再初期化
     {
         const int vm = (int)apvts.getRawParameterValue("vocoderMode")->load();
         setLatencySamples(vm == 1 ? (int)std::round(0.008 * sampleRate) : 0);
@@ -350,6 +361,13 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     // M4: フルホップ補間ドメイン (0=Step/1=LSP/2=LAR)。次の分析フレームから適用。
     mLpcVocoder.setInterpolationMode((int)apvts.getRawParameterValue("interpolationMode")->load());
 
+    // Tracking応答: log2領域1次平滑の係数をブロック毎に算出 (Fast=2ms/Natural=6ms/Smooth=20ms)
+    {
+        static constexpr float kRespTau[3] = { 0.002f, 0.006f, 0.020f };
+        const int respIdx = juce::jlimit(0, 2, (int)apvts.getRawParameterValue("trackResponse")->load());
+        mPitchSmoothCoef = 1.0f - std::exp(-1.0f / (kRespTau[respIdx] * 16000.0f));
+    }
+
     // ポストEQ(LPC出力用)の係数をブロック毎に更新。BANDS EQの帯域ゲインを反映する。
     mPostEq.updateCoeffs((int)apvts.getRawParameterValue("bandCount")->load(), mBandGains);
 
@@ -463,21 +481,24 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float carrierL = 0.0f;
         float carrierR = 0.0f;
         
-        // 有声音ピッチの取得 (最後の有声ピッチ保持 + PORTA=0時の平滑化バイパス + 揺らぎ無視デッドバンド)
-        float pitchHz = mLastVoicedPitch;
+        // 有声音ピッチの取得。
+        //  旧実装の「±20セントデッドバンド保持→超えたら一括ジャンプ」は、自然な
+        //  イントネーションを階段状にしてうねり/ポルタメント風アーティファクトの
+        //  原因になっていたため廃止。代わりに生ピッチを log2 領域の1次平滑
+        //  (Responseパラメータ: Fast/Natural/Smooth) に通す。
+        //  微小ジッタは平滑が吸収し、原音の抑揚(ピッチ感)はそのまま保たれる。
+        float targetHz = mLastVoicedPitch;
         if (mPitchTracker.isVoiced())
         {
-            float portaVal = apvts.getRawParameterValue("porta")->load();
-            float rawHz = (portaVal < 0.005f) ? mPitchTracker.getRawPitchHz() : mPitchTracker.getPitchHz();
-            
-            // 約20セント(1.0116倍/0.9885倍)以内の微小な揺らぎは無視する(安定化)
-            float ratio = rawHz / juce::jmax(1.0f, mLastVoicedPitch);
-            if (ratio > 1.0116f || ratio < 0.9885f)
-            {
-                pitchHz = rawHz;
-                mLastVoicedPitch = pitchHz;
-            }
+            targetHz = mPitchTracker.getRawPitchHz();
+            mLastVoicedPitch = targetHz;
         }
+        targetHz = juce::jlimit(30.0f, 4000.0f, targetHz);
+
+        if (mPitchLogSmooth < 0.0f)
+            mPitchLogSmooth = std::log2(targetHz);   // 初回は即値
+        mPitchLogSmooth += mPitchSmoothCoef * (std::log2(targetHz) - mPitchLogSmooth);
+        const float pitchHz = std::exp2(mPitchLogSmooth);
 
         // Tracking パラメータの適用 (Autoモードでも0%のときは基準ピッチに固定しうねりを防止)
         float basePitch = apvts.getRawParameterValue("basePitch")->load();
@@ -506,11 +527,13 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
         const int bandCount = (int)apvts.getRawParameterValue("bandCount")->load();
         const int filterbankType = (int)apvts.getRawParameterValue("filterbankType")->load();
+        const float resonance = apvts.getRawParameterValue("resonance")->load();
 
         auto renderFilterbank = [&](float& l, float& r)
         {
             mFilterbankVocoder.processSample(inSample, carrierL, carrierR, l, r,
-                                             bandCount, effectiveCharacter, effectiveFormantShift, effectiveFormantStretch,
+                                             bandCount, effectiveCharacter, resonance,
+                                             effectiveFormantShift, effectiveFormantStretch,
                                              filterbankType, 1.0f, mBandGains, mBandLevelsForUi);
         };
         // character(0..1) → 帯域拡張γ(0.97=ぼやけ 〜 0.998=シャープ) へマッピング (M3)
@@ -545,7 +568,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             // BANDS EQ のアナライザー(帯域レベルメーター)が更新されず止まってしまう。
             // 分析専用パスを呼び、入力音声の帯域レベルだけをメーターへ反映する。
             // (クロスフェード中は renderFilterbank 側で分析が走るので、ここでは呼ばない=二重処理を防止)
-            mFilterbankVocoder.analyzeForMeter(inSample, bandCount, effectiveCharacter,
+            mFilterbankVocoder.analyzeForMeter(inSample, bandCount, effectiveCharacter, resonance,
                                                filterbankType, mBandLevelsForUi);
         }
         else

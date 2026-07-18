@@ -19,7 +19,7 @@ class PitchTracker
 public:
     static constexpr int kAnalysisRate = 16000;
     static constexpr int kWindowSize = 512;   // 32ms @16kHz
-    static constexpr int kHopSize = 256;      // 16ms
+    static constexpr int kHopSize = 128;      // 8ms (旧16ms。スピーチ抑揚への追従を倍化)
     static constexpr float kMinHz = 55.0f;
     static constexpr float kMaxHz = 1000.0f;
 
@@ -196,10 +196,12 @@ private:
         if (voiced)
         {
             // オクターブエラー（ダブルピッチ / ハーフピッチ）の自動補正
+            // 参照は前回の生ピッチ (遅れの大きい smoothedHz を使うと
+            // 有声開始直後に誤補正→スウープの原因になる)
             float correctedHz = hz;
-            if (smoothedHz > 30.0f)
+            if (pitchHz > 30.0f)
             {
-                const float rVal = hz / smoothedHz;
+                const float rVal = hz / pitchHz;
                 // 1オクターブ上の誤検出を元のオクターブに引き戻す
                 if (rVal >= 1.8f && rVal <= 2.2f)
                 {

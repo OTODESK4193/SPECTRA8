@@ -30,9 +30,11 @@ public:
     // modulator: 分析側に入力する音声サンプル
     // carrierL/R: 合成側のステレオキャリア入力サンプル
     // outL/R: ボコーディング後のステレオ出力サンプル (書き戻し)
+    // resonance: バンド幅スケール (0.3=太い/緩い 〜 1.0=標準 〜 3.0=鋭い)。
+    //            バンド毎の基準Q(バンド間隔連動)に乗算される。BPF Bankで有効。
     void processSample(float modulator, float carrierL, float carrierR,
                        float& outL, float& outR,
-                       int bandCount, float character,
+                       int bandCount, float character, float resonance,
                        float formantShift, float formantStretch,
                        int filterbankType, float stereoWidth,
                        const std::array<std::atomic<float>, kMaxBands>& bandGains,
@@ -42,24 +44,31 @@ public:
     // LPCモードのようにフィルターバンク合成を実行しないときでも、
     // BANDS EQ のアナライザー(入力音声の帯域レベルメーター)を動かし続けるために使う。
     // 内部の分析フィルタ状態と mEnvValues、そして bandLevelsForUi のみを更新する。
-    void analyzeForMeter(float modulator, int bandCount, float character, int filterbankType,
+    void analyzeForMeter(float modulator, int bandCount, float character, float resonance,
+                         int filterbankType,
                          std::array<std::atomic<float>, kMaxBands>& bandLevelsForUi) noexcept
     {
         const int activeBands = juce::jlimit(8, kMaxBands, bandCount);
         for (int i = 0; i < activeBands; ++i)
         {
-            updateAnalysisBand(i, modulator, filterbankType, character);
-            bandLevelsForUi[(size_t)i].store(mEnvValues[(size_t)i]);
+            updateAnalysisBand(i, modulator, filterbankType, character, resonance);
+            bandLevelsForUi[(size_t)i].store(mEnvValues[(size_t)i] * kMeterGain);
         }
     }
 
 private:
     // 分析側(モジュレーター)の1バンド分の処理。mEnvValues[i] を更新する。
     // processSample と analyzeForMeter の両方から呼ばれる共通ロジック。
-    inline void updateAnalysisBand(int i, float modulator, int filterbankType, float character) noexcept
+    // mEnvValues は「正規化された帯域振幅」(中心利得0dBのフィルタ出力包絡) を保持する。
+    inline void updateAnalysisBand(int i, float modulator, int filterbankType,
+                                   float character, float resonance) noexcept
     {
         const float f0 = mBandF0[(size_t)i];
-        const float Q = 10.0f; // BPF用のクオリティファクタ
+        // バンド間隔連動Q (定オーバーラップ設計) × Resonanceスケール。
+        // melスケール配置では低域の間隔が狭く高域は広いため、固定Qだと
+        // 低域に感度の谷・高域に過剰オーバーラップが生じる。バンド幅を
+        // 隣接エッジ幅に連動させ、全帯域で均一なカバレッジにする。
+        const float Q = juce::jlimit(1.0f, 40.0f, mBandQ[(size_t)i] * resonance);
 
         float analOut = 0.0f;
         float g_anal, k_anal, a1_anal;
@@ -83,7 +92,9 @@ private:
             s2.s1 = 2.0f * y_bp_2 - s2.s1;
             s2.s2 = 2.0f * y_lp_2 - s2.s2;
 
-            analOut = y_bp_2;
+            // 中心利得正規化: SVF-BPカスケードの中心利得はQ²。1/Q²を掛けて
+            // 中心0dBに揃える(Q可変化してもバンド間・Resonance変更時のレベルが暴れない)。
+            analOut = y_bp_2 / (Q * Q);
         }
         else // Subtractive (バンド端エッジの8次HPF→8次LPF直列 + ピーク正規化)
         {
@@ -97,8 +108,8 @@ private:
             for (int sec = 0; sec < 4; ++sec) y = processLpfSection(sub.hiLp[(size_t)sec], y, gHi, a1Hi);
             for (int sec = 0; sec < 4; ++sec) y = processHpfSection(sub.loHp[(size_t)sec], y, gLo, a1Lo);
 
-            // 正規化(ピーク0dB) + BPF Bankとの聴感レベル整合メイクアップ
-            analOut = y * mBandNorm[(size_t)i] * kSubMakeup;
+            // 正規化(ピーク0dB)。タイプ間の聴感レベル整合は出力側メイクアップで行う。
+            analOut = y * mBandNorm[(size_t)i];
         }
 
         // エンベロープ追従（キャラクター値でアタック/リリースタイムを調整）
@@ -117,17 +128,16 @@ private:
         void reset() { s1 = 0.0f; s2 = 0.0f; }
     };
 
-    // Subtractive モードのメイクアップゲイン (分析側エンベロープに適用)
-    // BPF Bank は SVF-BP 2段カスケード (利得 Q^2=100/側) の高利得構造で常時リミッター駆動のため、
-    // 正規化済み(ピーク0dB)の減算型バンクとの聴感レベル整合に +48dB を与える
-    // (ユーザー実測: BPF +1.58dB(クリップ레일) vs 旧Sub -18.5dB → 差約20dB を補正した較正値)
-    static constexpr float kSubMakeup = 256.0f;
+    // 出力メイクアップ (タイプ別)。分析・合成とも中心利得0dBに正規化したため、
+    // 旧実装(BPF: 分析Q²×合成Q²×トリム0.003236 / Sub: 分析×256×トリム)と
+    // 同一の最終音量になるよう等価換算した較正値。
+    //   BPF: 100×100×0.003236 = 32.36  /  Sub: 256×0.003236 = 0.828
+    static constexpr float kBpfMakeup    = 32.36f;
+    static constexpr float kSubOutMakeup = 0.828f;
 
-    // 出力ユニティ・トリム: BPF Bank は Q²=100 の高利得構造で既定設定の出力が
-    // 約 +49.8dB(実測, Ableton)まで持ち上がる。LPCモード(≈0dB)と揃えるため、
-    // フィルターバンク合成の総和に -49.8dB のトリムを掛けて出力を約0dBへ落とす。
-    // (Subtractive は kSubMakeup で BPF に整合済みのため同じトリムで両タイプが揃う)
-    static constexpr float kOutputTrim = 0.003236f; // 10^(-49.8/20)
+    // BANDS EQ メーター表示用ゲイン。正規化後の帯域振幅は旧実装のQ²(=100)倍
+    // 小さくなったため、表示スケールを旧実装と揃える。
+    static constexpr float kMeterGain = 100.0f;
 
     struct SubBandState
     {
@@ -190,6 +200,7 @@ private:
     std::array<float, kMaxBands + 1> mEdgeG {};
     std::array<float, kMaxBands + 1> mEdgeA1 {};
     std::array<float, kMaxBands> mBandNorm {}; // 分析側ピーク正規化ゲイン
+    std::array<float, kMaxBands> mBandQ {};    // バンド間隔連動の基準Q (f0/エッジ幅)
 
     // フィルタ状態変数
     std::array<std::array<SVFState, 2>, kMaxBands> mAnalSvf {}; // 2段カスケード用

@@ -209,7 +209,7 @@ float ExcitationEngine::processVoiceSample(Voice& v, int channel, float phaseInc
     return out;
 }
 
-void ExcitationEngine::applyLoFi(float& l, float& r) noexcept
+void ExcitationEngine::applyLoFi(float& l, float& r, float pitchHz) noexcept
 {
     if (mLofi <= 0.0f) return;
 
@@ -220,10 +220,19 @@ void ExcitationEngine::applyLoFi(float& l, float& r) noexcept
     l = std::round(l * levels) / levels;
     r = std::round(r * levels) / levels;
 
-    // 2. サンプルレート低減 (サンプル・アンド・ホールド)
-    // lofi=0: 16kHz (ホールドなし), lofi=1: 約100Hz相当
-    const float targetSr = 16000.0f * std::pow(0.00625f, mLofi); // 16000 -> 100
-    const float sampleHoldPeriod = 16000.0f / targetSr;
+    // 2. ピッチ同期サンプル&ホールド
+    //  旧実装(固定レート、最低100Hz)はホールドレートが基音を下回ると
+    //  S&H周期そのものが低い音程として聞こえ「低音強調」になっていた。
+    //  ホールドレートを常に基音の整数倍 N×f0 に同期させることで、
+    //  基音(=元音の高さ)は保たれたまま倍音だけが粗くなるLofi味付けにする。
+    //  lofi=0: N=64 (ほぼ変化なし) → lofi=1: N=4 (1周期4ステップの荒い波形)
+    const float f0 = juce::jlimit(30.0f, 2000.0f, pitchHz);
+    const float stepsPerCycle = 64.0f * std::pow(4.0f / 64.0f, mLofi); // 64 → 4
+    const float holdRate = juce::jmin((float)kInternalSampleRate, stepsPerCycle * f0);
+    const float sampleHoldPeriod = (float)kInternalSampleRate / holdRate;
+
+    if (sampleHoldPeriod <= 1.001f)
+        return; // ホールド実質なし
 
     mLofiRateCounter += 1.0f;
     if (mLofiRateCounter >= sampleHoldPeriod)
@@ -284,14 +293,9 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
         // 1. ピッチポルタメント適用
         v.currentFreq += portaCoeff * (v.targetFreq - v.currentFreq);
 
+        // ※旧実装の「lofi>0.5で半音ピッチ量子化」は削除した。
+        //   ケロケロ効果は pitchQuantize ノブに一本化(挙動を予測可能に)。
         float pitch = v.currentFreq;
-        
-        // Lo-Fi ピッチ量子化 (lofi > 0.5 の場合に最も近い半音スケールにクランプ)
-        if (mLofi > 0.5f)
-        {
-            float note = std::round(12.0f * std::log2(pitch / 440.0f) + 69.0f);
-            pitch = 440.0f * std::pow(2.0f, (note - 69.0f) / 12.0f);
-        }
 
         // 2. デチューン計算
         // ボイスペアにステレオ広がりと分厚さを出すためのユニゾンデチューン
@@ -397,6 +401,8 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
         return;
     }
 
-    // 7. LoFiポストエフェクト適用
-    applyLoFi(outL, outR);
+    // 7. LoFiポストエフェクト適用 (ピッチ同期S&H用に現在の基音を渡す)
+    //    Autoモード: トラッキング済みピッチ / MIDIモード: 最後に発音したノート周波数
+    const float lofiRefPitch = isMidiMode ? mLastTriggeredFreq : externalPitchHz;
+    applyLoFi(outL, outR, lofiRefPitch);
 }

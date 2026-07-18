@@ -254,15 +254,29 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
             }
 
             // M5: 反射係数kのビット量子化（BitSpeek風レトロ）。
-            //  0を表現できる対称量子化 Q=2^(bits-1)-1。量子化後は安定域±0.995へ再クランプ。
+            //  LAR(対数面積比 atanh(k))領域の対称量子化 Q=2^(bits-1)-1。
+            //  kドメイン一様量子化は |k|→1 付近で極半径への感度が極端に高く、丸め上げで
+            //  共振が急増しクリップの原因になるため、感度が均等なLAR領域で丸める
+            //  (TMS5220系実機の非一様量子化テーブル相当)。
+            //  さらに量子化によるフィルタ利得変化を G *= sqrt(Π(1-kq²)/Π(1-k²)) で補償し、
+            //  低ビット時の音量暴れ・クリップを防ぐ(レトロな粗さは維持される)。
             if (mQuantBits >= 2)
             {
-                const float Q = (float)((1 << (mQuantBits - 1)) - 1);
+                const double Q = (double)((1 << (mQuantBits - 1)) - 1);
+                constexpr double kLarMax = 2.994;   // atanh(0.995)
+                double num = 1.0, den = 1.0;        // Π(1-kq²) / Π(1-k²)
                 for (int p = 0; p < order; ++p)
                 {
-                    float kq = std::round(mKTarget[(size_t)p] * Q) / Q;
-                    mKTarget[(size_t)p] = std::min(0.995f, std::max(-0.995f, kq));
+                    const double k0   = std::min(0.995, std::max(-0.995, (double)mKTarget[(size_t)p]));
+                    const double lar  = std::atanh(k0);
+                    const double larQ = std::round(lar * (Q / kLarMax)) * (kLarMax / Q);
+                    const double kq   = std::min(0.995, std::max(-0.995, std::tanh(larQ)));
+                    mKTarget[(size_t)p] = (float)kq;
+                    num *= (1.0 - kq * kq);
+                    den *= (1.0 - k0 * k0);
                 }
+                if (den > 1e-12)
+                    mGTarget *= (float)std::sqrt(num / den);
             }
 
             // M4: フルホップ補間セグメントを構築(現在値→新ターゲットをホップ全長でモーフ)

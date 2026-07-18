@@ -109,5 +109,9 @@ private:
     float mLastVoicedPitch = 130.0f;
     float mVoicedSmooth = 0.0f;   // 平滑化した有声度(0..1)。LPCのNOISE± 自動V/UV用
 
+    // Tracking用ピッチ平滑 (log2領域1次平滑、Responseパラメータでτ切替)
+    float mPitchLogSmooth = -1.0f;   // <0 = 未初期化
+    float mPitchSmoothCoef = 0.02f;  // ブロック毎にτから再計算
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessor)
 };

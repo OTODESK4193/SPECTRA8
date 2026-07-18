@@ -46,6 +46,16 @@ void FilterbankVocoder::prepare(double sampleRate)
     for (int i = 0; i < kMaxBands; ++i)
         mBandNorm[(size_t)i] = computeBandNorm(mBandEdges[(size_t)i], mBandEdges[(size_t)i + 1]);
 
+    // バンド間隔連動の基準Q: Q_i = f0_i / (上端エッジ - 下端エッジ)。
+    // 定オーバーラップ設計(帯域幅が常に隣接バンド間隔に一致)。
+    // mel配置では低域 ≈2 〜 中域 ≈12 〜 高域 ≈18 となり、中域は旧固定値Q=10とほぼ同じ
+    // (=旧来の音色キャラクターを中域で維持しつつ、低域の谷と高域のボヤけを解消)。
+    for (int i = 0; i < kMaxBands; ++i)
+    {
+        const float bw = mBandEdges[(size_t)i + 1] - mBandEdges[(size_t)i];
+        mBandQ[(size_t)i] = juce::jlimit(1.5f, 24.0f, mBandF0[(size_t)i] / juce::jmax(1.0f, bw));
+    }
+
     reset();
 }
 
@@ -71,17 +81,16 @@ void FilterbankVocoder::reset()
 
 void FilterbankVocoder::processSample(float modulator, float carrierL, float carrierR,
                                       float& outL, float& outR,
-                                      int bandCount, float character,
+                                      int bandCount, float character, float resonance,
                                       float formantShift, float formantStretch,
                                       int filterbankType, float stereoWidth,
                                       const std::array<std::atomic<float>, kMaxBands>& bandGains,
                                       std::array<std::atomic<float>, kMaxBands>& bandLevelsForUi) noexcept
 {
     const int activeBands = juce::jlimit(8, kMaxBands, bandCount);
-    
+
     // フォルマント・シフト倍率
     const float shiftFactor = std::pow(2.0f, formantShift / 12.0f);
-    const float Q = 10.0f; // BPF用のクオリティファクタ
     const float k_lr4 = 1.41421356f; // Q = 0.707 (LPF 2次 sections)
 
     float sumL = 0.0f;
@@ -96,10 +105,10 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
         // ----------------------------------------------------
         // 分析ロジックは analyzeForMeter と共通化 (updateAnalysisBand)。
         // mEnvValues[i] を更新する。
-        updateAnalysisBand(i, modulator, filterbankType, character);
+        updateAnalysisBand(i, modulator, filterbankType, character, resonance);
 
-        // UIレベルメーター用に通知
-        bandLevelsForUi[(size_t)i].store(mEnvValues[(size_t)i]);
+        // UIレベルメーター用に通知 (正規化後の帯域振幅 × 表示スケール)
+        bandLevelsForUi[(size_t)i].store(mEnvValues[(size_t)i] * kMeterGain);
 
         // ----------------------------------------------------
         // 2. 合成側（キャリア）処理
@@ -108,8 +117,12 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
         float f0_synth = f0 * formantStretch * shiftFactor;
         f0_synth = juce::jlimit(50.0f, 7800.0f, f0_synth);
 
+        // バンド間隔連動Q × Resonance (分析側と同一)
+        const float qBand = juce::jlimit(1.0f, 40.0f, mBandQ[(size_t)i] * resonance);
+        const float invQ2 = 1.0f / (qBand * qBand);
+
         float g_synth, k_synth, a1_synth;
-        computeFilterCoeffs(f0_synth, Q, g_synth, k_synth, a1_synth);
+        computeFilterCoeffs(f0_synth, qBand, g_synth, k_synth, a1_synth);
 
         float carrierOutL = 0.0f;
         float carrierOutR = 0.0f;
@@ -131,7 +144,7 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
             sL2.s1 = 2.0f * y_bp_L2 - sL2.s1;
             sL2.s2 = 2.0f * y_lp_L2 - sL2.s2;
 
-            carrierOutL = y_bp_L2;
+            carrierOutL = y_bp_L2 * invQ2; // 中心利得0dBに正規化
 
             // RIGHT
             auto& sR1 = mSynthSvfR[(size_t)i][0];
@@ -148,7 +161,7 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
             sR2.s1 = 2.0f * y_bp_R2 - sR2.s1;
             sR2.s2 = 2.0f * y_lp_R2 - sR2.s2;
 
-            carrierOutR = y_bp_R2;
+            carrierOutR = y_bp_R2 * invQ2; // 中心利得0dBに正規化
         }
         else // Subtractive (合成側もバンド端エッジの8次HPF→8次LPF直列 + ピーク正規化)
         {
@@ -202,7 +215,9 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
         sumR += modulatedR * panR;
     }
 
-    // 出力ユニティ・トリム(LPCモードと音量を揃える。§音量ユニティ化)
-    outL = sumL * kOutputTrim;
-    outR = sumR * kOutputTrim;
+    // 出力メイクアップ(タイプ別)。分析・合成の中心利得0dB正規化後に、
+    // 旧実装と同一の最終音量へ揃える較正値(§音量ユニティ化)。
+    const float makeup = (filterbankType == 0) ? kBpfMakeup : kSubOutMakeup;
+    outL = sumL * makeup;
+    outR = sumR * makeup;
 }
