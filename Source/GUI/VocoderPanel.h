@@ -52,7 +52,8 @@ private:
     juce::ComboBox mComboVocoderMode;
     juce::ComboBox mComboVoicingMode;
     juce::ComboBox mComboTrackResponse;   // Tracking応答速度 (両モード共通)
-    juce::ComboBox mComboFilterbankType;  // FilterBank専用
+    juce::ComboBox mComboPitchQKey;       // PITCH Q キー (両モード共通)
+    juce::ComboBox mComboPitchQScale;     // PITCH Q スケール (両モード共通)
     juce::ComboBox mComboLpcOrder;        // LPC専用
     juce::ComboBox mComboAnalysisWindow;  // LPC専用
     juce::ComboBox mComboFrameRate;       // LPC専用
@@ -107,7 +108,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentVocoderMode;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentVoicingMode;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentTrackResponse;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentFilterbankType;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentPitchQKey;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentPitchQScale;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentLpcOrder;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentAnalysisWindow;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentFrameRate;

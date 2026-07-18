@@ -113,5 +113,8 @@ private:
     float mPitchLogSmooth = -1.0f;   // <0 = 未初期化
     float mPitchSmoothCoef = 0.02f;  // ブロック毎にτから再計算
 
+    // PITCH Q ヒステリシス用: 現在保持中のスナップ先ノート (-1=未保持)
+    int mQuantNoteHeld = -1;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessor)
 };

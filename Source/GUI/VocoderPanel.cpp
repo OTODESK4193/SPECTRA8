@@ -64,7 +64,9 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
     setupCombo(mComboVocoderMode, { "Filterbank", "LPC Mode" });
     setupCombo(mComboVoicingMode, { "Auto Mode", "MIDI Mode" });
     setupCombo(mComboTrackResponse, { "Track: Fast", "Track: Natural", "Track: Smooth" });
-    setupCombo(mComboFilterbankType, { "BPF Bank", "Subtractive LR4" });
+    setupCombo(mComboPitchQKey, { "Key: C", "Key: C#", "Key: D", "Key: D#", "Key: E", "Key: F",
+                                  "Key: F#", "Key: G", "Key: G#", "Key: A", "Key: A#", "Key: B" });
+    setupCombo(mComboPitchQScale, { "Chromatic", "Major", "Minor", "Maj Penta", "Min Penta" });
     setupCombo(mComboLpcOrder, { "Order 8", "Order 10", "Order 12", "Order 16" });
     setupCombo(mComboAnalysisWindow, { "Hann Window", "Hamming Window", "Blackman Window" });
     setupCombo(mComboFrameRate, { "8 Hz", "15 Hz", "25 Hz", "50 Hz", "80 Hz" });
@@ -97,7 +99,8 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
     mAttachmentVocoderMode      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "vocoderMode", mComboVocoderMode);
     mAttachmentVoicingMode      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "mode", mComboVoicingMode);
     mAttachmentTrackResponse    = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "trackResponse", mComboTrackResponse);
-    mAttachmentFilterbankType   = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "filterbankType", mComboFilterbankType);
+    mAttachmentPitchQKey        = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "pitchQKey", mComboPitchQKey);
+    mAttachmentPitchQScale      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "pitchQScale", mComboPitchQScale);
     mAttachmentLpcOrder         = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "lpcOrder", mComboLpcOrder);
     mAttachmentAnalysisWindow   = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "windowType", mComboAnalysisWindow);
     mAttachmentFrameRate        = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "frameRate", mComboFrameRate);
@@ -135,7 +138,6 @@ void VocoderPanel::updateEnablement()
     mBtnFormantFreeze.setVisible(lpc);   // FREEZE は LPC のみ有効
 
     // FilterBank専用の表示
-    mComboFilterbankType.setVisible(!lpc);
     mKnobResonance.setVisible(!lpc);
     mLblResonance.setVisible(!lpc);
 
@@ -184,6 +186,8 @@ void VocoderPanel::resized()
     placeCombo(mComboVocoderMode);
     placeCombo(mComboVoicingMode);
     placeCombo(mComboTrackResponse);
+    placeCombo(mComboPitchQKey);
+    placeCombo(mComboPitchQScale);
     if (lpc)
     {
         placeCombo(mComboLpcOrder);
@@ -191,10 +195,6 @@ void VocoderPanel::resized()
         placeCombo(mComboFrameRate);
         placeCombo(mComboQuantBits);
         placeCombo(mComboLpcInterpolation);
-    }
-    else
-    {
-        placeCombo(mComboFilterbankType);
     }
 
     // --- ノブエリア ---

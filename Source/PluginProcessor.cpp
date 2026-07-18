@@ -70,6 +70,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("pitchQuantize", 1), "Pitch Quantize", 0.0f, 100.0f, 0.0f));
 
+    // PITCH Q のスナップ先: キー(ルート音)とスケール
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("pitchQKey", 1), "PitchQ Key",
+        juce::StringArray{ "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }, 0));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("pitchQScale", 1), "PitchQ Scale",
+        juce::StringArray{ "Chromatic", "Major", "Minor", "Maj Penta", "Min Penta" }, 0));
+
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("mode", 1), "Mode", juce::StringArray{ "Auto", "MIDI" }, 0));
 
@@ -85,8 +93,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("interpolationMode", 1), "Interpolation Mode", juce::StringArray{ "Step", "LSP", "LAR" }, 0));
 
-    layout.add(std::make_unique<juce::AudioParameterChoice>(
-        juce::ParameterID("filterbankType", 1), "Filterbank Type", juce::StringArray{ "Bandpass", "Subtractive" }, 0));
+    // ※ filterbankType (Bandpass/Subtractive) は Subtractive LR4 廃止に伴い削除 (2026-07-18)
 
     // フェーズ2: LPC次数 (BitSpeekレトロ=10 / 高品位=16)
     layout.add(std::make_unique<juce::AudioParameterChoice>(
@@ -210,6 +217,7 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mVocXfadeRemaining = 0;
     mVoicedSmooth = 0.0f;
     mPitchLogSmooth = -1.0f;   // Trackingピッチ平滑の再初期化
+    mQuantNoteHeld = -1;       // PITCH Q保持音の再初期化
     {
         const int vm = (int)apvts.getRawParameterValue("vocoderMode")->load();
         setLatencySamples(vm == 1 ? (int)std::round(0.008 * sampleRate) : 0);
@@ -509,14 +517,51 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         if (std::isnan(activePitch) || activePitch <= 20.0f || activePitch > 8000.0f)
             activePitch = basePitch;
 
-        // ケロケロ（ピッチ量子化）の適用
+        // ケロケロ（ピッチ量子化）の適用: Key/Scaleスナップ + ヒステリシス
+        //  - スケールマスクで許可音のみにスナップ(Chromatic=全音)
+        //  - ヒステリシス: 現在保持中の音より「0.3半音以上近い」別の許可音が
+        //    現れたときだけ切替える。境界付近での音程チャタリング(ワブル)を防止。
         float qAmt = apvts.getRawParameterValue("pitchQuantize")->load() * 0.01f;
         if (qAmt > 0.001f && activePitch > 20.0f && !std::isnan(activePitch))
         {
-            float note = std::round(12.0f * std::log2(activePitch / 440.0f) + 69.0f);
-            float qPitch = 440.0f * std::pow(2.0f, (note - 69.0f) / 12.0f);
+            static constexpr uint16_t kScaleMasks[5] = {
+                0b111111111111,  // Chromatic
+                0b101010110101,  // Major     {0,2,4,5,7,9,11}
+                0b010110101101,  // Minor(nat){0,2,3,5,7,8,10}
+                0b001010010101,  // MajPenta  {0,2,4,7,9}
+                0b010010101001,  // MinPenta  {0,3,5,7,10}
+            };
+            const int key   = juce::jlimit(0, 11, (int)apvts.getRawParameterValue("pitchQKey")->load());
+            const int scale = juce::jlimit(0, 4,  (int)apvts.getRawParameterValue("pitchQScale")->load());
+            const uint16_t mask = kScaleMasks[scale];
+
+            const float cont = 12.0f * std::log2(activePitch / 440.0f) + 69.0f; // 連続MIDIノート値
+            auto isAllowed = [&](int n) {
+                const int deg = ((n - key) % 12 + 12) % 12;
+                return (mask >> deg) & 1;
+            };
+            // 最近傍の許可音を探索 (±1オクターブで必ず見つかる)
+            int nearest = (int)std::lround(cont);
+            float bestDist = 1e9f;
+            for (int d = -12; d <= 12; ++d)
+            {
+                const int n = (int)std::lround(cont) + d;
+                if (!isAllowed(n)) continue;
+                const float dist = std::abs(cont - (float)n);
+                if (dist < bestDist) { bestDist = dist; nearest = n; }
+            }
+            // ヒステリシス判定
+            if (mQuantNoteHeld < 0 || !isAllowed(mQuantNoteHeld)
+                || bestDist + 0.3f < std::abs(cont - (float)mQuantNoteHeld))
+                mQuantNoteHeld = nearest;
+
+            const float qPitch = 440.0f * std::pow(2.0f, ((float)mQuantNoteHeld - 69.0f) / 12.0f);
             if (!std::isnan(qPitch) && qPitch > 20.0f)
                 activePitch = activePitch + (qPitch - activePitch) * qAmt;
+        }
+        else
+        {
+            mQuantNoteHeld = -1; // PITCH Q無効時は保持解除
         }
 
         mExcitationEngine.processSample(carrierL, carrierR, activePitch, isMidiMode);
@@ -526,7 +571,6 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float wetR = 0.0f;
 
         const int bandCount = (int)apvts.getRawParameterValue("bandCount")->load();
-        const int filterbankType = (int)apvts.getRawParameterValue("filterbankType")->load();
         const float resonance = apvts.getRawParameterValue("resonance")->load();
 
         auto renderFilterbank = [&](float& l, float& r)
@@ -534,7 +578,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mFilterbankVocoder.processSample(inSample, carrierL, carrierR, l, r,
                                              bandCount, effectiveCharacter, resonance,
                                              effectiveFormantShift, effectiveFormantStretch,
-                                             filterbankType, 1.0f, mBandGains, mBandLevelsForUi);
+                                             1.0f, mBandGains, mBandLevelsForUi);
         };
         // character(0..1) → 帯域拡張γ(0.97=ぼやけ 〜 0.998=シャープ) へマッピング (M3)
         const float lpcGamma = 0.970f + 0.028f * juce::jlimit(0.0f, 1.0f, effectiveCharacter);
@@ -569,7 +613,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             // 分析専用パスを呼び、入力音声の帯域レベルだけをメーターへ反映する。
             // (クロスフェード中は renderFilterbank 側で分析が走るので、ここでは呼ばない=二重処理を防止)
             mFilterbankVocoder.analyzeForMeter(inSample, bandCount, effectiveCharacter, resonance,
-                                               filterbankType, mBandLevelsForUi);
+                                               mBandLevelsForUi);
         }
         else
         {
