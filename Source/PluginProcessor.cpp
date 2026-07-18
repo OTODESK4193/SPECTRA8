@@ -812,14 +812,19 @@ void SPECTRA8AudioProcessor::setStateInformation(const void* data, int sizeInByt
 
         // カスタムWavetableの復元 (パスが保存されていればロード)。
         // ファイルIO/FFTを伴うためメッセージスレッドで実行する。
+        // 非同期実行時はWeakReferenceで生存確認 (プロセッサ破棄後のダングリング防止)。
         const juce::String wtPath = getCustomWavetablePath();
         if (wtPath.isNotEmpty())
         {
-            auto doLoad = [this, wtPath]
+            juce::WeakReference<SPECTRA8AudioProcessor> wp(this);
+            auto doLoad = [wp, wtPath]
             {
-                const juce::File f(wtPath);
-                if (f.existsAsFile())
-                    loadCustomWavetable(f);
+                if (auto* p = wp.get())
+                {
+                    const juce::File f(wtPath);
+                    if (f.existsAsFile())
+                        p->loadCustomWavetable(f);
+                }
             };
             if (juce::MessageManager::getInstance()->isThisTheMessageThread())
                 doLoad();

@@ -4,6 +4,7 @@
 // ==========================================
 #include "ExcitationPanel.h"
 #include "../PluginProcessor.h"
+#include <algorithm>
 
 ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
     : processor(proc),
@@ -52,17 +53,28 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
     addAndMakeVisible(mWaveDisplay);
     addAndMakeVisible(mBtnDetuneSnap);
 
-    // BROWSE ボタン (Wavetable選択時のみ表示)
-    mBtnBrowse.setColour(juce::TextButton::buttonColourId, SpectraColors::knobTrack);
-    mBtnBrowse.setColour(juce::TextButton::textColourOffId, SpectraColors::text);
-    mBtnBrowse.onClick = [this] { showBrowser(); };
-    addChildComponent(mBtnBrowse);
+    // BROWSE / ADD DIR ボタン (Wavetable選択時のみ表示)
+    for (auto* b : { &mBtnBrowse, &mBtnAddDir })
+    {
+        b->setColour(juce::TextButton::buttonColourId, SpectraColors::knobTrack);
+        b->setColour(juce::TextButton::textColourOffId, SpectraColors::text);
+        addChildComponent(*b);
+    }
+    mBtnBrowse.onClick = [this] { if (mBrowserOpen) hideBrowser(); else showBrowser(); };
+    mBtnAddDir.onClick = [this] { chooseFolder(); };
 
     // カスタムWT名ラベル
     mLblCustomName.setFont(juce::Font(juce::FontOptions(10.0f)));
     mLblCustomName.setColour(juce::Label::textColourId, SpectraColors::textDim);
     mLblCustomName.setJustificationType(juce::Justification::centredLeft);
     addChildComponent(mLblCustomName);
+
+    // Wavetableリスト
+    mWtList.setModel(this);
+    mWtList.setRowHeight(22);
+    mWtList.setColour(juce::ListBox::backgroundColourId, SpectraColors::bg);
+    mWtList.setColour(juce::ListBox::outlineColourId, SpectraColors::panelLine);
+    addChildComponent(mWtList);
 
     // ブラウザ操作ボタン
     for (auto* b : { &mBtnBrowserClose, &mBtnFactory })
@@ -75,6 +87,7 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
     mBtnFactory.onClick = [this]
     {
         processor.clearCustomWavetable();
+        mWtList.deselectAllRows();
         refreshWaveformDisplay();
     };
 
@@ -103,10 +116,17 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
 
 ExcitationPanel::~ExcitationPanel()
 {
+    mWtList.setModel(nullptr);   // ListBox破棄時のダングリングモデル参照防止
     mKnobWtPos.setLookAndFeel(nullptr);
     mKnobPulseWidth.setLookAndFeel(nullptr);
     mKnobDetune.setLookAndFeel(nullptr);
     mKnobPorta.setLookAndFeel(nullptr);
+}
+
+juce::File ExcitationPanel::getWtDir() const
+{
+    const juce::String p = apvts.state.getProperty("customWavetableDir", juce::String()).toString();
+    return p.isNotEmpty() ? juce::File(p) : juce::File();
 }
 
 void ExcitationPanel::applyDetuneSnap()
@@ -148,31 +168,47 @@ void ExcitationPanel::updateBrowseVisibility()
 {
     const bool wtMode = (mComboWaveform.getSelectedItemIndex() == 2);
     mBtnBrowse.setVisible(wtMode);
+    mBtnAddDir.setVisible(wtMode);
     mLblCustomName.setVisible(wtMode);
     if (!wtMode)
         hideBrowser();
 }
 
+void ExcitationPanel::rescanFolder()
+{
+    mWtFiles.clear();
+    const juce::File dir = getWtDir();
+    if (dir.isDirectory())
+    {
+        for (auto& f : dir.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff"))
+            mWtFiles.push_back(f);
+        std::sort(mWtFiles.begin(), mWtFiles.end(),
+                  [](const juce::File& a, const juce::File& b)
+                  { return a.getFileName().compareIgnoreCase(b.getFileName()) < 0; });
+    }
+    mWtList.updateContent();
+
+    // 現在ロード中のファイルがあれば選択状態にする
+    const juce::String cur = processor.getCustomWavetablePath();
+    for (int i = 0; i < (int)mWtFiles.size(); ++i)
+        if (mWtFiles[(size_t)i].getFullPathName() == cur)
+        {
+            mWtList.selectRow(i);
+            break;
+        }
+}
+
 void ExcitationPanel::showBrowser()
 {
-    if (mBrowser != nullptr)
+    if (!getWtDir().isDirectory())
+    {
+        chooseFolder();   // フォルダ未登録ならまず登録から
         return;
+    }
 
-    // 初期ディレクトリ: 前回のカスタムフォルダ (state保存) → 無ければユーザーフォルダ
-    juce::File initialDir(apvts.state.getProperty("customWavetableDir",
-        juce::File::getSpecialLocation(juce::File::userHomeDirectory).getFullPathName()).toString());
-    if (!initialDir.isDirectory())
-        initialDir = juce::File::getSpecialLocation(juce::File::userHomeDirectory);
-
-    mBrowser = std::make_unique<juce::FileBrowserComponent>(
-        juce::FileBrowserComponent::openMode
-        | juce::FileBrowserComponent::canSelectFiles
-        | juce::FileBrowserComponent::filenameBoxIsReadOnly,
-        initialDir, &mFileFilter, nullptr);
-    mBrowser->addListener(this);
-    mBrowser->setColour(juce::ListBox::backgroundColourId, SpectraColors::bg);
-    addAndMakeVisible(*mBrowser);
-
+    rescanFolder();
+    mBrowserOpen = true;
+    mWtList.setVisible(true);
     mBtnBrowserClose.setVisible(true);
     mBtnFactory.setVisible(true);
 
@@ -189,11 +225,10 @@ void ExcitationPanel::showBrowser()
 
 void ExcitationPanel::hideBrowser()
 {
-    if (mBrowser == nullptr)
+    if (!mBrowserOpen)
         return;
-    mBrowser->removeListener(this);
-    removeChildComponent(mBrowser.get());
-    mBrowser.reset();
+    mBrowserOpen = false;
+    mWtList.setVisible(false);
     mBtnBrowserClose.setVisible(false);
     mBtnFactory.setVisible(false);
 
@@ -207,25 +242,62 @@ void ExcitationPanel::hideBrowser()
     resized();
 }
 
-void ExcitationPanel::fileDoubleClicked(const juce::File& file)
+void ExcitationPanel::chooseFolder()
 {
-    if (file.isDirectory())
-        return;
-    loadWavetableFile(file);
+    juce::File initial = getWtDir();
+    if (!initial.isDirectory())
+        initial = juce::File::getSpecialLocation(juce::File::userHomeDirectory);
+
+    // SafePointerで生存確認 (ダイアログ表示中にエディタが閉じられた場合のダングリング防止)
+    juce::Component::SafePointer<ExcitationPanel> sp(this);
+    mChooser = std::make_unique<juce::FileChooser>("Wavetableフォルダを選択", initial);
+    mChooser->launchAsync(juce::FileBrowserComponent::openMode
+                        | juce::FileBrowserComponent::canSelectDirectories,
+        [sp](const juce::FileChooser& fc)
+        {
+            if (sp == nullptr)
+                return;
+            const juce::File dir = fc.getResult();
+            if (dir.isDirectory())
+            {
+                sp->apvts.state.setProperty("customWavetableDir", dir.getFullPathName(), nullptr);
+                sp->showBrowser();   // 登録後すぐ一覧表示
+            }
+        });
 }
 
-void ExcitationPanel::loadWavetableFile(const juce::File& file)
+// ---- ListBoxModel ----
+void ExcitationPanel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected)
 {
-    if (processor.loadCustomWavetable(file))
+    if (row < 0 || row >= (int)mWtFiles.size())
+        return;
+
+    if (selected)
     {
-        apvts.state.setProperty("customWavetableDir",
-                                file.getParentDirectory().getFullPathName(), nullptr);
-        hideBrowser();
+        g.setColour(SpectraColors::accentExcitation.withAlpha(0.20f));
+        g.fillRect(0, 0, w, h);
+    }
+    const bool isLoaded = (mWtFiles[(size_t)row].getFullPathName() == processor.getCustomWavetablePath());
+    g.setColour(isLoaded ? SpectraColors::accentExcitation : SpectraColors::text);
+    g.setFont(juce::Font(juce::FontOptions(12.0f)));
+    g.drawText(mWtFiles[(size_t)row].getFileName(), 8, 0, w - 12, h, juce::Justification::centredLeft);
+}
+
+void ExcitationPanel::listBoxItemClicked(int row, const juce::MouseEvent&)
+{
+    if (row < 0 || row >= (int)mWtFiles.size())
+        return;
+
+    // クリックで即ロード&反映 (リストは開いたまま=試聴しながら選べる)
+    if (processor.loadCustomWavetable(mWtFiles[(size_t)row]))
+    {
         refreshWaveformDisplay();
+        mWtList.repaint();
     }
     else
     {
-        mLblCustomName.setText("WT: load failed", juce::dontSendNotification);
+        mLblCustomName.setText("WT: load failed - " + mWtFiles[(size_t)row].getFileName(),
+                               juce::dontSendNotification);
     }
 }
 
@@ -244,22 +316,23 @@ void ExcitationPanel::resized()
 {
     auto r = getLocalBounds().reduced(16);
 
-    // --- 左: 波形コンボ + BROWSE + 2D波形表示 + DETUNE MODE ---
+    // --- 左: 波形コンボ + BROWSE/ADD DIR + 2D波形表示 + DETUNE MODE ---
     const int comboH = 26;
     const int comboW = 160;
     const int leftX = r.getX() + 16;
-    mComboWaveform.setBounds(leftX, r.getY() + 20, comboW, comboH);
-    mBtnBrowse.setBounds(leftX + comboW + 8, r.getY() + 20, 74, comboH);
-    mLblCustomName.setBounds(leftX + comboW + 8 + 74 + 6, r.getY() + 20, 160, comboH);
-
     const int dispW = 288;
-    const int dispH = 160;
-    const int dispY = r.getY() + 20 + comboH + 12;
+    mComboWaveform.setBounds(leftX, r.getY() + 20, comboW, comboH);
+    mBtnBrowse.setBounds(leftX + comboW + 8, r.getY() + 20, 70, comboH);
+    mBtnAddDir.setBounds(leftX + comboW + 8 + 70 + 6, r.getY() + 20, 70, comboH);
+    mLblCustomName.setBounds(leftX, r.getY() + 20 + comboH + 2, dispW, 12);
+
+    const int dispH = 150;
+    const int dispY = r.getY() + 20 + comboH + 16;
     mWaveDisplay.setBounds(leftX, dispY, dispW, dispH);
 
     mComboDetuneMode.setBounds(leftX, dispY + dispH + 10, comboW, 22);
 
-    // --- 右: ノブ 4基 (2×2 グリッド) or ファイルブラウザ ---
+    // --- 右: ノブ 4基 (2×2 グリッド) or Wavetableリスト ---
     const int knobSize = 64;
     const int labelH = 14;
     const int rightX = r.getX() + 360;
@@ -268,12 +341,11 @@ void ExcitationPanel::resized()
     const int rowY1 = r.getY() + 40;
     const int rowY2 = r.getY() + 160;
 
-    if (mBrowser != nullptr)
+    if (mBrowserOpen)
     {
-        // ブラウザ表示中: 右エリア全体をブラウザ + 下部ボタン列
         auto area = juce::Rectangle<int>(rightX, r.getY() + 8, rightW - 8, r.getHeight() - 16);
         auto btnRow = area.removeFromBottom(28);
-        mBrowser->setBounds(area);
+        mWtList.setBounds(area);
         mBtnBrowserClose.setBounds(btnRow.removeFromRight(80).reduced(2));
         mBtnFactory.setBounds(btnRow.removeFromRight(80).reduced(2));
         return;

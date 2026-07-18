@@ -1,10 +1,12 @@
 // ==========================================
 // File: ExcitationPanel.h
 // 「EXCITATION」タブ・パネル (Granular 準拠)
-//  - 左: 波形選択コンボ + BROWSE(カスタムWT) + 2D波形表示 + DETUNE MODEコンボ
+//  - 左: 波形選択コンボ + BROWSE/ADD DIR + 2D波形表示 + DETUNE MODEコンボ
 //  - 右: キャリア関連ノブ (WT POS / PULSE WIDTH / DETUNE+SNAP / PORTA)
-//  - BROWSE押下で右側ノブエリアがファイルブラウザに切り替わり、
-//    wav/aiff をカスタムWavetable (2048smp/フレーム, Serum互換) としてロードできる。
+//  - カスタムWavetable:
+//      ADD DIR でWavetableフォルダを登録 (パスはセッション保存)
+//      BROWSE で右側がフォルダ内 wav/aiff のリストに切替わり、
+//      クリックで即ロード&波形/音へ反映 (試聴しながら選べる)
 // ==========================================
 #pragma once
 
@@ -105,7 +107,7 @@ private:
 };
 
 class ExcitationPanel : public juce::Component,
-                        public juce::FileBrowserListener
+                        public juce::ListBoxModel
 {
 public:
     explicit ExcitationPanel(SPECTRA8AudioProcessor& proc);
@@ -114,22 +116,24 @@ public:
     void paint(juce::Graphics& g) override;
     void resized() override;
 
-    // FileBrowserListener
-    void selectionChanged() override {}
-    void fileClicked(const juce::File&, const juce::MouseEvent&) override {}
-    void fileDoubleClicked(const juce::File& file) override;
-    void browserRootChanged(const juce::File&) override {}
+    // ListBoxModel (Wavetableファイル一覧)
+    int getNumRows() override { return (int)mWtFiles.size(); }
+    void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected) override;
+    void listBoxItemClicked(int row, const juce::MouseEvent&) override;
 
 private:
     SPECTRA8AudioProcessor& processor;
     juce::AudioProcessorValueTreeState& apvts;
 
     void refreshWaveformDisplay();
-    void updateBrowseVisibility();   // Wavetable選択時のみBROWSE表示
-    void showBrowser();
+    void updateBrowseVisibility();   // Wavetable選択時のみBROWSE/ADD DIR表示
+    void showBrowser();              // 登録フォルダのリストを表示 (未登録ならADD DIRへ)
     void hideBrowser();
-    void loadWavetableFile(const juce::File& file);
+    void chooseFolder();             // ADD DIR: フォルダ選択ダイアログ
+    void rescanFolder();             // 登録フォルダから wav/aiff 一覧を再取得
     void applyDetuneSnap();          // SNAP時に現在値を100ct単位へ丸める
+
+    juce::File getWtDir() const;
 
     // ノブ 4基
     ValueKnob mKnobWtPos;
@@ -142,20 +146,23 @@ private:
     juce::ComboBox mComboDetuneMode;
     GlowToggle mBtnDetuneSnap;
     juce::TextButton mBtnBrowse { "BROWSE" };
+    juce::TextButton mBtnAddDir { "ADD DIR" };
     WaveformDisplay mWaveDisplay;
 
-    // カスタムWTブラウザ (BROWSE押下で右側に表示)
-    juce::WildcardFileFilter mFileFilter { "*.wav;*.aif;*.aiff", "*", "Wavetable files" };
-    std::unique_ptr<juce::FileBrowserComponent> mBrowser;
+    // カスタムWTリスト (BROWSE押下で右側に表示)
+    bool mBrowserOpen = false;
+    juce::ListBox mWtList;
+    std::vector<juce::File> mWtFiles;
     juce::TextButton mBtnBrowserClose { "CLOSE" };
     juce::TextButton mBtnFactory { "FACTORY" };
+    std::unique_ptr<juce::FileChooser> mChooser;
 
     // ラベル
     juce::Label mLblWtPos { {}, "WT POS" };
     juce::Label mLblPulseWidth { {}, "PULSE WIDTH" };
     juce::Label mLblDetune { {}, "DETUNE" };
     juce::Label mLblPorta { {}, "PORTA" };
-    juce::Label mLblCustomName;   // ロード中のカスタムWT名
+    juce::Label mLblCustomName;   // ロード中のカスタムWT名 / フォルダ状態
 
     // アタッチメント
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentWtPos;

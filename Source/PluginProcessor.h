@@ -137,5 +137,6 @@ private:
     float mFmtShiftSm = 0.0f;     // FMT SHIFT (16k一次平滑 τ≈5ms)
     float mFmtStretchSm = 1.0f;   // FMT STRETCH (同上)
 
+    JUCE_DECLARE_WEAK_REFERENCEABLE(SPECTRA8AudioProcessor)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessor)
 };
