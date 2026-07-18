@@ -43,6 +43,11 @@ void ExcitationEngine::reset()
 
     mNoiseFilterL.reset();
     mNoiseFilterR.reset();
+    for (int j = 0; j < 3; ++j)
+    {
+        mVocFilterL[j].reset();
+        mVocFilterR[j].reset();
+    }
 
     mDriftVal.fill(0.0f);
     for (int i = 0; i < kMaxVoices; ++i)
@@ -87,10 +92,48 @@ void ExcitationEngine::allNotesOff() noexcept
 void ExcitationEngine::syncParameters(int waveform, float wtPos, float pulseWidth, float detuneCents,
                                     float noiseMix, float lofi, float portaTimeSec,
                                     float attackSec, float decaySec, float sustainVal, float releaseSec,
-                                    float noiseColorHz, int detuneMode) noexcept
+                                    float noiseColorHz, int detuneMode,
+                                    int morphMode, float morphAmt, float morphShift) noexcept
 {
     mWaveform = juce::jlimit(0, 2, waveform);
     mDetuneMode = juce::jlimit(0, 4, detuneMode);
+
+    // ---- Morph 事前計算 (BassSynth precomputeWarp 準拠) ----
+    mMorphMode = juce::jlimit(0, 3, morphMode);
+    mMorphAmt = juce::jlimit(-1.0f, 1.0f, morphAmt);
+    mMorphShift = juce::jlimit(-1.0f, 1.0f, morphShift);
+    if (mMorphMode == 1)        // Bend +/-
+    {
+        mBendSym = juce::jlimit(0.01f, 0.99f, 0.5f + mMorphShift * 0.49f);
+        mBendB = std::exp(-juce::jlimit(-0.99f, 0.99f, mMorphAmt) * 2.0f);
+    }
+    else if (mMorphMode == 2)   // Sync (ハードシンク風)
+    {
+        mSyncSt = 1.0f + std::abs(mMorphAmt) * 7.0f;
+        mSyncShiftHalf = mMorphShift * 0.5f;   // ※BassSynthではShift未接続だったのを有効化
+    }
+    else if (mMorphMode == 3)   // Vocode (A-I-U-E-O フォルマント)
+    {
+        // BassSynth SpectralMorphProcessor mode9 のテーブル (値=倍音番号)
+        static const float kFmts[5][3] = {
+            { 32.0f, 55.0f, 120.0f },   // A
+            { 14.0f, 102.0f, 139.0f },  // I
+            { 14.0f, 41.0f, 116.0f },   // U
+            { 18.0f, 74.0f, 111.0f },   // E
+            { 18.0f, 37.0f, 120.0f },   // O
+        };
+        float s = mMorphShift;
+        int seq[5];
+        if (s >= 0.0f) { seq[0]=0; seq[1]=1; seq[2]=2; seq[3]=3; seq[4]=4; }        // A,I,U,E,O
+        else           { seq[0]=0; seq[1]=3; seq[2]=1; seq[3]=4; seq[4]=2; s = -s; } // A,E,I,O,U
+        const float pos = s * 4.0f;
+        const int i0 = juce::jlimit(0, 3, (int)pos);
+        const int i1 = i0 + 1;
+        const float frac = pos - (float)i0;
+        for (int j = 0; j < 3; ++j)
+            mVocHarm[j] = kFmts[seq[i0]][j] * (1.0f - frac) + kFmts[seq[i1]][j] * frac;
+        mVocAmt = std::abs(mMorphAmt);
+    }
     mWtPos = juce::jlimit(0.0f, 1.0f, wtPos);
     mPulseWidth = juce::jlimit(0.05f, 0.95f, pulseWidth);
     mDetuneCents = juce::jlimit(0.0f, 1200.0f, detuneCents);
@@ -192,9 +235,56 @@ float ExcitationEngine::applyPolyBlep(float phase, float phaseInc) const noexcep
     return 0.0f;
 }
 
+// Morph位相ワープ (BassSynth applyPhaseWarp 準拠、境界フェード付き)
+float ExcitationEngine::applyMorphPhase(float phase, float phaseInc, float& sMul) const noexcept
+{
+    if (mMorphMode != 1 && mMorphMode != 2)
+        return phase;
+
+    const float orig = phase;
+    float warped = phase;
+
+    if (mMorphMode == 1) // Bend +/-
+    {
+        if (phase < mBendSym)
+            warped = mBendSym * std::pow(phase / mBendSym, mBendB);
+        else
+            warped = mBendSym + (1.0f - mBendSym)
+                   * (1.0f - std::pow((1.0f - phase) / (1.0f - mBendSym), mBendB));
+    }
+    else // Sync: 位相を1〜8倍で繰り返し、折返し境界で振幅フェード (クリック防止)
+    {
+        float res = (phase + mSyncShiftHalf) * mSyncSt;
+        res -= std::floor(res);
+        if (res > 0.985f)      sMul *= (1.0f - res) / 0.015f;
+        else if (res < 0.015f) sMul *= res / 0.015f;
+        warped = res - mSyncShiftHalf;
+        if (warped >= 1.0f) warped -= 1.0f;
+        else if (warped < 0.0f) warped += 1.0f;
+    }
+
+    // 周期端の連続性フェード (BassSynth fadeWidth = freq*1e-5 相当。freq=phaseInc*16000)
+    const float fadeWidth = juce::jlimit(0.001f, 0.03f, phaseInc * 0.16f);
+    if (orig < fadeWidth)
+    {
+        const float mix = orig / fadeWidth;
+        return warped * mix + orig * (1.0f - mix);
+    }
+    if (orig > 1.0f - fadeWidth)
+    {
+        const float mix = (1.0f - orig) / fadeWidth;
+        return warped * mix + orig * (1.0f - mix);
+    }
+    return warped;
+}
+
 float ExcitationEngine::processVoiceSample(Voice& v, int channel, float phaseInc) noexcept
 {
     float phase = (channel == 0) ? v.phaseL : v.phaseR;
+
+    // Morph (Bend/Sync) の位相ワープ
+    float sMul = 1.0f;
+    phase = applyMorphPhase(phase, phaseInc, sMul);
 
     float out = 0.0f;
     if (mWaveform == 0) // Saw
@@ -213,7 +303,7 @@ float ExcitationEngine::processVoiceSample(Voice& v, int channel, float phaseInc
         out = mWavetable.sample(phase, mWtPos, phaseInc);
     }
 
-    return out;
+    return out * sMul;
 }
 
 void ExcitationEngine::applyLoFi(float& l, float& r, float pitchHz) noexcept
@@ -411,6 +501,28 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
         // 5. 位相インクリメント
         v.phaseL = std::fmod(v.phaseL + phaseIncL, 1.0f);
         v.phaseR = std::fmod(v.phaseR + phaseIncR, 1.0f);
+    }
+
+    // 5b. Morph Vocode: A-I-U-E-O フォルマントフィルタ (BassSynth mode9 の時間領域等価)。
+    //  BassSynthはウェーブテーブル倍音(bin=倍音番号)への振幅EQだったため、
+    //  中心周波数 = 倍音番号 × 基音 で追従する3基の共振BPFとして実装する。
+    //  mag' = mag*(1-|amt|) + mag*env*4*|amt| に対応する dry/wet 構成。
+    if (mMorphMode == 3 && mVocAmt > 0.001f && activeVoiceCount > 0)
+    {
+        const float f0 = juce::jlimit(30.0f, 2000.0f,
+                                      isMidiMode ? mLastTriggeredFreq : externalPitchHz);
+        float wetL = 0.0f, wetR = 0.0f;
+        for (int j = 0; j < 3; ++j)
+        {
+            const float fc = juce::jlimit(60.0f, 7200.0f, mVocHarm[j] * f0);
+            // BassSynth: width_bins = 0.15*target + 4*scale → Hz換算 0.15*fc + 4*f0
+            const float bwHz = 0.15f * fc + 4.0f * f0;
+            const float Q = juce::jlimit(1.0f, 30.0f, fc / juce::jmax(1.0f, bwHz));
+            wetL += mVocFilterL[j].processBPF_Q(voiceSumL, fc, (float)kInternalSampleRate, Q);
+            wetR += mVocFilterR[j].processBPF_Q(voiceSumR, fc, (float)kInternalSampleRate, Q);
+        }
+        voiceSumL = voiceSumL * (1.0f - mVocAmt) + wetL * 4.0f * mVocAmt;
+        voiceSumR = voiceSumR * (1.0f - mVocAmt) + wetR * 4.0f * mVocAmt;
     }
 
     // 6. ノイズブレンド (有声/無声比率、有声音へのホワイトノイズ混入)

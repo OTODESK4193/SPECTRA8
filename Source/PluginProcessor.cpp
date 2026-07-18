@@ -189,6 +189,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("detuneMode", 1), "Detune Mode",
         juce::StringArray{ "Classic", "Linear", "Exp", "Drift", "Chorus" }, 0));
 
+    // Morph (BassSynthより移植): キャリア波形の位相/スペクトル変形
+    //  Bend +/- = 位相ベンド (Amt=曲げ量, Shift=対称点)
+    //  Sync     = ハードシンク風の位相繰り返し (Amt=シンク比 1〜8x, Shift=位相オフセット)
+    //  Vocode   = A-I-U-E-O フォルマントフィルタ (Amt=効き, Shift=母音モーフ位置)
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("morphMode", 1), "Morph Mode",
+        juce::StringArray{ "None", "Bend +/-", "Sync", "Vocode" }, 0));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("morphAmt", 1), "Morph Amount", -1.0f, 1.0f, 0.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("morphShift", 1), "Morph Shift", -1.0f, 1.0f, 0.0f));
+
     // Noise: BitSpeek式の双方向コントロール。
     //  Filterbank : 0〜100% がキャリアへのノイズ混入（負値は0扱い＝従来と同一）
     //  LPC        : -100%=ノイズ除去(純トーン) / 0%=自動V/UV追従 / +100%=全ノイズ(ウィスパー)
@@ -561,10 +573,14 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 noiseColor = p->load();
 
             const int detuneMode = (int)(apvts.getRawParameterValue("detuneMode")->load());
+            const int morphMode = (int)(apvts.getRawParameterValue("morphMode")->load());
+            const float morphAmt = apvts.getRawParameterValue("morphAmt")->load();
+            const float morphShift = apvts.getRawParameterValue("morphShift")->load();
 
             // モジュール側の同期
             mExcitationEngine.syncParameters(waveform, wtPos, pulseWidth, detune, noise, lofi, porta,
-                                              attack, decay, sustain, release, noiseColor, detuneMode);
+                                              attack, decay, sustain, release, noiseColor, detuneMode,
+                                              morphMode, morphAmt, morphShift);
         }
         mControlRateCounter++;
 

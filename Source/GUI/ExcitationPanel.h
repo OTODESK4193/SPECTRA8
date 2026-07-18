@@ -117,7 +117,7 @@ public:
     void resized() override;
 
     // ListBoxModel (Wavetableファイル一覧)
-    int getNumRows() override { return (int)mWtFiles.size(); }
+    int getNumRows() override;
     void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected) override;
     void listBoxItemClicked(int row, const juce::MouseEvent&) override;
 
@@ -135,24 +135,34 @@ private:
 
     juce::File getWtDir() const;
 
-    // ノブ 4基
+    // ノブ 6基
     ValueKnob mKnobWtPos;
     ValueKnob mKnobPulseWidth;
     ValueKnob mKnobDetune;
     ValueKnob mKnobPorta;
+    ValueKnob mKnobMorphAmt;    // Morph Amount (BassSynth移植)
+    ValueKnob mKnobMorphShift;  // Morph Shift
 
     // コンボ + トグル + ボタン
     juce::ComboBox mComboWaveform;
     juce::ComboBox mComboDetuneMode;
+    juce::ComboBox mComboMorphMode;   // None / Bend +/- / Sync / Vocode
     GlowToggle mBtnDetuneSnap;
     juce::TextButton mBtnBrowse { "BROWSE" };
     juce::TextButton mBtnAddDir { "ADD DIR" };
     WaveformDisplay mWaveDisplay;
 
     // カスタムWTリスト (BROWSE押下で右側に表示)
+    // 入れ子フォルダ対応: 子フォルダ名をサブカテゴリのヘッダ行として表示する
+    struct WtEntry
+    {
+        bool isHeader = false;
+        juce::String label;   // ヘッダ: サブフォルダ名 / ファイル行: 表示名
+        juce::File file;      // ファイル行のみ有効
+    };
     bool mBrowserOpen = false;
     juce::ListBox mWtList;
-    std::vector<juce::File> mWtFiles;
+    std::vector<WtEntry> mWtEntries;
     juce::TextButton mBtnBrowserClose { "CLOSE" };
     juce::TextButton mBtnFactory { "FACTORY" };
     std::unique_ptr<juce::FileChooser> mChooser;
@@ -162,6 +172,8 @@ private:
     juce::Label mLblPulseWidth { {}, "PULSE WIDTH" };
     juce::Label mLblDetune { {}, "DETUNE" };
     juce::Label mLblPorta { {}, "PORTA" };
+    juce::Label mLblMorphAmt { {}, "MORPH AMT" };
+    juce::Label mLblMorphShift { {}, "MORPH SHIFT" };
     juce::Label mLblCustomName;   // ロード中のカスタムWT名 / フォルダ状態
 
     // アタッチメント
@@ -170,8 +182,12 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentDetune;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentPorta;
 
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentMorphAmt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentMorphShift;
+
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentWaveform;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentDetuneMode;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentMorphMode;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> mAttachmentDetuneSnap;
 
     ArcDialLookAndFeel mArcLookAndFeel;

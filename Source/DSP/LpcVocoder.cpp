@@ -234,38 +234,83 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
             const float g = mAnalyzer.analyzeFrame(mFrame.data(), order, mKTarget.data(), (double)gamma);
             mGTarget = g * mExcNorm;   // 励起レベル正規化（per-sample残差RMS相当へ）
 
-            // M4改: FMT STRETCH（LSF領域のVTLN周波数ワーピング）。
-            //  FilterBankモード(合成帯域 f×stretch)と同じ方向感(上げ=明るく)に統一。
-            //  旧実装(π/2中心の間隔伸縮)は (a) 方向感がFBと逆、(b) クランプ端でLSFが
-            //  最小間隔1e-3radまで密集して超高Q共振が発生、(c) ゲイン補償が無く
-            //  +30dB超の爆音→ラティス飽和で「ブツブツ」ノイズになっていた。
-            //  VTLNワープ + 段階的帯域幅拡張(max|H|制限) + 励起重み付きゲイン補償で解消。
+            // M4改2: FMT STRETCH（スペクトル包絡リサンプル方式）。
+            //  現在のLPC包絡 P(w)=1/|A(w)|² を周波数グリッドで評価し、
+            //  周波数軸を P'(w)=P(w/stretch) でワープ(FilterBankの「帯域中心 f×stretch」
+            //  と同一の写像)、逆DFTで自己相関を再構成して Levinson で k を再フィットする。
+            //  旧LSFワープ方式は変換失敗時のフォールバックや帯域幅拡張の段階切替が
+            //  フレーム毎に発生して「ザラつき」ノイズの原因になっていた。
+            //  本方式は根探索が無く常に成功し、stretch・入力に対して連続的に変化する。
             if (std::abs(formantStretch - 1.0f) > 0.01f)
             {
                 double aS[LpcAnalyzer::kMaxOrder + 1];
-                double lsf[LpcAnalyzer::kMaxOrder];
                 LspConverter::reflToLpc(mKTarget.data(), order, aS);
-                if (LspConverter::lpcToLsf(aS, order, lsf))
+
+                // 1) 包絡評価 + ワープ: P'[m] = 1/|A(w_m/stretch)|² (π超は端値ホールド)
+                constexpr int N = 128;
+                constexpr double PI_ = 3.14159265358979;
+                double Pw[N];
+                for (int m = 0; m < N; ++m)
                 {
-                    // オールパス周波数ワーピング(VTLN): w' = w + 2*atan(rho*sin(w)/(1-rho*cos(w)))
-                    // [0,π]→[0,π] の単調写像で、低域の傾き (1+rho)/(1-rho) = stretch。
-                    // 端点が固定されるためクランプ密集による超高Q共振が構造的に起きない。
-                    const double rho = ((double)formantStretch - 1.0) / ((double)formantStretch + 1.0);
-                    constexpr double kGap = 0.02;              // 最小間隔 ≈51Hz@16k
-                    constexpr double kLo = 0.02, kHi = 3.1215926;
-                    for (int i = 0; i < order; ++i)
+                    const double w = PI_ * (double)m / (double)(N - 1);
+                    const double ws = std::min(PI_, w / (double)formantStretch);
+                    double re = 1.0, im = 0.0;
+                    for (int i = 1; i <= order; ++i)
                     {
-                        const double w = lsf[i];
-                        const double wp = w + 2.0 * std::atan(rho * std::sin(w) / (1.0 - rho * std::cos(w)));
-                        lsf[i] = std::min(kHi, std::max(kLo, wp));
+                        re += aS[i] * std::cos(ws * (double)i);
+                        im -= aS[i] * std::sin(ws * (double)i);
                     }
-                    for (int i = 1; i < order; ++i)
-                        if (lsf[i] < lsf[i - 1] + kGap) lsf[i] = lsf[i - 1] + kGap;
+                    Pw[m] = 1.0 / std::max(1e-12, re * re + im * im);
+                }
 
-                    double a2[LpcAnalyzer::kMaxOrder + 1];
-                    LspConverter::lsfToLpc(lsf, order, a2);
+                // 2) 逆DFTで自己相関を再構成 (台形則、端点半分重み)
+                double r[LpcAnalyzer::kMaxOrder + 1];
+                for (int j = 0; j <= order; ++j)
+                {
+                    double acc = 0.5 * Pw[0] + 0.5 * Pw[N - 1] * std::cos(PI_ * (double)j);
+                    for (int m = 1; m < N - 1; ++m)
+                        acc += Pw[m] * std::cos(PI_ * (double)m * (double)j / (double)(N - 1));
+                    r[j] = acc;
+                }
+                // 数値衛生: 白色雑音補正 + ラグ窓 (σ=50Hz。分析側と同一の平滑度)
+                r[0] = r[0] * 1.0001 + 1e-12;
+                for (int j = 1; j <= order; ++j)
+                {
+                    const double arg = 6.283185307179586 * 50.0 * (double)j / kInternalSampleRate;
+                    r[j] *= std::exp(-0.5 * arg * arg);
+                }
 
-                    // フィルタ評価: 対数グリッド64点で max|H|² と励起重み付き(1/f²)エネルギー
+                // 3) Levinson-Durbin で k を再フィット (|k|クランプで構造的に安定)
+                double aN[LpcAnalyzer::kMaxOrder + 1] = {};
+                double anew[LpcAnalyzer::kMaxOrder + 1] = {};
+                float  kS[LpcAnalyzer::kMaxOrder] = {};
+                double E = r[0];
+                bool ok = (E > 1e-15);
+                if (ok)
+                {
+                    for (int i = 1; i <= order; ++i)
+                    {
+                        double acc = r[i];
+                        for (int j = 1; j < i; ++j)
+                            acc += aN[j] * r[i - j];
+                        double ki = -acc / E;
+                        ki = std::min(0.995, std::max(-0.995, ki));
+                        kS[i - 1] = (float)ki;
+                        for (int j = 1; j < i; ++j)
+                            anew[j] = aN[j] + ki * aN[i - j];
+                        anew[i] = ki;
+                        for (int j = 1; j <= i; ++j)
+                            aN[j] = anew[j];
+                        E *= (1.0 - ki * ki);
+                        if (E < 1e-12) { E = std::max(E, 0.0); break; }
+                    }
+                    aN[0] = 1.0;
+                }
+
+                if (ok)
+                {
+                    // 4) ゲイン補償: 励起重み(1/f²)+デエンファシス込みのエネルギー比で
+                    //    聴感レベルを維持し、max|H|比のピーク境界でクリップを防ぐ
                     auto evalFilter = [order](const double* aa, double& maxH2, double& wE)
                     {
                         maxH2 = 0.0; wE = 0.0;
@@ -279,8 +324,6 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                                 re += aa[i] * std::cos(w * (double)i);
                                 im -= aa[i] * std::sin(w * (double)i);
                             }
-                            // デエンファシス 1/(1-a z^-1) の利得も含めた
-                            // 「実際に聴こえる」応答で評価する
                             const double dr = 1.0 - (double)kPreemph * std::cos(w);
                             const double di = (double)kPreemph * std::sin(w);
                             const double d2 = 1.0 / std::max(1e-12, dr * dr + di * di);
@@ -289,41 +332,17 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                             if (h2 > maxH2) maxH2 = h2;
                         }
                     };
-                    double mh0, e0;
+                    double mh0, e0, mh, e;
                     evalFilter(aS, mh0, e0);
-
-                    // 段階的帯域幅拡張: 共振ピークが「元+12dB」以内に収まるγを探す。
-                    // 圧縮方向(stretch<1)では基音付近の極がDC方向へ密集し爆音・変換失敗が
-                    // 起きるため、成功しかつピークが安全域のγを段階的に採用する。
-                    static const double kGammas[6] = { 0.995, 0.98, 0.955, 0.92, 0.87, 0.80 };
-                    float kS[LpcAnalyzer::kMaxOrder];
-                    for (int at = 0; at < 6; ++at)
+                    evalFilter(aN, mh, e);
+                    if (e > 1e-18 && e0 > 1e-18 && mh > 1e-18)
                     {
-                        double a3[LpcAnalyzer::kMaxOrder + 1];
-                        double g = 1.0;
-                        a3[0] = a2[0];
-                        for (int i = 1; i <= order; ++i) { g *= kGammas[at]; a3[i] = a2[i] * g; }
-
-                        if (!LspConverter::lpcToRefl(a3, order, kS))
-                            continue;
-                        double mh, e;
-                        evalFilter(a3, mh, e);
-                        if (mh <= mh0 * 15.85 || at == 5)   // +12dB (パワー比15.85) まで許容
-                        {
-                            // ゲイン補償: 励起重み付きエネルギー比で聴感レベルを維持しつつ、
-                            // max|H|比によるピーク境界で「非ストレッチ時のピーク+3.5dB」を
-                            // 超えないよう制限 (Limiter Off でもクリップしない)
-                            if (e > 1e-18 && e0 > 1e-18 && mh > 1e-18)
-                            {
-                                const double eComp   = std::sqrt(e0 / e);
-                                const double pkBound = 1.5 * std::sqrt(mh0 / mh);
-                                mGTarget *= (float)std::min(20.0, std::max(0.01, std::min(eComp, pkBound)));
-                            }
-                            for (int p = 0; p < order; ++p)
-                                mKTarget[(size_t)p] = kS[p];
-                            break;
-                        }
+                        const double eComp   = std::sqrt(e0 / e);
+                        const double pkBound = 1.5 * std::sqrt(mh0 / mh);
+                        mGTarget *= (float)std::min(20.0, std::max(0.01, std::min(eComp, pkBound)));
                     }
+                    for (int p = 0; p < order; ++p)
+                        mKTarget[(size_t)p] = kS[p];
                 }
             }
 

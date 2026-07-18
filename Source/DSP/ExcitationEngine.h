@@ -35,7 +35,8 @@ public:
     void syncParameters(int waveform, float wtPos, float pulseWidth, float detuneCents,
                         float noiseMix, float lofi, float portaTimeSec,
                         float attackSec, float decaySec, float sustainVal, float releaseSec,
-                        float noiseColorHz, int detuneMode) noexcept;
+                        float noiseColorHz, int detuneMode,
+                        int morphMode, float morphAmt, float morphShift) noexcept;
 
     // カスタムWavetableロード用アクセス (メッセージスレッドからのロード専用)
     MorphWavetable& getWavetable() noexcept { return mWavetable; }
@@ -62,6 +63,20 @@ private:
             s1 = 2.0f * v1 - s1;
             s2 = 2.0f * v2 - s2;
             return v1;
+        }
+
+        // 可変Q・中心利得0dB正規化のBPF (Morph Vocodeのフォルマント用)
+        float processBPF_Q(float in, float fc, float sampleRate, float Q) noexcept
+        {
+            float safeFc = juce::jlimit(20.0f, sampleRate * 0.45f, fc);
+            float g = std::tan(3.14159265f * safeFc / sampleRate);
+            float k = 1.0f / juce::jmax(0.3f, Q);
+            float h = 1.0f / (1.0f + g * (g + k));
+            float v1 = (s1 + g * (in - s2)) * h;
+            float v2 = s2 + g * v1;
+            s1 = 2.0f * v1 - s1;
+            s2 = 2.0f * v2 - s2;
+            return v1 * k;   // 中心利得を1.0に正規化
         }
     };
 
@@ -90,6 +105,10 @@ private:
     void triggerVoice(int noteNumber, float velocity) noexcept;
     float processVoiceSample(Voice& v, int channel, float phaseInc) noexcept;
     float applyPolyBlep(float phase, float phaseInc) const noexcept;
+
+    // Morph位相ワープ (BassSynth WavetableOscillator::applyPhaseWarp より移植)。
+    // 戻り値=ワープ後位相。sMul にはSyncモードの境界フェード用振幅係数を乗算する。
+    float applyMorphPhase(float phase, float phaseInc, float& sMul) const noexcept;
     // pitchHz: ピッチ同期S&Hの基準基音 (ホールドレート = N×pitchHz)
     void applyLoFi(float& l, float& r, float pitchHz) noexcept;
 
@@ -123,6 +142,25 @@ private:
     // Detune Mode用ステート (Drift=ボイス毎ランダムウォーク / Chorus=ボイス毎LFO位相)
     std::array<float, kMaxVoices> mDriftVal {};
     std::array<float, kMaxVoices> mChorusPhase {};
+
+    // ---- Morph (BassSynthより移植) ----
+    //  0=None / 1=Bend +/- / 2=Sync / 3=Vocode
+    int   mMorphMode = 0;
+    float mMorphAmt = 0.0f;
+    float mMorphShift = 0.0f;
+    // Bend事前計算 (BassSynth precomputeWarp mode1)
+    float mBendSym = 0.5f;
+    float mBendB = 1.0f;
+    // Sync事前計算 (BassSynth precomputeWarp mode3 + shift位相オフセット)
+    float mSyncSt = 1.0f;
+    float mSyncShiftHalf = 0.0f;
+    // Vocode: 母音フォルマント (倍音番号。中心Hz=倍音番号×基音)
+    //  BassSynth SpectralMorphProcessor mode9 の A-I-U-E-O テーブルを補間した値
+    float mVocHarm[3] = { 32.0f, 55.0f, 120.0f };
+    float mVocAmt = 0.0f;
+    // Vocode用フォルマントBPF (3基×L/R)
+    SvfFilter mVocFilterL[3];
+    SvfFilter mVocFilterR[3];
 
     // LoFiサンプルレートダウン用ステート
     float mLofiRateCounter = 0.0f;
