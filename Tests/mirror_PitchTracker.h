@@ -1,7 +1,13 @@
 // ==========================================
-// File: mirror_PitchTracker.h
-// Source/DSP/PitchTracker.h のテスト用ミラー (Coworkサンドボックス同期回避)。
-// 内容を変更する場合は必ず Source/DSP/PitchTracker.h を正とし、これを再生成すること。
+// File: PitchTracker.h
+// McLeod Pitch Method (MPM) ピッチ検出 & V/UV判定（開発計画書 第2版 ③準拠）
+//
+//  - ホストSRの入力を内部で16kHz相当にデシメーションして解析
+//  - NSDF (正規化自乗差関数) + 放物線補間
+//  - Clarity / ZCR / 高域エネルギー比を統合した有声判定
+//  - シュミットトリガー遷移によるチャタリング防止
+//  すべてスカラー処理・事前確保バッファのみ（リアルタイム安全）
+//  ※このファイルは Source/DSP/PitchTracker.h のテスト用完全ミラー
 // ==========================================
 #pragma once
 
@@ -16,6 +22,8 @@ public:
     static constexpr int kWindowSize = 512;   // 32ms @16kHz
     static constexpr int kHopSize = 128;      // 8ms (旧16ms。スピーチ抑揚への追従を倍化)
     static constexpr float kMinHz = 55.0f;
+    // 検出上限。旧1000Hzはフォルマント周期(700〜1000Hz帯)を基音として拾う余地があり、
+    // スピーチで突然ピッチが跳ね上がる一因だった。人声の基音域(〜600Hz)に制限。
     static constexpr float kMaxHz = 600.0f;
 
     void prepare(double hostSampleRate)
@@ -28,6 +36,7 @@ public:
         hopCounter = 0;
         buffer.fill(0.0f);
 
+        // デシメーション前のアンチエイリアスLP (2段バイクアッド, fc≈6.8kHz@ホストSR)
         const double fc = 6800.0;
         for (auto& s : lpState) s = {};
         computeLowpass(fc);
@@ -41,8 +50,10 @@ public:
         rawHist[0] = rawHist[1] = rawHist[2] = 130.0f;
     }
 
+    // ホストレートのモノラル入力を1サンプル供給
     void pushSample(float x) noexcept
     {
+        // アンチエイリアスLP
         for (int st = 0; st < 2; ++st)
         {
             auto& s = lpState[(size_t)st];
@@ -52,6 +63,7 @@ public:
             x = y;
         }
 
+        // 16kHzグリッドへのデシメーション（サンプルホールドで十分）
         decimAccum += 1.0;
         if (decimAccum >= decimRatio)
         {
@@ -92,12 +104,14 @@ private:
 
     void analyze() noexcept
     {
+        // 窓を時系列順に展開
         std::array<float, kWindowSize> x;
         for (int n = 0; n < kWindowSize; ++n)
             x[(size_t)n] = buffer[(size_t)((writePos + n) % kWindowSize)];
 
+        // エネルギー & ZCR & 高域比
         float energy = 0.0f;
-        int zcCount = 0;
+        int zc = 0;
         float hfEnergy = 0.0f;
         for (int n = 0; n < kWindowSize; ++n)
         {
@@ -105,15 +119,15 @@ private:
             energy += v * v;
             if (n > 0)
             {
-                if ((x[(size_t)n - 1] < 0.0f) != (v < 0.0f)) ++zcCount;
-                const float d = v - x[(size_t)n - 1];
+                if ((x[(size_t)n - 1] < 0.0f) != (v < 0.0f)) ++zc;
+                const float d = v - x[(size_t)n - 1];  // 1次差分 ≒ 高域強調
                 hfEnergy += d * d;
             }
         }
 
         const float rms = std::sqrt(energy / (float)kWindowSize);
         unvoicedHfRatio = (energy > 1e-9f) ? juce::jlimit(0.0f, 1.0f, hfEnergy / (energy * 2.0f)) : 0.0f;
-        const float zcr = (float)zcCount / (float)kWindowSize;
+        const float zcr = (float)zc / (float)kWindowSize;
 
         if (rms < 1e-4f)  // 無音
         {
@@ -123,8 +137,8 @@ private:
         }
 
         // --- NSDF ---
-        const int tauMin = (int)((float)kAnalysisRate / kMaxHz);
-        const int tauMax = juce::jmin(kWindowSize / 2, (int)((float)kAnalysisRate / kMinHz));
+        const int tauMin = (int)((float)kAnalysisRate / kMaxHz);          // ≈16
+        const int tauMax = juce::jmin(kWindowSize / 2, (int)((float)kAnalysisRate / kMinHz)); // ≈291→256
 
         std::array<float, kWindowSize / 2 + 1> nsdf {};
 
@@ -143,19 +157,26 @@ private:
         }
 
         // --- ピークピッキング (MPM論文準拠) ---
-        // 「最初の負方向ゼロ交差の後」から候補を探す(倍音の擬似ピーク除外)。
-        int zc = tauMin;
-        while (zc <= tauMax && nsdf[(size_t)zc] > 0.0f) ++zc;
+        // 旧実装は τ の小さい側から「最初の局所最大 >= 0.9*max」を採っていたが、
+        // MPM法が要求する「最初の負方向ゼロ交差の後から探索」の条件が無く、
+        // τ が小さい正領域で倍音/フォルマント周期の擬似ピークを拾いやすかった
+        // (→ スピーチで突然ピッチが1〜3倍へ跳ね上がる主因)。
+        // ゼロ交差条件を追加し、真の周期ピークのみを候補にする。
+        int zcTau = tauMin;
+        while (zcTau <= tauMax && nsdf[(size_t)zcTau] > 0.0f) ++zcTau;   // 正領域をスキップ
 
         float maxNsdf = 0.0f;
-        for (int tau = zc; tau <= tauMax; ++tau)
+        for (int tau = zcTau; tau <= tauMax; ++tau)
             maxNsdf = juce::jmax(maxNsdf, nsdf[(size_t)tau]);
 
         int bestTau = 0;
-        if (zc <= tauMax && maxNsdf > 0.0f)
+        if (zcTau <= tauMax && maxNsdf > 0.0f)
         {
-            const float threshold = 0.9f * maxNsdf;
-            const int start = juce::jmax(zc, tauMin) + 1;
+            // k=0.93: 男声などH2(第2倍音)が強い声では半周期(=1オクターブ上)の
+            // ピークが0.9×maxを超えて先に拾われやすい。閾値を上げ、
+            // グローバル最大(通常は真の基本周期)寄りの選択にする。
+            const float threshold = 0.93f * maxNsdf;
+            const int start = juce::jmax(zcTau, tauMin) + 1;
             for (int tau = start; tau < tauMax; ++tau)
             {
                 if (nsdf[(size_t)tau] > nsdf[(size_t)tau - 1]
@@ -175,7 +196,10 @@ private:
             return;
         }
 
-        // (サブハーモニック確認は理論誤りのため削除: 周期信号は2Tにも常にピークを持つ)
+        // ※「2倍周期にもピークがあればそちらを採る」式のサブハーモニック確認は
+        //   行わない。周期Tの信号は2Tでも必ず高いNSDFピークを持つため、
+        //   その方式は常にオクターブ下へ倒れる誤りになる。
+        //   倍音誤検出はゼロ交差条件(上記)と3フレームメディアン(下記)で対処する。
 
         // 放物線補間
         const float y1 = nsdf[(size_t)(bestTau - 1)];
@@ -189,26 +213,55 @@ private:
         clarity = y2;
         const float hz = (float)kAnalysisRate / juce::jmax(1.0f, tauF);
 
+        // --- 多角的V/UV判定 + シュミットトリガー ---
+        //   有声: clarity高 & ZCR低 & 高域比低
         const float voicedScore = clarity - 0.5f * zcr - 0.4f * unvoicedHfRatio;
-        const bool wantVoiced = voiced ? (voicedScore > 0.40f)
-                                       : (voicedScore > 0.55f);
+        const bool wantVoiced = voiced ? (voicedScore > 0.40f)   // 維持しきい値（低）
+                                       : (voicedScore > 0.55f);  // 開始しきい値（高）
         setVoiced(wantVoiced && hz >= kMinHz && hz <= kMaxHz);
 
+        // ピッチ値の更新は「今フレームが確実に有声」(wantVoiced) かつ
+        // 明瞭度が十分なときのみ行う。ハングオーバー中(子音・語尾の余韻)の
+        // 低品質なNSDFピークからの更新は跳びの原因になるため凍結し、
+        // 直前の有声ピッチを保持する。
         if (voiced && wantVoiced && clarity > 0.5f)
         {
+            // オクターブエラー（ダブルピッチ / ハーフピッチ）の証拠ベース自動補正。
+            // 旧実装は「前回比≈2倍なら無条件に半分へ」だったため、一度誤オクターブに
+            // 入ると正しい検出まで引き戻し続ける双安定ラッチになっていた
+            // (高いピッチに張り付き→時々窓を外れて元に戻る症状の原因)。
+            // 補正は、補正先の周期にNSDF上の強い裏付け(≥0.95×現ピーク)がある
+            // 場合のみ適用する。裏付けが無ければ現フレームの検出を信じる。
             float correctedHz = hz;
             if (pitchHz > 30.0f && wasVoicedPrev)
             {
                 const float rVal = hz / pitchHz;
-                if (rVal >= 1.8f && rVal <= 2.2f)
-                    correctedHz = hz * 0.5f;
-                else if (rVal >= 0.45f && rVal <= 0.55f)
-                    correctedHz = hz * 2.0f;
+                auto peakSupport = [&](int tc) -> float
+                {
+                    float s = 0.0f;
+                    for (int t = juce::jmax(tauMin, tc - 2); t <= juce::jmin(tauMax, tc + 2); ++t)
+                        s = juce::jmax(s, nsdf[(size_t)t]);
+                    return s;
+                };
+                // 1オクターブ上の誤検出 → 2倍周期側に裏付けがあれば引き戻す
+                if (rVal >= 1.8f && rVal <= 2.2f && 2 * bestTau <= tauMax)
+                {
+                    if (peakSupport(2 * bestTau) >= 0.95f * nsdf[(size_t)bestTau])
+                        correctedHz = hz * 0.5f;
+                }
+                // 1オクターブ下の誤検出 → 半分周期側に裏付けがあれば引き上げる
+                else if (rVal >= 0.45f && rVal <= 0.55f && bestTau / 2 >= tauMin)
+                {
+                    if (peakSupport(bestTau / 2) >= 0.95f * nsdf[(size_t)bestTau])
+                        correctedHz = hz * 2.0f;
+                }
             }
 
-            // 3フレーム(24ms)メディアンで単発スパイクを除去
+            // 3フレーム(24ms)メディアンで単発スパイク(1フレームの誤検出)を除去。
+            // 高速な応答(Fast)設定でも単発の跳びが出力に到達しなくなる。
             if (!wasVoicedPrev)
             {
+                // 有声開始フレーム: 前フレーズの古い履歴に引っ張られないよう初期化
                 rawHist[0] = rawHist[1] = rawHist[2] = correctedHz;
             }
             else
@@ -234,7 +287,7 @@ private:
     void setVoiced(bool v) noexcept
     {
         if (v) { voicedHold = 3; voiced = true; }
-        else if (voicedHold > 0) { --voicedHold; }
+        else if (voicedHold > 0) { --voicedHold; }   // 3ホップ(≈48ms)のハングオーバー
         else { voiced = false; }
     }
 
@@ -259,6 +312,7 @@ private:
     bool voiced = false;
     int voicedHold = 0;
 
+    // 3フレームメディアン用の生ピッチ履歴と有声継続フラグ
     float rawHist[3] = { 130.0f, 130.0f, 130.0f };
     bool wasVoicedPrev = false;
 };

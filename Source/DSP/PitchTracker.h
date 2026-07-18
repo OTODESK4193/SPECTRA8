@@ -171,7 +171,10 @@ private:
         int bestTau = 0;
         if (zcTau <= tauMax && maxNsdf > 0.0f)
         {
-            const float threshold = 0.9f * maxNsdf;
+            // k=0.93: 男声などH2(第2倍音)が強い声では半周期(=1オクターブ上)の
+            // ピークが0.9×maxを超えて先に拾われやすい。閾値を上げ、
+            // グローバル最大(通常は真の基本周期)寄りの選択にする。
+            const float threshold = 0.93f * maxNsdf;
             const int start = juce::jmax(zcTau, tauMin) + 1;
             for (int tau = start; tau < tauMax; ++tau)
             {
@@ -222,22 +225,34 @@ private:
         // 直前の有声ピッチを保持する。
         if (voiced && wantVoiced && clarity > 0.5f)
         {
-            // オクターブエラー（ダブルピッチ / ハーフピッチ）の自動補正
-            // 参照は前回の生ピッチ (遅れの大きい smoothedHz を使うと
-            // 有声開始直後に誤補正→スウープの原因になる)
+            // オクターブエラー（ダブルピッチ / ハーフピッチ）の証拠ベース自動補正。
+            // 旧実装は「前回比≈2倍なら無条件に半分へ」だったため、一度誤オクターブに
+            // 入ると正しい検出まで引き戻し続ける双安定ラッチになっていた
+            // (高いピッチに張り付き→時々窓を外れて元に戻る症状の原因)。
+            // 補正は、補正先の周期にNSDF上の強い裏付け(≥0.95×現ピーク)がある
+            // 場合のみ適用する。裏付けが無ければ現フレームの検出を信じる。
             float correctedHz = hz;
             if (pitchHz > 30.0f && wasVoicedPrev)
             {
                 const float rVal = hz / pitchHz;
-                // 1オクターブ上の誤検出を元のオクターブに引き戻す
-                if (rVal >= 1.8f && rVal <= 2.2f)
+                auto peakSupport = [&](int tc) -> float
                 {
-                    correctedHz = hz * 0.5f;
+                    float s = 0.0f;
+                    for (int t = juce::jmax(tauMin, tc - 2); t <= juce::jmin(tauMax, tc + 2); ++t)
+                        s = juce::jmax(s, nsdf[(size_t)t]);
+                    return s;
+                };
+                // 1オクターブ上の誤検出 → 2倍周期側に裏付けがあれば引き戻す
+                if (rVal >= 1.8f && rVal <= 2.2f && 2 * bestTau <= tauMax)
+                {
+                    if (peakSupport(2 * bestTau) >= 0.95f * nsdf[(size_t)bestTau])
+                        correctedHz = hz * 0.5f;
                 }
-                // 1オクターブ下の誤検出を元のオクターブに引き上げる
-                else if (rVal >= 0.45f && rVal <= 0.55f)
+                // 1オクターブ下の誤検出 → 半分周期側に裏付けがあれば引き上げる
+                else if (rVal >= 0.45f && rVal <= 0.55f && bestTau / 2 >= tauMin)
                 {
-                    correctedHz = hz * 2.0f;
+                    if (peakSupport(bestTau / 2) >= 0.95f * nsdf[(size_t)bestTau])
+                        correctedHz = hz * 2.0f;
                 }
             }
 
