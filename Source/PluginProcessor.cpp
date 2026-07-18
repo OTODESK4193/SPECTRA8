@@ -17,7 +17,50 @@ SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
         mBandGains[(size_t)i].store(1.0f);
         mBandLevelsForUi[(size_t)i].store(0.0f);
     }
+    mFormatManager.registerBasicFormats();   // wav/aiff リーダー
     mIsInitialized = true;
+}
+
+// ---- カスタムWavetable ----
+bool SPECTRA8AudioProcessor::loadCustomWavetable(const juce::File& file)
+{
+    if (!file.existsAsFile())
+        return false;
+
+    std::unique_ptr<juce::AudioFormatReader> reader(mFormatManager.createReaderFor(file));
+    if (reader == nullptr)
+        return false;
+
+    // 最大 64フレーム(2048smp/フレーム) まで読み込み・モノラルミックス
+    const int maxLen = MorphWavetable::kMaxCustomFrames * MorphWavetable::kTableSize;
+    const int len = (int)juce::jmin<juce::int64>(reader->lengthInSamples, (juce::int64)maxLen);
+    if (len < 16)
+        return false;
+
+    juce::AudioBuffer<float> buf((int)reader->numChannels, len);
+    if (!reader->read(&buf, 0, len, 0, true, true))
+        return false;
+
+    std::vector<float> mono((size_t)len, 0.0f);
+    const float chScale = 1.0f / (float)juce::jmax(1u, (unsigned)reader->numChannels);
+    for (int ch = 0; ch < (int)reader->numChannels; ++ch)
+    {
+        const float* src = buf.getReadPointer(ch);
+        for (int n = 0; n < len; ++n)
+            mono[(size_t)n] += src[n] * chScale;
+    }
+
+    if (!mExcitationEngine.getWavetable().loadCustomFromBuffer(mono.data(), len))
+        return false;
+
+    apvts.state.setProperty("customWavetablePath", file.getFullPathName(), nullptr);
+    return true;
+}
+
+void SPECTRA8AudioProcessor::clearCustomWavetable()
+{
+    mExcitationEngine.getWavetable().clearCustom();
+    apvts.state.removeProperty("customWavetablePath", nullptr);
 }
 
 SPECTRA8AudioProcessor::~SPECTRA8AudioProcessor()
@@ -134,6 +177,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
                 const int st = juce::jlimit(0, 12, (int)std::lround(v / 100.0f));
                 return juce::String((int)std::lround(v)) + " ct (" + juce::String(juce::CharPointer_UTF8(names[st])) + ")";
             })));
+
+    // Detune SNAP: ON時はDetuneノブが100セント(半音=度数)単位でスナップ (GUI挙動用)
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID("detuneSnap", 1), "Detune Snap", false));
+
+    // Detune Mode: ユニゾンデチューンの分散アルゴリズム
+    //  Classic=従来 / Linear=均等拡散 / Exp=中心密・外側疎(スーパーソウ的) /
+    //  Drift=ボイス毎ランダムウォーク(アナログ揺らぎ) / Chorus=低速LFO変調
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("detuneMode", 1), "Detune Mode",
+        juce::StringArray{ "Classic", "Linear", "Exp", "Drift", "Chorus" }, 0));
 
     // Noise: BitSpeek式の双方向コントロール。
     //  Filterbank : 0〜100% がキャリアへのノイズ混入（負値は0扱い＝従来と同一）
@@ -506,9 +560,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             if (auto* p = apvts.getRawParameterValue("noiseColor"))
                 noiseColor = p->load();
 
+            const int detuneMode = (int)(apvts.getRawParameterValue("detuneMode")->load());
+
             // モジュール側の同期
             mExcitationEngine.syncParameters(waveform, wtPos, pulseWidth, detune, noise, lofi, porta,
-                                              attack, decay, sustain, release, noiseColor);
+                                              attack, decay, sustain, release, noiseColor, detuneMode);
         }
         mControlRateCounter++;
 
@@ -752,6 +808,23 @@ void SPECTRA8AudioProcessor::setStateInformation(const void* data, int sizeInByt
                 float g = (float)eqNode->getDoubleAttribute("gain" + juce::String(i), 1.0);
                 mBandGains[(size_t)i].store(g);
             }
+        }
+
+        // カスタムWavetableの復元 (パスが保存されていればロード)。
+        // ファイルIO/FFTを伴うためメッセージスレッドで実行する。
+        const juce::String wtPath = getCustomWavetablePath();
+        if (wtPath.isNotEmpty())
+        {
+            auto doLoad = [this, wtPath]
+            {
+                const juce::File f(wtPath);
+                if (f.existsAsFile())
+                    loadCustomWavetable(f);
+            };
+            if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+                doLoad();
+            else
+                juce::MessageManager::callAsync(doLoad);
         }
     }
 }

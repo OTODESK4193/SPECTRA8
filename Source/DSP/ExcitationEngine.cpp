@@ -43,6 +43,10 @@ void ExcitationEngine::reset()
 
     mNoiseFilterL.reset();
     mNoiseFilterR.reset();
+
+    mDriftVal.fill(0.0f);
+    for (int i = 0; i < kMaxVoices; ++i)
+        mChorusPhase[(size_t)i] = 0.785f * (float)i;   // ボイス毎に位相をずらす
 }
 
 void ExcitationEngine::noteOn(int noteNumber, float velocity) noexcept
@@ -80,12 +84,13 @@ void ExcitationEngine::allNotesOff() noexcept
     }
 }
 
-void ExcitationEngine::syncParameters(int waveform, float wtPos, float pulseWidth, float detuneCents, 
+void ExcitationEngine::syncParameters(int waveform, float wtPos, float pulseWidth, float detuneCents,
                                     float noiseMix, float lofi, float portaTimeSec,
                                     float attackSec, float decaySec, float sustainVal, float releaseSec,
-                                    float noiseColorHz) noexcept
+                                    float noiseColorHz, int detuneMode) noexcept
 {
     mWaveform = juce::jlimit(0, 2, waveform);
+    mDetuneMode = juce::jlimit(0, 4, detuneMode);
     mWtPos = juce::jlimit(0.0f, 1.0f, wtPos);
     mPulseWidth = juce::jlimit(0.05f, 0.95f, pulseWidth);
     mDetuneCents = juce::jlimit(0.0f, 1200.0f, detuneCents);
@@ -305,13 +310,37 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
         //   ケロケロ効果は pitchQuantize ノブに一本化(挙動を予測可能に)。
         float pitch = v.currentFreq;
 
-        // 2. デチューン計算
-        // ボイスペアにステレオ広がりと分厚さを出すためのユニゾンデチューン
-        float detuneCents = mDetuneSm;
-        // ボイスインデックスに基づくデチューン比率の分散
-        float detuneSign = (i % 2 == 0) ? -1.0f : 1.0f;
-        float detuneScale = 0.15f + 0.1f * static_cast<float>(i / 2);
-        float detuneOffset = detuneCents * detuneSign * detuneScale;
+        // 2. デチューン計算 (Detune Mode別の分散アルゴリズム)
+        const float detuneCents = mDetuneSm;
+        const float sign = (i % 2 == 0) ? -1.0f : 1.0f;
+        const float classicScale = 0.15f + 0.1f * static_cast<float>(i / 2);
+        float p; // 正規化デチューン・ポジション (符号込み)
+        switch (mDetuneMode)
+        {
+        case 1: // Linear: ボイスを均等間隔で拡散
+            p = sign * (0.25f + 0.75f * (float)i / (float)(kMaxVoices - 1));
+            break;
+        case 2: // Exp: 中心密・外側疎 (スーパーソウ的。ボイス0はセンター純音)
+        {
+            const float t = (float)i / (float)(kMaxVoices - 1);
+            p = sign * t * t * 1.2f;
+            break;
+        }
+        case 3: // Drift: ランダムウォークで比率が揺らぐ (アナログVCO風)
+            mDriftVal[(size_t)i] = mDriftVal[(size_t)i] * 0.9999f
+                                 + (mRng.nextFloat() - 0.5f) * 0.002f;
+            p = sign * classicScale * (1.0f + 2.5f * mDriftVal[(size_t)i]);
+            break;
+        case 4: // Chorus: ボイス毎の低速LFOでポジションがうねる
+            mChorusPhase[(size_t)i] += 6.2831853f * (0.13f * (1.0f + 0.37f * (float)i)) / (float)kInternalSampleRate;
+            if (mChorusPhase[(size_t)i] > 6.2831853f) mChorusPhase[(size_t)i] -= 6.2831853f;
+            p = sign * classicScale + 0.35f * std::sin(mChorusPhase[(size_t)i]);
+            break;
+        default: // Classic: 従来 (交互符号 × 固定比率)
+            p = sign * classicScale;
+            break;
+        }
+        const float detuneOffset = detuneCents * p;
 
         float freqL = pitch * std::pow(2.0f, detuneOffset / 1200.0f);
         float freqR = pitch * std::pow(2.0f, -detuneOffset / 1200.0f);

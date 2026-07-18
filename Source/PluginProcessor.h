@@ -70,6 +70,18 @@ public:
     std::array<std::atomic<float>, 48>& getBandGains() { return mBandGains; }
     const std::array<std::atomic<float>, 48>& getBandLevelsForUi() const { return mBandLevelsForUi; }
 
+    // ---- カスタムWavetable (メッセージスレッド専用) ----
+    // wav/aiff を読み込み 2048smp/フレームのウェーブテーブルとしてエンジンへ適用。
+    // 成功時はパスを apvts.state に保存 (セッション復元用)。
+    bool loadCustomWavetable(const juce::File& file);
+    void clearCustomWavetable();
+    juce::String getCustomWavetablePath() const
+    {
+        return apvts.state.getProperty("customWavetablePath", juce::String()).toString();
+    }
+    bool hasCustomWavetable() const { return mExcitationEngine.getWavetable().hasCustom(); }
+    const ExcitationEngine& getExcitationEngine() const { return mExcitationEngine; }
+
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -93,6 +105,9 @@ private:
 
     // パラメータ同期用のモジュレーションマトリクス値保持バッファ
     ModMatrix::Params mModParams;
+
+    // カスタムWavetableファイル読み込み用
+    juce::AudioFormatManager mFormatManager;
 
     // 16kHzダウンサンプリング/アップサンプリング用状態
     double mStoredSampleRate = 44100.0;

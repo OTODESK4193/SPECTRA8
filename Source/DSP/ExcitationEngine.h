@@ -32,10 +32,14 @@ public:
     void noteOff(int noteNumber) noexcept;
     void allNotesOff() noexcept;
 
-    void syncParameters(int waveform, float wtPos, float pulseWidth, float detuneCents, 
+    void syncParameters(int waveform, float wtPos, float pulseWidth, float detuneCents,
                         float noiseMix, float lofi, float portaTimeSec,
                         float attackSec, float decaySec, float sustainVal, float releaseSec,
-                        float noiseColorHz) noexcept;
+                        float noiseColorHz, int detuneMode) noexcept;
+
+    // カスタムWavetableロード用アクセス (メッセージスレッドからのロード専用)
+    MorphWavetable& getWavetable() noexcept { return mWavetable; }
+    const MorphWavetable& getWavetable() const noexcept { return mWavetable; }
 
     void processSample(float& outL, float& outR, float externalPitchHz, bool isMidiMode) noexcept;
 
@@ -100,6 +104,7 @@ private:
     float mWtPos = 0.0f;
     float mPulseWidth = 0.5f;
     float mDetuneCents = 0.0f;
+    int   mDetuneMode = 0;   // 0=Classic 1=Linear 2=Exp 3=Drift 4=Chorus
     float mNoiseMix = 0.0f;
     float mNoiseColor = 1000.0f; // 新設: ノイズ音程 (BPF Cutoff)
     float mLofi = 0.0f;
@@ -114,6 +119,10 @@ private:
     // パラメータ・スムージング (制御ブロック毎の階段状変化→サンプル毎一次平滑 τ≈5ms)
     float mDetuneSm = 0.0f;
     float mNoiseSm = 0.0f;
+
+    // Detune Mode用ステート (Drift=ボイス毎ランダムウォーク / Chorus=ボイス毎LFO位相)
+    std::array<float, kMaxVoices> mDriftVal {};
+    std::array<float, kMaxVoices> mChorusPhase {};
 
     // LoFiサンプルレートダウン用ステート
     float mLofiRateCounter = 0.0f;

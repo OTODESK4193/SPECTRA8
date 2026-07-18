@@ -1,17 +1,22 @@
 // ==========================================
 // File: ExcitationPanel.h
 // 「EXCITATION」タブ・パネル (Granular 準拠)
-//  - 左: 波形選択コンボ + 2D波形表示エリア
-//  - 右: キャリア関連ノブ (WT POS / PULSE WIDTH / DETUNE / PORTA)
-//  ※ LOFI / BASE PITCH / NOISE COLOR / NOISE MIX は VOCODER タブへ移設。
+//  - 左: 波形選択コンボ + BROWSE(カスタムWT) + 2D波形表示 + DETUNE MODEコンボ
+//  - 右: キャリア関連ノブ (WT POS / PULSE WIDTH / DETUNE+SNAP / PORTA)
+//  - BROWSE押下で右側ノブエリアがファイルブラウザに切り替わり、
+//    wav/aiff をカスタムWavetable (2048smp/フレーム, Serum互換) としてロードできる。
 // ==========================================
 #pragma once
 
 #include <JuceHeader.h>
 #include <cmath>
+#include <vector>
 #include "ColorPalette.h"
 #include "ValueKnob.h"
 #include "ArcDial.h"
+#include "GlowToggle.h"
+
+class SPECTRA8AudioProcessor;
 
 // キャリア波形の概形を描く2D表示エリア（波形タイプ / パルス幅 / WT位置で形が変化）
 class WaveformDisplay : public juce::Component
@@ -27,6 +32,16 @@ public:
             mWt = wtPos01;
             repaint();
         }
+    }
+
+    // カスタムWavetableの実波形 (n点) を表示に使う。nullptrで解除。
+    void setCustomWave(const float* data, int n)
+    {
+        if (data != nullptr && n > 1)
+            mCustom.assign(data, data + n);
+        else
+            mCustom.clear();
+        repaint();
     }
 
     void paint(juce::Graphics& g) override
@@ -68,7 +83,14 @@ private:
         {
             case 1: // Pulse: デューティ = mPulse
                 return (ph < mPulse) ? 1.0f : -1.0f;
-            case 2: // Wavetable: 正弦 → 倍音付き へモーフ（概形）
+            case 2: // Wavetable
+                if (!mCustom.empty())
+                {
+                    const float idx = ph * (float)(mCustom.size() - 1);
+                    const int i0 = juce::jlimit(0, (int)mCustom.size() - 2, (int)idx);
+                    const float fr = idx - (float)i0;
+                    return mCustom[(size_t)i0] * (1.0f - fr) + mCustom[(size_t)i0 + 1] * fr;
+                }
                 return std::sin(ph * juce::MathConstants<float>::twoPi)
                      + mWt * 0.4f * std::sin(ph * juce::MathConstants<float>::twoPi * 3.0f);
             default: // Saw: -1→+1 ランプ
@@ -79,37 +101,61 @@ private:
     int mType = 0;
     float mPulse = 0.5f;
     float mWt = 0.0f;
+    std::vector<float> mCustom;   // カスタムWT実波形 (空=概形描画)
 };
 
-class ExcitationPanel : public juce::Component
+class ExcitationPanel : public juce::Component,
+                        public juce::FileBrowserListener
 {
 public:
-    ExcitationPanel(juce::AudioProcessorValueTreeState& state);
-    ~ExcitationPanel();
+    explicit ExcitationPanel(SPECTRA8AudioProcessor& proc);
+    ~ExcitationPanel() override;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
 
+    // FileBrowserListener
+    void selectionChanged() override {}
+    void fileClicked(const juce::File&, const juce::MouseEvent&) override {}
+    void fileDoubleClicked(const juce::File& file) override;
+    void browserRootChanged(const juce::File&) override {}
+
 private:
+    SPECTRA8AudioProcessor& processor;
     juce::AudioProcessorValueTreeState& apvts;
 
     void refreshWaveformDisplay();
+    void updateBrowseVisibility();   // Wavetable選択時のみBROWSE表示
+    void showBrowser();
+    void hideBrowser();
+    void loadWavetableFile(const juce::File& file);
+    void applyDetuneSnap();          // SNAP時に現在値を100ct単位へ丸める
 
-    // ノブ 4基（残置）
+    // ノブ 4基
     ValueKnob mKnobWtPos;
     ValueKnob mKnobPulseWidth;
     ValueKnob mKnobDetune;
     ValueKnob mKnobPorta;
 
-    // コンボ 1種 + 2D波形表示
+    // コンボ + トグル + ボタン
     juce::ComboBox mComboWaveform;
+    juce::ComboBox mComboDetuneMode;
+    GlowToggle mBtnDetuneSnap;
+    juce::TextButton mBtnBrowse { "BROWSE" };
     WaveformDisplay mWaveDisplay;
+
+    // カスタムWTブラウザ (BROWSE押下で右側に表示)
+    juce::WildcardFileFilter mFileFilter { "*.wav;*.aif;*.aiff", "*", "Wavetable files" };
+    std::unique_ptr<juce::FileBrowserComponent> mBrowser;
+    juce::TextButton mBtnBrowserClose { "CLOSE" };
+    juce::TextButton mBtnFactory { "FACTORY" };
 
     // ラベル
     juce::Label mLblWtPos { {}, "WT POS" };
     juce::Label mLblPulseWidth { {}, "PULSE WIDTH" };
     juce::Label mLblDetune { {}, "DETUNE" };
     juce::Label mLblPorta { {}, "PORTA" };
+    juce::Label mLblCustomName;   // ロード中のカスタムWT名
 
     // アタッチメント
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentWtPos;
@@ -118,6 +164,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentPorta;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentWaveform;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentDetuneMode;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> mAttachmentDetuneSnap;
 
     ArcDialLookAndFeel mArcLookAndFeel;
 };

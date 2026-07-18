@@ -9,7 +9,7 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
     : AudioProcessorEditor(&p),
       audioProcessor(p),
       mVocoderPanel(p.apvts),
-      mExcitationPanel(p.apvts),
+      mExcitationPanel(p),
       mModPanel(p.apvts),
       mBandsEqPanel(p.apvts, p.getBandGains(), p.getBandLevelsForUi())
 {
