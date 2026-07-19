@@ -6,8 +6,11 @@
 
 namespace
 {
-    constexpr int kCardH = 92;    // スロットカードの高さ
-    constexpr int kDetailTop = 108;
+    // カード高さの内訳: 上下パディング8+8 / 番号行12 / TYPEコンボ22 / 余白6
+    //                   / AMTノブ44 / AMTラベル12 = 112
+    // ※旧92pxではノブ枠(44)を置く高さが足りず、AMTラベルが値表示と重なっていた。
+    constexpr int kCardH = 112;
+    constexpr int kDetailTop = kCardH + 16;
 }
 
 // ==========================================
@@ -94,12 +97,14 @@ void FxSlotCard::resized()
     auto r = getLocalBounds().reduced(8);
     r.removeFromTop(12);                       // 番号行
     typeBox.setBounds(r.removeFromTop(22));
-    r.removeFromTop(4);
+    r.removeFromTop(6);
 
     const int kw = 44;
-    auto knobArea = r.removeFromTop(kw + 14);
-    amountKnob.setBounds(knobArea.getCentreX() - kw / 2, knobArea.getY(), kw, kw);
-    amountLabel.setBounds(knobArea.getX(), knobArea.getBottom() - 11, knobArea.getWidth(), 10);
+    // ノブ枠(kw)を確保してから、その下にラベルを置く。
+    // removeFromTopで先に枠を取ることで、カードが短くても重なりが起きない。
+    auto knobRow = r.removeFromTop(kw);
+    amountKnob.setBounds(knobRow.getCentreX() - kw / 2, knobRow.getY(), kw, kw);
+    amountLabel.setBounds(r.getX(), r.getY(), r.getWidth(), 12);
 }
 
 void FxSlotCard::mouseDown(const juce::MouseEvent&)
@@ -215,7 +220,8 @@ void FxPanel::rebuildDetails()
     detailCombos.clear();
     detailComboLabels.clear();
 
-    struct Def { const char* id; const char* label; };
+    // dec = 小数桁数。既定のままだと "5.0000..." のように桁があふれて省略表示になる。
+    struct Def { const char* id; const char* label; int dec; };
     std::vector<Def> knobDefs;
     std::vector<Def> comboDefs;
     juce::String title;
@@ -224,32 +230,38 @@ void FxPanel::rebuildDetails()
     {
     case FxChain::Resonator:
         title = "SPECTRAL RESONATOR";
-        comboDefs = { { "resMode", "MODE" }, { "resChord", "CHORD" } };
-        knobDefs  = { { "resRoot", "ROOT" }, { "resFreeMs", "TIME" }, { "resFeedback", "FEEDBACK" },
-                      { "resDamp", "DAMP" }, { "resSpread", "SPREAD" } };
+        comboDefs = { { "resMode", "MODE", 0 }, { "resChord", "CHORD", 0 } };
+        // ROOTはMIDIノート番号パラメータ。表示はパラメータ側の音名書式 (例 "A2")。
+        knobDefs  = { { "resRoot", "ROOT", 0 }, { "resFreeMs", "TIME ms", 1 },
+                      { "resFeedback", "FEEDBACK", 2 }, { "resDamp", "DAMP", 2 },
+                      { "resSpread", "SPREAD", 2 } };
         break;
 
     case FxChain::Drive:
         title = "MULTIBAND DRIVE";
-        comboDefs = { { "drvShape", "SHAPE" } };
-        knobDefs  = { { "drvDrive", "DRIVE" }, { "drvLow", "LOW" },
-                      { "drvMid", "MID" }, { "drvHigh", "HIGH" } };
+        comboDefs = { { "drvShape", "SHAPE", 0 } };
+        knobDefs  = { { "drvDrive", "DRIVE", 1 }, { "drvLow", "LOW", 2 },
+                      { "drvMid", "MID", 2 }, { "drvHigh", "HIGH", 2 } };
         break;
 
     case FxChain::Gate:
         title = "FORMANT GATE";
-        comboDefs = { { "gateRate", "RATE" }, { "gatePattern", "PATTERN" } };
-        knobDefs  = { { "gateDepth", "DEPTH" }, { "gateVowel", "VOWEL" }, { "gateSmooth", "SMOOTH" } };
+        comboDefs = { { "gateRate", "RATE", 0 }, { "gatePattern", "PATTERN", 0 } };
+        knobDefs  = { { "gateDepth", "DEPTH", 2 }, { "gateVowel", "VOWEL", 2 },
+                      { "gateSmooth", "SMOOTH", 2 } };
         break;
 
     case FxChain::Chorus:
         title = "ENSEMBLE CHORUS";
-        knobDefs = { { "choRate", "RATE" }, { "choDepth", "DEPTH" }, { "choWidth", "WIDTH" } };
+        knobDefs = { { "choRate", "RATE Hz", 2 }, { "choDepth", "DEPTH ms", 1 },
+                     { "choWidth", "WIDTH", 2 } };
         break;
 
     case FxChain::Reverb:
         title = "REVERB";
-        knobDefs = { { "revSize", "SIZE" }, { "revDamp", "DAMP" } };
+        knobDefs = { { "revSize", "SIZE", 2 }, { "revDamp", "DAMP", 2 },
+                     { "revPredelay", "PRE-DLY ms", 0 }, { "revWidth", "WIDTH", 2 },
+                     { "revLowCut", "LOW CUT Hz", 0 }, { "revMod", "MOD", 2 } };
         break;
 
     default:
@@ -299,6 +311,8 @@ void FxPanel::rebuildDetails()
         detailKnobAttach.push_back(
             std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
                 proc.apvts, d.id, *k));
+        // Attachment生成後に設定する (生成時に既定桁数へ戻されるため)
+        k->setNumDecimalPlacesToDisplay(d.dec);
 
         auto l = std::make_unique<juce::Label>();
         l->setText(d.label, juce::dontSendNotification);
@@ -330,14 +344,15 @@ void FxPanel::paint(juce::Graphics& g)
     g.drawHorizontalLine(inner.getY() + kDetailTop - 8,
                          (float)inner.getX() + 4.0f, (float)inner.getRight() - 4.0f);
 
-    // 直列の流れを示す矢印
+    // 直列の流れを示す矢印 (カード間の隙間に描く)
     g.setColour(SpectraColors::textDim.withAlpha(0.5f));
     g.setFont(juce::Font(juce::FontOptions(12.0f)));
-    const int cardW = (inner.getWidth() - 3 * 10) / FxChain::kNumSlots;
+    const int gap = 8;
+    const int cardW = (inner.getWidth() - (FxChain::kNumSlots - 1) * gap) / FxChain::kNumSlots;
     for (int i = 0; i < FxChain::kNumSlots - 1; ++i)
     {
-        const int x = inner.getX() + (i + 1) * cardW + i * 10;
-        g.drawText(">", x, inner.getY() + kCardH / 2 - 8, 10, 16, juce::Justification::centred);
+        const int x = inner.getX() + (i + 1) * cardW + i * gap;
+        g.drawText(">", x, inner.getY() + kCardH / 2 - 8, gap, 16, juce::Justification::centred);
     }
 }
 
@@ -345,8 +360,8 @@ void FxPanel::resized()
 {
     auto r = getLocalBounds().reduced(16);
 
-    // --- スロットカード (横4枚) ---
-    const int gap = 10;
+    // --- スロットカード (横5枚・均等幅) ---
+    const int gap = 8;
     const int cardW = (r.getWidth() - (FxChain::kNumSlots - 1) * gap) / FxChain::kNumSlots;
     for (int i = 0; i < FxChain::kNumSlots; ++i)
         if (cards[(size_t)i] != nullptr)

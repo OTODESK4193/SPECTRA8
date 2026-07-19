@@ -318,9 +318,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     // Spectral Resonator
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("resMode", 1), "Res Mode", SpectralResonator::getModeNames(), 0));
+    // ROOTはHz直値ではなくMIDIノート番号。音楽的に合わせやすく、表示も音名になる。
+    //  24 = C1 … 96 = C7 / 既定45 = A2 (110Hz)
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("resRoot", 1), "Res Root",
-        juce::NormalisableRange<float>(20.0f, 2000.0f, 0.0f, 0.3f), 110.0f));
+        juce::NormalisableRange<float>(24.0f, 96.0f, 1.0f), 45.0f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction(
+            [](float v, int)
+            {
+                static const char* kNames[12] = { "C", "C#", "D", "D#", "E", "F",
+                                                  "F#", "G", "G#", "A", "A#", "B" };
+                const int n = juce::jlimit(0, 127, (int)std::lround(v));
+                return juce::String(kNames[n % 12]) + juce::String(n / 12 - 1);
+            })));
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("resChord", 1), "Res Chord", SpectralResonator::getChordNames(), 2));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
@@ -372,6 +382,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("revSize", 1), "Reverb Size", 0.0f, 1.0f, 0.5f));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("revDamp", 1), "Reverb Damp", 0.0f, 0.95f, 0.4f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("revPredelay", 1), "Reverb Predelay",
+        juce::NormalisableRange<float>(0.0f, 200.0f, 0.0f, 0.5f), 20.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("revWidth", 1), "Reverb Width", 0.0f, 1.0f, 0.6f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("revLowCut", 1), "Reverb Low Cut",
+        juce::NormalisableRange<float>(20.0f, 1000.0f, 0.0f, 0.35f), 200.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("revMod", 1), "Reverb Mod", 0.0f, 1.0f, 0.3f));
 
     // ENV (2基)
     for (int i = 0; i < ModMatrix::kNumEnvs; ++i)
@@ -479,11 +499,20 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     {
         const auto msg = metadata.getMessage();
         if (msg.isNoteOn())
+        {
             mExcitationEngine.noteOn(msg.getNoteNumber(), msg.getFloatVelocity());
+            addHeldNote(msg.getNoteNumber());
+        }
         else if (msg.isNoteOff())
+        {
             mExcitationEngine.noteOff(msg.getNoteNumber());
+            removeHeldNote(msg.getNoteNumber());
+        }
         else if (msg.isAllNotesOff() || msg.isAllSoundOff())
+        {
             mExcitationEngine.allNotesOff();
+            mNumHeldNotes = 0;
+        }
     }
     mModMatrix.handleMidi(midiMessages); // モジュレーションマトリクス用
     midiMessages.clear();
@@ -903,7 +932,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             fp.slot[(size_t)s].amount = apvts.getRawParameterValue(pre + "Amount")->load();
         }
         fp.resMode     = (int)apvts.getRawParameterValue("resMode")->load();
-        fp.resRootHz   = apvts.getRawParameterValue("resRoot")->load();
+        // ROOTはMIDIノート番号なのでHzへ変換
+        fp.resRootHz   = 440.0f * std::pow(2.0f,
+                            (apvts.getRawParameterValue("resRoot")->load() - 69.0f) / 12.0f);
         fp.resChord    = (int)apvts.getRawParameterValue("resChord")->load();
         fp.resFreeMs   = apvts.getRawParameterValue("resFreeMs")->load();
         fp.resSpread   = apvts.getRawParameterValue("resSpread")->load();
@@ -926,8 +957,17 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         fp.choDepth = apvts.getRawParameterValue("choDepth")->load();
         fp.choWidth = apvts.getRawParameterValue("choWidth")->load();
 
-        fp.revSize = apvts.getRawParameterValue("revSize")->load();
-        fp.revDamp = apvts.getRawParameterValue("revDamp")->load();
+        fp.revSize     = apvts.getRawParameterValue("revSize")->load();
+        fp.revDamp     = apvts.getRawParameterValue("revDamp")->load();
+        fp.revPredelay = apvts.getRawParameterValue("revPredelay")->load();
+        fp.revWidth    = apvts.getRawParameterValue("revWidth")->load();
+        fp.revLowCut   = apvts.getRawParameterValue("revLowCut")->load();
+        fp.revMod      = apvts.getRawParameterValue("revMod")->load();
+
+        // Resonator MIDIモード用: 押鍵中のノートを周波数へ
+        fp.numMidiHz = juce::jmin(mNumHeldNotes, (int)fp.midiHz.size());
+        for (int i = 0; i < fp.numMidiHz; ++i)
+            fp.midiHz[(size_t)i] = 440.0f * std::pow(2.0f, (mHeldNotes[(size_t)i] - 69) / 12.0f);
 
         // Gateのテンポ同期用BPM
         fp.bpm = 120.0;

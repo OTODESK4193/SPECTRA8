@@ -108,13 +108,45 @@ public:
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
+    // 押鍵リストの維持 (低い順・重複なし・最大8音)
+    void addHeldNote(int note) noexcept
+    {
+        for (int i = 0; i < mNumHeldNotes; ++i)
+            if (mHeldNotes[(size_t)i] == note) return;      // 既に押されている
+        if (mNumHeldNotes >= (int)mHeldNotes.size()) return; // 満杯なら無視
+        int pos = mNumHeldNotes;
+        while (pos > 0 && mHeldNotes[(size_t)pos - 1] > note)
+        {
+            mHeldNotes[(size_t)pos] = mHeldNotes[(size_t)pos - 1];
+            --pos;
+        }
+        mHeldNotes[(size_t)pos] = note;
+        ++mNumHeldNotes;
+    }
+    void removeHeldNote(int note) noexcept
+    {
+        for (int i = 0; i < mNumHeldNotes; ++i)
+            if (mHeldNotes[(size_t)i] == note)
+            {
+                for (int j = i; j < mNumHeldNotes - 1; ++j)
+                    mHeldNotes[(size_t)j] = mHeldNotes[(size_t)j + 1];
+                --mNumHeldNotes;
+                return;
+            }
+    }
+
     // モジュールインスタンス
     FilterbankVocoder mFilterbankVocoder;
     LpcVocoder mLpcVocoder;               // フェーズ2: LPCモード
     PostBandEq mPostEq;                   // フェーズ2 M3: LPC出力へBANDS EQをポスト適用
     ExcitationEngine mExcitationEngine;
     ModMatrix mModMatrix;
-    FxChain mFxChain;                     // 後段FX (4スロット直列)
+    FxChain mFxChain;                     // 後段FX (5スロット直列)
+
+    // FX Resonator の MIDI モード用。押鍵中のノート番号を低い順に保持する。
+    // (ExcitationEngineのボイスはスチール式で消えることがあるため、FX用に別管理)
+    std::array<int, 8> mHeldNotes {};
+    int mNumHeldNotes = 0;
     PitchTracker mPitchTracker;
     BrickLimiter mLimiter;
 

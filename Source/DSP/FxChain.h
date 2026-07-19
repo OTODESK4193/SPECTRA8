@@ -127,7 +127,10 @@ public:
     {
         return { "Octaves", "Power 5", "Major", "Minor", "Sus4", "Min 7", "Maj 9", "Dim" };
     }
-    static juce::StringArray getModeNames() { return { "Chord", "Free" }; }
+    // Chord = ROOTノート + コード種で固定配置
+    // Free  = ディレイ時間をms直指定 (チューニングされない金属的な響き)
+    // MIDI  = 押さえている鍵盤に共鳴ピッチが追従する
+    static juce::StringArray getModeNames() { return { "Chord", "Free", "MIDI" }; }
 
     void prepare(double sr)
     {
@@ -145,15 +148,17 @@ public:
         for (auto& v : voicesR) { v.dl.reset(); v.damp.reset(); }
     }
 
-    // mode      : 0=Chord, 1=Free
+    // mode      : 0=Chord, 1=Free, 2=MIDI
     // rootHz    : Chord時の基準周波数
     // chord     : コード種
     // freeMs    : Free時のディレイ時間(ms)
     // spreadAmt : Free時のボイス間隔の広がり / Chord時のステレオ広がり
     // feedback  : 0..1 (減衰時間)
     // damp      : 0..1 (帰還ループ内LPFの強さ)
+    // midiHz/numMidi : MIDIモード時に押鍵中の音の周波数 (0本なら直前の配置を維持)
     void setParams(int mode, float rootHz, int chord, float freeMs,
-                   float spreadAmt, float feedback, float damp) noexcept
+                   float spreadAmt, float feedback, float damp,
+                   const float* midiHz = nullptr, int numMidi = 0) noexcept
     {
         static const int kChordSemis[NumChords][8] = {
             {  0, 12, 24, 36, 48, 60, 72, 84 },   // Octaves
@@ -172,6 +177,10 @@ public:
         const int ch = juce::jlimit(0, (int)NumChords - 1, chord);
         const float sp = juce::jlimit(0.0f, 1.0f, spreadAmt);
 
+        // MIDIモードで押鍵が無い間は直前の配置を保持する (音が急に消えないように)
+        if (mode == 2 && numMidi <= 0)
+            return;
+
         for (int i = 0; i < kNumVoices; ++i)
         {
             float delaySamples;
@@ -179,6 +188,15 @@ public:
             {
                 const float f = juce::jlimit(20.0f, 5000.0f,
                                              rootHz * std::pow(2.0f, kChordSemis[ch][i] / 12.0f));
+                delaySamples = (float)sampleRate / f;
+            }
+            else if (mode == 2)   // MIDI: 押鍵中の音へ追従
+            {
+                // 鍵盤が8音に満たない場合は上のオクターブへ積んで8ボイスを埋める
+                const int n = juce::jlimit(1, kNumVoices, numMidi);
+                const float baseF = midiHz[i % n];
+                const int oct = i / n;
+                const float f = juce::jlimit(20.0f, 5000.0f, baseF * (float)(1 << oct));
                 delaySamples = (float)sampleRate / f;
             }
             else             // Free: 指定msを中心に、ボイス毎に少しずつずらす
@@ -495,6 +513,8 @@ private:
 
 // ==========================================
 // 5. Reverb (4本コムディフューザ + 2段オールパス、L/R非対称)
+//   SIZE / DAMP に加えて PREDELAY / WIDTH / LOW CUT / MOD を持つ。
+//   MOD はコム長を微揺らしして、固定長コム特有の金属的な付帯音を散らす。
 // ==========================================
 class SimpleReverb
 {
@@ -502,6 +522,8 @@ public:
     void prepare(double sr)
     {
         sampleRate = sr;
+        preL.prepare((int)(sr * 0.25) + 8);   // プリディレイ最大200ms
+        preR.prepare((int)(sr * 0.25) + 8);
         // 互いに素に近い長さ(ms)にして金属的な癖を避ける
         static const float combMs[4] = { 29.7f, 37.1f, 41.1f, 43.7f };
         static const float apMs[2]   = {  5.0f,  1.7f };
@@ -522,31 +544,57 @@ public:
     }
     void reset()
     {
+        preL.reset(); preR.reset();
         for (auto& d : combL) d.reset();
         for (auto& d : combR) d.reset();
         for (auto& d : apL) d.reset();
         for (auto& d : apR) d.reset();
         for (auto& f : dampL) f.reset();
         for (auto& f : dampR) f.reset();
+        hpL.reset(); hpR.reset();
+        modPhase = 0.0f;
     }
 
-    void setParams(float size, float damp, float mix) noexcept
+    // size/damp/mix に加えて predelayMs / width / lowCutHz / modAmt
+    void setParams(float size, float damp, float mix,
+                   float predelayMs, float width, float lowCutHz, float modAmt) noexcept
     {
         mSize = juce::jlimit(0.0f, 1.0f, size);
         mDamp = juce::jlimit(0.0f, 0.95f, damp);
         mMix = juce::jlimit(0.0f, 1.0f, mix);
         mFeedback = 0.70f + mSize * 0.28f;   // 最大0.98 (1未満を厳守)
+
+        mPredelay = juce::jlimit(0.0f, 200.0f, predelayMs) * 0.001f * (float)sampleRate;
+        mWidth = juce::jlimit(0.0f, 1.0f, width);
+        mLowCut = juce::jlimit(20.0f, 1000.0f, lowCutHz) / (float)sampleRate;
+        mModAmt = juce::jlimit(0.0f, 1.0f, modAmt);
     }
 
     void process(float& l, float& r) noexcept
     {
+        // --- プリディレイ (初期反射までの間合い) ---
+        preL.write(l);
+        preR.write(r);
+        const float inL = (mPredelay > 1.0f) ? preL.read(mPredelay) : l;
+        const float inR = (mPredelay > 1.0f) ? preR.read(mPredelay) : r;
+
+        // --- コム長の微揺らし (固定長コムの金属的な癖を散らす) ---
+        modPhase += 0.35f / (float)sampleRate;
+        if (modPhase >= 1.0f) modPhase -= 1.0f;
+        const float lfo = std::sin(modPhase * juce::MathConstants<float>::twoPi);
+
         float wetL = 0.0f, wetR = 0.0f;
         for (int i = 0; i < 4; ++i)
         {
-            const float dL = combL[(size_t)i].read(combLenL[(size_t)i]);
-            const float dR = combR[(size_t)i].read(combLenR[(size_t)i]);
-            combL[(size_t)i].write(l + dampL[(size_t)i].lp(dL, mDamp) * mFeedback);
-            combR[(size_t)i].write(r + dampR[(size_t)i].lp(dR, mDamp) * mFeedback);
+            // ボイス毎に位相をずらした微小変調 (最大±0.3%)
+            const float ph = lfo * std::cos((float)i * 1.1f);
+            const float mL = combLenL[(size_t)i] * (1.0f + mModAmt * 0.003f * ph);
+            const float mR = combRenR(i) * (1.0f - mModAmt * 0.003f * ph);
+
+            const float dL = combL[(size_t)i].read(mL);
+            const float dR = combR[(size_t)i].read(mR);
+            combL[(size_t)i].write(inL + dampL[(size_t)i].lp(dL, mDamp) * mFeedback);
+            combR[(size_t)i].write(inR + dampR[(size_t)i].lp(dR, mDamp) * mFeedback);
             wetL += dL;
             wetR += dR;
         }
@@ -559,6 +607,16 @@ public:
             wetL = allpass(apL[(size_t)i], apLen[(size_t)i], wetL);
             wetR = allpass(apR[(size_t)i], apLen[(size_t)i], wetR);
         }
+
+        // --- ローカット (残響で低域が濁るのを防ぐ。1次HPF = 原音 - LPF) ---
+        wetL -= hpL.lp(wetL, 1.0f - juce::jlimit(0.0f, 0.9f, mLowCut * 6.2831853f));
+        wetR -= hpR.lp(wetR, 1.0f - juce::jlimit(0.0f, 0.9f, mLowCut * 6.2831853f));
+
+        // --- WIDTH (M/Sでサイド成分を伸縮) ---
+        const float mid = (wetL + wetR) * 0.5f;
+        const float side = (wetL - wetR) * 0.5f * (mWidth * 2.0f);
+        wetL = mid + side;
+        wetR = mid - side;
 
         l = l * (1.0f - mMix) + wetL * mMix;
         r = r * (1.0f - mMix) + wetR * mMix;
@@ -574,13 +632,19 @@ private:
         return delayed - v * g;
     }
 
+    float combRenR(int i) const noexcept { return combLenR[(size_t)i]; }
+
     double sampleRate = 44100.0;
+    fxutil::DelayLine preL, preR;
     std::array<fxutil::DelayLine, 4> combL, combR;
     std::array<fxutil::DelayLine, 2> apL, apR;
     std::array<fxutil::OnePole, 4> dampL, dampR;
+    fxutil::OnePole hpL, hpR;
     std::array<float, 4> combLenL {}, combLenR {};
     std::array<float, 2> apLen {};
     float mSize = 0.5f, mDamp = 0.4f, mMix = 0.3f, mFeedback = 0.84f;
+    float mPredelay = 0.0f, mWidth = 0.5f, mLowCut = 0.005f, mModAmt = 0.3f;
+    float modPhase = 0.0f;
 };
 
 // ==========================================
@@ -589,7 +653,8 @@ private:
 class FxChain
 {
 public:
-    static constexpr int kNumSlots = 4;
+    // FX5種を全部同時に挿せるようスロットも5本
+    static constexpr int kNumSlots = 5;
 
     enum Type { None = 0, Resonator, Drive, Gate, Chorus, Reverb, NumTypes };
 
@@ -609,8 +674,10 @@ public:
         std::array<SlotParams, kNumSlots> slot;
 
         // Resonator
-        int   resMode = 0;      // 0=Chord 1=Free
+        int   resMode = 0;      // 0=Chord 1=Free 2=MIDI
         float resRootHz = 110.0f;
+        std::array<float, 8> midiHz {};   // MIDIモード時の押鍵周波数 (低い順)
+        int   numMidiHz = 0;
         int   resChord = 2;
         float resFreeMs = 5.0f;
         float resSpread = 0.4f;
@@ -631,6 +698,7 @@ public:
 
         // Reverb
         float revSize = 0.5f, revDamp = 0.4f;
+        float revPredelay = 20.0f, revWidth = 0.6f, revLowCut = 200.0f, revMod = 0.3f;
 
         double bpm = 120.0;
     };
@@ -658,11 +726,14 @@ public:
     {
         mParams = p;
         mResonator.setParams(p.resMode, p.resRootHz, p.resChord, p.resFreeMs,
-                             p.resSpread, p.resFeedback, p.resDamp);
+                             p.resSpread, p.resFeedback, p.resDamp,
+                             p.midiHz.data(), p.numMidiHz);
         mDrive.setParams(p.drvShape, p.drvDrive, p.drvLow, p.drvMid, p.drvHigh);
         mGate.setParams(p.gateRate, p.gatePattern, p.gateDepth, p.gateVowel, p.gateSmooth, p.bpm);
-        mChorus.setParams(p.choRate, p.choDepth, p.choWidth, 1.0f);   // MixはslotのAmountで管理
-        mReverb.setParams(p.revSize, p.revDamp, 1.0f);
+        // Mixは各slotのAmountで管理するのでFX内部のMixは常に1.0
+        mChorus.setParams(p.choRate, p.choDepth, p.choWidth, 1.0f);
+        mReverb.setParams(p.revSize, p.revDamp, 1.0f,
+                          p.revPredelay, p.revWidth, p.revLowCut, p.revMod);
     }
 
     // スロット順に直列適用。各スロットのAmountがそのFXのDry/Wet。
