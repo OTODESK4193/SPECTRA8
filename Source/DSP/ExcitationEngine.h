@@ -49,7 +49,7 @@ public:
         mMasterPitchSt = juce::jlimit(-24.0f, 24.0f, masterPitchSt);
         mQuantAmt = juce::jlimit(0.0f, 1.0f, quantAmt);
         mQuantKey = juce::jlimit(0, 11, key);
-        mQuantScale = juce::jlimit(0, 4, scale);
+        mQuantScale = juce::jlimit(0, ScaleSnap::kNumScales - 1, scale);
     }
 
     // カスタムWavetableロード用アクセス (メッセージスレッドからのロード専用)

@@ -169,8 +169,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("pitchQKey", 1), "PitchQ Key",
         juce::StringArray{ "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }, 0));
     layout.add(std::make_unique<juce::AudioParameterChoice>(
-        juce::ParameterID("pitchQScale", 1), "PitchQ Scale",
-        juce::StringArray{ "Chromatic", "Major", "Minor", "Maj Penta", "Min Penta" }, 0));
+        juce::ParameterID("pitchQScale", 1), "PitchQ Scale",   // 一覧は ScaleSnap::getScaleNames()
+        ScaleSnap::getScaleNames(), 0));
 
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("mode", 1), "Mode", juce::StringArray{ "Auto", "MIDI" }, 0));
@@ -354,6 +354,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("resFeedback", 1), "Res Feedback", 0.0f, 1.0f, 0.85f));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("resDamp", 1), "Res Damp", 0.0f, 1.0f, 0.35f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("resShimmer", 1), "Res Shimmer", 0.0f, 1.0f, 0.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("resInharm", 1), "Res Inharm", 0.0f, 1.0f, 0.0f));
 
     // Multiband Drive
     layout.add(std::make_unique<juce::AudioParameterChoice>(
@@ -379,6 +383,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("gateVowel", 1), "Gate Vowel", 0.0f, 1.0f, 0.0f));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("gateSmooth", 1), "Gate Smooth", 0.0f, 1.0f, 0.2f));
+    // SHAPE: 0=ステップ保持 / 1=各ステップ頭で鋭く減衰する打点 (連打が作れる)
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("gateShape", 1), "Gate Shape", 0.0f, 1.0f, 0.0f));
 
     // Chorus
     layout.add(std::make_unique<juce::AudioParameterFloat>(
@@ -443,6 +450,8 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mAnalyzer.prepare(sampleRate);
     // 解析用モノラルバッファはここで確保しておく (processBlock内でのアロケーションを避ける)
     mAnalyzerMono.assign((size_t)juce::jmax(64, samplesPerBlock), 0.0f);
+    mDryL.assign((size_t)juce::jmax(64, samplesPerBlock), 0.0f);
+    mDryR.assign((size_t)juce::jmax(64, samplesPerBlock), 0.0f);
 
     // ボコーダーモード切替状態の初期化 + PDC報告
     // (LPCモードは分析窓の群遅延 kLatency16k = 窓長/2 @16kHz)
@@ -782,7 +791,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         const float qAmt = juce::jlimit(0.0f, 100.0f, moddedParam(ModMatrix::DstPitchQuantize)) * 0.01f;
         const float mPitchSt = juce::jlimit(-24.0f, 24.0f, moddedParam(ModMatrix::DstMasterPitch));
         const int pqKey   = juce::jlimit(0, 11, (int)apvts.getRawParameterValue("pitchQKey")->load());
-        const int pqScale = juce::jlimit(0, 4,  (int)apvts.getRawParameterValue("pitchQScale")->load());
+        const int pqScale = juce::jlimit(0, ScaleSnap::kNumScales - 1,
+                                         (int)apvts.getRawParameterValue("pitchQScale")->load());
 
         // ※ qAmt=0 でも M.PITCH は効かせる (transposeAndSnap が内部で分岐)
         if (activePitch > 20.0f && !std::isnan(activePitch))
@@ -862,7 +872,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         m16kWetR[(size_t)s] = wetR;
     }
 
-    // 5. アップサンプリング & ドライ・ウェットブレンド
+    // 5. アップサンプリング (ブレンドは FX 通過後の 5.9 で行う)
     //    MIX/OUT LEVEL は20msランプでサンプル毎に平滑 (ジッパーノイズ対策)
     mMixSm.setTargetValue(juce::jlimit(0.0f, 100.0f, moddedParam(ModMatrix::DstMix)) * 0.01f);
     mOutGainSm.setTargetValue(
@@ -883,36 +893,40 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     float* writeL = buffer.getWritePointer(0);
     float* writeR = (numInputs > 1) ? buffer.getWritePointer(1) : writeL;
 
-    if (numInputs > 0 && mStoredSampleRate > 0.0)
+    // MIXは「原音」と「ボコーダー+FXを通した音」のクロスフェード。
+    //  そのため、ここではまだブレンドせずウェットのみをバッファへ書き、
+    //  原音は mDryL/mDryR へ退避しておく。FX通過後の最終段でブレンドする。
+    //  (旧実装はブレンド後にFXを掛けていたため、MIX=0でもFXが原音に掛かっていた)
+    const bool didProcess = (numInputs > 0 && mStoredSampleRate > 0.0
+                             && (int)mDryL.size() >= numSamples);
+    if (didProcess)
     {
         double step = 16000.0 / mStoredSampleRate;
+        const bool stereoIn = (numInputs > 1);
         for (int i = 0; i < numSamples; ++i)
         {
+            // 原音の退避 (writeR が writeL を指す場合があるので先に読む)
+            mDryL[(size_t)i] = writeL[i];
+            mDryR[(size_t)i] = stereoIn ? writeR[i] : writeL[i];
+
             // 線形補間アップサンプリング
             int idx0 = (int)mUpsampleTimeAccum;
             int idx1 = std::min(num16kSamples - 1, idx0 + 1);
             float frac = (float)(mUpsampleTimeAccum - idx0);
 
-            float wetSampleL = (m16kWetL[(size_t)idx0] * (1.0f - frac) + m16kWetL[(size_t)idx1] * frac) * gateGain;
-            float wetSampleR = (m16kWetR[(size_t)idx0] * (1.0f - frac) + m16kWetR[(size_t)idx1] * frac) * gateGain;
+            writeL[i] = (m16kWetL[(size_t)idx0] * (1.0f - frac) + m16kWetL[(size_t)idx1] * frac) * gateGain;
+            writeR[i] = (m16kWetR[(size_t)idx0] * (1.0f - frac) + m16kWetR[(size_t)idx1] * frac) * gateGain;
 
             mUpsampleTimeAccum += step;
-
-            float dryL = writeL[i];
-            float dryR = (numInputs > 1) ? writeR[i] : dryL;
-
-            // ブレンド & ゲイン (サンプル毎スムージング)
-            const float mix = mMixSm.getNextValue();
-            const float outGain = mOutGainSm.getNextValue();
-            writeL[i] = (dryL * (1.0f - mix) + wetSampleL * mix) * outGain;
-            writeR[i] = (dryR * (1.0f - mix) + wetSampleR * mix) * outGain;
         }
         mUpsampleTimeAccum -= (double)num16kSamples;
     }
 
-    // 5.5 FXチェーン (ボコーダーMix後・出力ゲイン後、リミッターの手前)
-    //     ここに置くのは、Resonator/Driveの効きをMIXノブの結果に対して掛けたい一方で、
-    //     暴れた場合は最終リミッターで受け止められるようにするため。
+    // 5.5 FXチェーン — ウェット(ボコーダー出力)に対してのみ適用する。
+    //     MIXノブは「原音 ⇔ ボコーダー+FX」のクロスフェードなので、
+    //     FXはウェット側に属する。これにより MIX=0 で FX も完全にバイパスされる。
+    //     なお MIX=0 でもFX自体は動かし続ける (残響やレゾネーターの尾が
+    //     MIXを戻した瞬間に不自然に途切れないようにするため)。
     {
         FxChain::Params fp;
         for (int s = 0; s < FxChain::kNumSlots; ++s)
@@ -930,6 +944,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         fp.resSpread   = apvts.getRawParameterValue("resSpread")->load();
         fp.resFeedback = apvts.getRawParameterValue("resFeedback")->load();
         fp.resDamp     = apvts.getRawParameterValue("resDamp")->load();
+        fp.resShimmer  = apvts.getRawParameterValue("resShimmer")->load();
+        fp.resInharm   = apvts.getRawParameterValue("resInharm")->load();
 
         fp.drvShape = (int)apvts.getRawParameterValue("drvShape")->load();
         fp.drvDrive = apvts.getRawParameterValue("drvDrive")->load();
@@ -942,6 +958,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         fp.gateDepth   = apvts.getRawParameterValue("gateDepth")->load();
         fp.gateVowel   = apvts.getRawParameterValue("gateVowel")->load();
         fp.gateSmooth  = apvts.getRawParameterValue("gateSmooth")->load();
+        fp.gateShape   = apvts.getRawParameterValue("gateShape")->load();
 
         fp.choRate  = apvts.getRawParameterValue("choRate")->load();
         fp.choDepth = apvts.getRawParameterValue("choDepth")->load();
@@ -971,6 +988,25 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         if (mFxChain.isActive())
             for (int i = 0; i < numSamples; ++i)
                 mFxChain.processSample(writeL[i], writeR[i]);
+    }
+
+    // 5.9 DRY/WET ブレンド & 出力ゲイン。
+    //     MIX=0 → 退避しておいた原音そのまま (ボコーダーもFXも一切通らない)
+    //     MIX=1 → ボコーダー+FX の全処理音
+    //     MIX/OUT LEVEL は20msランプでサンプル毎に平滑 (ジッパーノイズ対策)
+    if (didProcess)
+    {
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float mix = mMixSm.getNextValue();
+            const float outGain = mOutGainSm.getNextValue();
+            // モノラル時は writeR が writeL を指すため、先に両方読んでから書く
+            // (先に書くと2行目が「ブレンド済みの値」を再ブレンドしてしまう)
+            const float wl = writeL[i];
+            const float wr = writeR[i];
+            writeL[i] = (mDryL[(size_t)i] * (1.0f - mix) + wl * mix) * outGain;
+            writeR[i] = (mDryR[(size_t)i] * (1.0f - mix) + wr * mix) * outGain;
+        }
     }
 
     // 6. 最終段リミッター

@@ -21,6 +21,7 @@
 #include <array>
 #include <vector>
 #include <cmath>
+#include <cstdint>   // uint16_t (パターンマスク)。JuceHeader経由の間接includeに頼らない
 
 // ------------------------------------------
 // 共通: 1次/2次フィルタ部品
@@ -144,8 +145,9 @@ public:
 
     void reset()
     {
-        for (auto& v : voicesL) { v.dl.reset(); v.damp.reset(); }
-        for (auto& v : voicesR) { v.dl.reset(); v.damp.reset(); }
+        for (auto& v : voicesL) { v.dl.reset(); v.damp.reset(); v.shimHp.reset(); v.delaySamples = v.targetDelay; }
+        for (auto& v : voicesR) { v.dl.reset(); v.damp.reset(); v.shimHp.reset(); v.delaySamples = v.targetDelay; }
+        mLfoPhase = 0.0f; mLfoPhase2 = 0.33f;
     }
 
     // mode      : 0=Chord, 1=Free, 2=MIDI
@@ -156,10 +158,15 @@ public:
     // feedback  : 0..1 (減衰時間)
     // damp      : 0..1 (帰還ループ内LPFの強さ)
     // midiHz/numMidi : MIDIモード時に押鍵中の音の周波数 (0本なら直前の配置を維持)
+    // shimmer   : 0..1 オクターブ上のタップを帰還へ混ぜる + 揺らぎ (キラキラ感)
+    // inharm    : 0..1 部分音を非調和に伸ばす (ベル/金属的な倍音)
     void setParams(int mode, float rootHz, int chord, float freeMs,
                    float spreadAmt, float feedback, float damp,
+                   float shimmer, float inharm,
                    const float* midiHz = nullptr, int numMidi = 0) noexcept
     {
+        mShimmer = juce::jlimit(0.0f, 1.0f, shimmer);
+        mInharm  = juce::jlimit(0.0f, 1.0f, inharm);
         static const int kChordSemis[NumChords][8] = {
             {  0, 12, 24, 36, 48, 60, 72, 84 },   // Octaves
             {  0,  7, 12, 19, 24, 31, 36, 43 },   // Power 5
@@ -206,20 +213,52 @@ public:
                 delaySamples = (float)(ms * 0.001 * sampleRate);
             }
 
+            // 非調和性: 実弦/ベルのように高次部分音ほど上へずれる (f_n *= sqrt(1+B*n²))。
+            // わずかに入れるだけで「うなり」が生まれ、金属的なキラキラ感になる。
+            if (mInharm > 0.001f)
+            {
+                const float B = mInharm * 0.0012f;
+                const float n = (float)(i + 1);
+                delaySamples /= std::sqrt(1.0f + B * n * n);
+            }
+
             // L/Rでわずかに長さを変えてステレオ感を出す
             const float det = sp * 0.02f * ((i % 2 == 0) ? 1.0f : -1.0f);
-            voicesL[(size_t)i].delaySamples = delaySamples * (1.0f + det);
-            voicesR[(size_t)i].delaySamples = delaySamples * (1.0f - det);
+            voicesL[(size_t)i].targetDelay = delaySamples * (1.0f + det);
+            voicesR[(size_t)i].targetDelay = delaySamples * (1.0f - det);
         }
     }
 
     void process(float& l, float& r) noexcept
     {
+        // ディレイ長のサンプル毎スムージング。
+        //  ブロック毎に直接書き換えると読み出し位置が飛び、実測で入力の15倍の
+        //  不連続(プチッ)が出ていた。1次平滑で読み出し位置を連続にする。
+        //  ついでにテープ的なピッチグライドにもなる。
+        constexpr float kGlide = 0.0004f;   // τ≈50ms @48k
+
+        // SHIMMER用のゆっくりした揺らぎ (2本の非整数比LFOでうねりを作る)
+        float modL = 0.0f, modR = 0.0f;
+        if (mShimmer > 0.001f)
+        {
+            mLfoPhase  += 0.31f / (float)sampleRate;  if (mLfoPhase  >= 1.0f) mLfoPhase  -= 1.0f;
+            mLfoPhase2 += 0.47f / (float)sampleRate;  if (mLfoPhase2 >= 1.0f) mLfoPhase2 -= 1.0f;
+            const float a = std::sin(mLfoPhase  * juce::MathConstants<float>::twoPi);
+            const float b = std::sin(mLfoPhase2 * juce::MathConstants<float>::twoPi);
+            modL = mShimmer * 0.0025f * a;
+            modR = mShimmer * 0.0025f * b;
+        }
+
         float sumL = 0.0f, sumR = 0.0f;
         for (int i = 0; i < kNumVoices; ++i)
         {
-            sumL += tick(voicesL[(size_t)i], l);
-            sumR += tick(voicesR[(size_t)i], r);
+            auto& vL = voicesL[(size_t)i];
+            auto& vR = voicesR[(size_t)i];
+            vL.delaySamples += kGlide * (vL.targetDelay - vL.delaySamples);
+            vR.delaySamples += kGlide * (vR.targetDelay - vR.delaySamples);
+
+            sumL += tick(vL, l, modL);
+            sumR += tick(vR, r, modR);
         }
         // ボイス数で正規化 (8本足しても音量が跳ねないように)
         const float norm = 1.0f / (float)kNumVoices;
@@ -232,15 +271,29 @@ private:
     {
         fxutil::DelayLine dl;
         fxutil::OnePole damp;
-        float delaySamples = 100.0f;
+        fxutil::OnePole shimHp;      // オクターブ上タップの低域を落とす
+        float delaySamples = 100.0f; // 実際に読み出している長さ (平滑後)
+        float targetDelay = 100.0f;  // setParams が書き込む目標長
     };
 
-    float tick(Voice& v, float in) noexcept
+    float tick(Voice& v, float in, float mod) noexcept
     {
-        const float delayed = v.dl.read(v.delaySamples);
-        const float damped = v.damp.lp(delayed, mDamp);
+        const float d = v.delaySamples * (1.0f + mod);
+        const float delayed = v.dl.read(d);
+        float fb = v.damp.lp(delayed, mDamp);
+
+        // SHIMMER: 半分の長さ = 1オクターブ上のタップを帰還に足す。
+        //  減衰しながら上のオクターブへエネルギーが移り、Ableton Spectral Resonator
+        //  的な「上へ伸びるキラキラ」になる。高域だけ混ぜないと濁るのでHPFを噛ませる。
+        if (mShimmer > 0.001f)
+        {
+            const float oct = v.dl.read(d * 0.5f);
+            const float octHp = oct - v.shimHp.lp(oct, 0.90f);   // 簡易HPF
+            fb += octHp * mShimmer * 0.55f;
+        }
+
         // 入力 + 減衰した帰還。softClipで帰還ループ自体を有界にする。
-        v.dl.write(fxutil::softClip(in + damped * mFeedback));
+        v.dl.write(fxutil::softClip(in + fb * mFeedback));
         return delayed;
     }
 
@@ -248,6 +301,9 @@ private:
     std::array<Voice, kNumVoices> voicesL, voicesR;
     float mFeedback = 0.7f;
     float mDamp = 0.3f;
+    float mShimmer = 0.0f;
+    float mInharm = 0.0f;
+    float mLfoPhase = 0.0f, mLfoPhase2 = 0.33f;
 };
 
 // ==========================================
@@ -366,8 +422,14 @@ public:
 
     // rate: getRateNames のインデックス / pattern: getPatternNames のインデックス
     // depth: 0..1 ゲートの深さ / vowelAmt: 0..1 フォルマントの効き / smooth: 0..1 立ち上がり鈍化
-    void setParams(int rate, int pattern, float depth, float vowelAmt, float smooth, double bpm) noexcept
+    // shape: 0..1 ステップ内の減衰。0=そのステップ全体を保持(従来) /
+    //        1=各ステップ頭で鋭く減衰する打点になる。
+    //        ※これが無いと連続ONのステップが繋がってしまい、"All On" では
+    //          ゲートが全く動かず、1/32を選んでも連打にならなかった。
+    void setParams(int rate, int pattern, float depth, float vowelAmt, float smooth,
+                   float shape, double bpm) noexcept
     {
+        mShape = juce::jlimit(0.0f, 1.0f, shape);
         static const double kBeats[7] = { 2.0, 1.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125 };
         mRate = juce::jlimit(0, 6, rate);
         mPattern = juce::jlimit(0, 5, pattern);
@@ -387,10 +449,23 @@ public:
         {
             phase -= 1.0;
             stepIdx = (stepIdx + 1) % kNumSteps;
+            // SHAPE>0 のとき、各ステップ頭でエンベロープを叩き直す(リトリガー)。
+            // これにより連続するONステップも一発ずつ発音し、
+            // RATE=1/32 なら 1/32 の連打になる。
+            if (mShape > 0.001f && stepOn(stepIdx))
+                env = 0.0f;
         }
 
         // --- ゲートエンベロープ (smoothで立ち上がり/下がりを鈍らせクリック防止) ---
-        const float target = stepOn(stepIdx) ? 1.0f : 0.0f;
+        // SHAPE>0 では「ステップ内で目標が1→0へ落ちる」ことで打点になる。
+        float target = stepOn(stepIdx) ? 1.0f : 0.0f;
+        if (mShape > 0.001f && target > 0.5f)
+        {
+            // ステップ内位相 phase(0..1) に沿って減衰。SHAPEが大きいほど短い打点。
+            const float decayPos = (float)phase / juce::jmax(0.05f, 1.0f - mShape * 0.92f);
+            target = juce::jlimit(0.0f, 1.0f, 1.0f - decayPos);
+        }
+
         // smooth=0 でも 1ms 程度はかける
         const float tauMs = 1.0f + mSmooth * 60.0f;
         const float coeff = 1.0f - std::exp(-1.0f / (tauMs * 0.001f * (float)sampleRate));
@@ -447,7 +522,7 @@ private:
     int stepIdx = 0;
     float env = 0.0f;
     int mRate = 4, mPattern = 0;
-    float mDepth = 1.0f, mVowel = 0.0f, mSmooth = 0.2f;
+    float mDepth = 1.0f, mVowel = 0.0f, mSmooth = 0.2f, mShape = 0.0f;
     std::array<fxutil::Svf, 3> fmtL, fmtR;
 };
 
@@ -675,6 +750,7 @@ public:
 
         // Resonator
         int   resMode = 0;      // 0=Chord 1=Free 2=MIDI
+        float resShimmer = 0.0f, resInharm = 0.0f;
         float resRootHz = 110.0f;
         std::array<float, 8> midiHz {};   // MIDIモード時の押鍵周波数 (低い順)
         int   numMidiHz = 0;
@@ -691,7 +767,7 @@ public:
 
         // Gate
         int   gateRate = 4, gatePattern = 1;
-        float gateDepth = 1.0f, gateVowel = 0.0f, gateSmooth = 0.2f;
+        float gateDepth = 1.0f, gateVowel = 0.0f, gateSmooth = 0.2f, gateShape = 0.0f;
 
         // Chorus
         float choRate = 0.6f, choDepth = 4.0f, choWidth = 0.7f;
@@ -727,9 +803,11 @@ public:
         mParams = p;
         mResonator.setParams(p.resMode, p.resRootHz, p.resChord, p.resFreeMs,
                              p.resSpread, p.resFeedback, p.resDamp,
+                             p.resShimmer, p.resInharm,
                              p.midiHz.data(), p.numMidiHz);
         mDrive.setParams(p.drvShape, p.drvDrive, p.drvLow, p.drvMid, p.drvHigh);
-        mGate.setParams(p.gateRate, p.gatePattern, p.gateDepth, p.gateVowel, p.gateSmooth, p.bpm);
+        mGate.setParams(p.gateRate, p.gatePattern, p.gateDepth, p.gateVowel, p.gateSmooth,
+                        p.gateShape, p.bpm);
         // Mixは各slotのAmountで管理するのでFX内部のMixは常に1.0
         mChorus.setParams(p.choRate, p.choDepth, p.choWidth, 1.0f);
         mReverb.setParams(p.revSize, p.revDamp, 1.0f,

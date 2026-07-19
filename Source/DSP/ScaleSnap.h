@@ -15,18 +15,48 @@
 
 namespace ScaleSnap
 {
-    // pitchQScale パラメータの並びと一致させること
-    //  0:Chromatic 1:Major 2:Minor(nat) 3:MajPenta 4:MinPenta
+    // pitchQScale パラメータの並びと一致させること。
+    //  ビット i = ルートから i 半音上の音を許可 (LSB = ルート)。
+    //  【重要】先頭5つ(Chromatic/Major/Minor/MajPenta/MinPenta)の並びは変更しないこと。
+    //  AudioParameterChoice はインデックス保存なので、既存セッションの設定がズレる。
+    //  追加は必ず末尾へ。
+    static constexpr int kNumScales = 20;
+
     inline uint16_t maskFor(int scale) noexcept
     {
-        static constexpr uint16_t kMasks[5] = {
-            0b111111111111,  // Chromatic
-            0b101010110101,  // Major     {0,2,4,5,7,9,11}
-            0b010110101101,  // Minor(nat){0,2,3,5,7,8,10}
-            0b001010010101,  // MajPenta  {0,2,4,7,9}
-            0b010010101001,  // MinPenta  {0,3,5,7,10}
+        static constexpr uint16_t kMasks[kNumScales] = {
+            0b111111111111,  //  0 Chromatic   全音
+            0b101010110101,  //  1 Major       {0,2,4,5,7,9,11}
+            0b010110101101,  //  2 Minor (nat) {0,2,3,5,7,8,10}
+            0b001010010101,  //  3 Maj Penta   {0,2,4,7,9}
+            0b010010101001,  //  4 Min Penta   {0,3,5,7,10}
+            // --- 以下は追加分 (末尾に追記すること) ---
+            0b100110101101,  //  5 Harm Minor  {0,2,3,5,7,8,11}
+            0b101010101101,  //  6 Mel Minor   {0,2,3,5,7,9,11}
+            0b011010101101,  //  7 Dorian      {0,2,3,5,7,9,10}
+            0b010110101011,  //  8 Phrygian    {0,1,3,5,7,8,10}
+            0b101011010101,  //  9 Lydian      {0,2,4,6,7,9,11}
+            0b011010110101,  // 10 Mixolydian  {0,2,4,5,7,9,10}
+            0b010101101011,  // 11 Locrian     {0,1,3,5,6,8,10}
+            0b010011101001,  // 12 Blues       {0,3,5,6,7,10}
+            0b010101010101,  // 13 Whole Tone  {0,2,4,6,8,10}
+            0b011011011011,  // 14 Dim (H-W)   {0,1,3,4,6,7,9,10}
+            0b100111001101,  // 15 Hungarian   {0,2,3,6,7,8,11}
+            0b000110001101,  // 16 Hirajoshi   {0,2,3,7,8}
+            0b010010100011,  // 17 Insen       {0,1,5,7,10}
+            0b010001100011,  // 18 Iwato       {0,1,5,6,10}
+            0b010110110011,  // 19 Hijaz       {0,1,4,5,7,8,10}  (=1459)
         };
-        return kMasks[juce::jlimit(0, 4, scale)];
+        return kMasks[juce::jlimit(0, kNumScales - 1, scale)];
+    }
+
+    // pitchQScale コンボの表示名 (maskFor と同じ並び)
+    inline juce::StringArray getScaleNames()
+    {
+        return { "Chromatic", "Major", "Minor", "Maj Penta", "Min Penta",
+                 "Harm Minor", "Mel Minor", "Dorian", "Phrygian", "Lydian",
+                 "Mixolydian", "Locrian", "Blues", "Whole Tone", "Dim (H-W)",
+                 "Hungarian", "Hirajoshi", "Insen", "Iwato", "Hijaz" };
     }
 
     inline bool isAllowed(int note, int key, uint16_t mask) noexcept

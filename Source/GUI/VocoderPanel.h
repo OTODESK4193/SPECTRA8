@@ -15,6 +15,7 @@
 #include "GlowToggle.h"
 #include "ArcDial.h"
 #include "ModRing.h"
+#include "../DSP/ScaleSnap.h"
 
 class SPECTRA8AudioProcessor;
 

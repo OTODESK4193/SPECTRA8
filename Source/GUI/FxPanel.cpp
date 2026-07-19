@@ -234,7 +234,8 @@ void FxPanel::rebuildDetails()
         // ROOTはMIDIノート番号パラメータ。表示はパラメータ側の音名書式 (例 "A2")。
         knobDefs  = { { "resRoot", "ROOT", 0 }, { "resFreeMs", "TIME ms", 1 },
                       { "resFeedback", "FEEDBACK", 2 }, { "resDamp", "DAMP", 2 },
-                      { "resSpread", "SPREAD", 2 } };
+                      { "resSpread", "SPREAD", 2 },
+                      { "resShimmer", "SHIMMER", 2 }, { "resInharm", "INHARM", 2 } };
         break;
 
     case FxChain::Drive:
@@ -247,8 +248,8 @@ void FxPanel::rebuildDetails()
     case FxChain::Gate:
         title = "FORMANT GATE";
         comboDefs = { { "gateRate", "RATE", 0 }, { "gatePattern", "PATTERN", 0 } };
-        knobDefs  = { { "gateDepth", "DEPTH", 2 }, { "gateVowel", "VOWEL", 2 },
-                      { "gateSmooth", "SMOOTH", 2 } };
+        knobDefs  = { { "gateDepth", "DEPTH", 2 }, { "gateShape", "SHAPE", 2 },
+                      { "gateVowel", "VOWEL", 2 }, { "gateSmooth", "SMOOTH", 2 } };
         break;
 
     case FxChain::Chorus:
@@ -375,18 +376,18 @@ void FxPanel::resized()
     int x = r.getX() + 2;
     const int rowY = dy + 22;
 
-    // コンボは左から順に
+    // コンボは左から順に (Resonatorは2コンボ+7ノブが最大構成。幅はそこに合わせる)
     for (size_t i = 0; i < detailCombos.size(); ++i)
     {
-        const int w = 108;
+        const int w = 96;
         detailComboLabels[i]->setBounds(x, rowY, w, 11);
         detailCombos[i]->setBounds(x, rowY + 13, w, 22);
-        x += w + 12;
+        x += w + 10;
     }
 
     // ノブはその右へ
     const int kw = 52;
-    const int step = kw + 22;
+    const int step = kw + 20;
     int kx = x + 8;
     const int ky = rowY - 4;
     for (size_t i = 0; i < detailKnobs.size(); ++i)

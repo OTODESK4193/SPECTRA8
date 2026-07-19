@@ -72,7 +72,7 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
     setupCombo(mComboTrackResponse, { "Track: Fast", "Track: Natural", "Track: Smooth" });
     setupCombo(mComboPitchQKey, { "Key: C", "Key: C#", "Key: D", "Key: D#", "Key: E", "Key: F",
                                   "Key: F#", "Key: G", "Key: G#", "Key: A", "Key: A#", "Key: B" });
-    setupCombo(mComboPitchQScale, { "Chromatic", "Major", "Minor", "Maj Penta", "Min Penta" });
+    setupCombo(mComboPitchQScale, ScaleSnap::getScaleNames());
     setupCombo(mComboLpcOrder, { "Order 8", "Order 10", "Order 12", "Order 16" });
     setupCombo(mComboAnalysisWindow, { "Hann Window", "Hamming Window", "Blackman Window" });
     setupCombo(mComboFrameRate, { "8 Hz", "15 Hz", "25 Hz", "50 Hz", "80 Hz" });

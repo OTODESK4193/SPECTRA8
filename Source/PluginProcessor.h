@@ -150,6 +150,11 @@ private:
     AnalyzerDSP mAnalyzer;                // 表示専用 (バックグラウンドスレッド)
     std::vector<float> mAnalyzerMono;     // 解析へ渡すモノラル和 (事前確保・RT安全)
 
+    // MIXブレンド用の原音退避。
+    //  MIX=0 で「FXも含めて完全バイパスした素のDry」を出すために、
+    //  FX適用前のドライ信号を別に持っておく必要がある。
+    std::vector<float> mDryL, mDryR;
+
     // FX Resonator の MIDI モード用。押鍵中のノート番号を低い順に保持する。
     // (ExcitationEngineのボイスはスチール式で消えることがあるため、FX用に別管理)
     std::array<int, 8> mHeldNotes {};
