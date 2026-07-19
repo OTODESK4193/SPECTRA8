@@ -82,6 +82,15 @@ public:
     bool hasCustomWavetable() const { return mExcitationEngine.getWavetable().hasCustom(); }
     const ExcitationEngine& getExcitationEngine() const { return mExcitationEngine; }
 
+    // ---- グローバル設定 (プラグイン全体で共有。DAW再起動・新規インスタンスでも保持) ----
+    //  セッション/プリセット (apvts.state) とは独立した設定ファイルに保存される。
+    //   Windows: %APPDATA%/SPECTRA8/SPECTRA8.settings
+    //   macOS  : ~/Library/Application Support/SPECTRA8/SPECTRA8.settings
+    //  Wavetableフォルダの登録パスはここに置く (毎回ADD DIRし直さなくて済むように)。
+    static juce::PropertiesFile& getGlobalSettings();
+    static juce::String getGlobalWavetableDir();
+    static void setGlobalWavetableDir(const juce::String& path);
+
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 

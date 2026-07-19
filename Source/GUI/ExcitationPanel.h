@@ -361,7 +361,8 @@ private:
     juce::Label mLblSyncShift { {}, "SYNC PH" };
     juce::Label mLblVocAmt { {}, "VOCODE" };
     juce::Label mLblVocShift { {}, "VOWEL" };
-    juce::Label mLblMorphHdr { {}, "MORPH (同時併用可 / Amt=0でバイパス)" };
+    // UIに出す文字列はすべてASCIIのみ (ホスト側フォント/コードページ差による文字化け防止)
+    juce::Label mLblMorphHdr { {}, "MORPH  -  stackable, Amt = 0 bypasses" };
     juce::Label mLblCustomName;   // ロード中のカスタムWT名 / フォルダ状態
 
     // アタッチメント

@@ -31,7 +31,7 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
 
     setupKnob(mKnobWtPos, mLblWtPos);
     setupKnob(mKnobPulseWidth, mLblPulseWidth, "%");
-    setupKnob(mKnobDetune, mLblDetune);   // 表示はパラメータ側の "N ct (度数)" 書式
+    setupKnob(mKnobDetune, mLblDetune);   // 表示はパラメータ側の "N ct (P5)" 書式
     setupKnob(mKnobPorta, mLblPorta, "s");
     setupKnob(mKnobBendAmt, mLblBendAmt);
     setupKnob(mKnobBendShift, mLblBendShift);
@@ -39,7 +39,7 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
     setupKnob(mKnobSyncShift, mLblSyncShift);
     setupKnob(mKnobVocAmt, mLblVocAmt);
     setupKnob(mKnobVocShift, mLblVocShift);
-    mKnobDetune.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 104, 15); // "1200 ct (8度)" 用
+    mKnobDetune.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 96, 15); // "1200 ct (P8)" 用
 
     // MORPHセクション見出し
     mLblMorphHdr.setFont(juce::Font(juce::FontOptions(9.5f, juce::Font::bold)));
@@ -155,9 +155,24 @@ ExcitationPanel::~ExcitationPanel()
         k->setLookAndFeel(nullptr);
 }
 
+// Wavetableフォルダの登録パス。
+//  優先度: グローバル設定 (DAW再起動をまたいで保持) → 旧セッション保存値 (後方互換)。
+//  旧セッションにしか無い場合はこの場でグローバル側へ移行する。
 juce::File ExcitationPanel::getWtDir() const
 {
-    const juce::String p = apvts.state.getProperty("customWavetableDir", juce::String()).toString();
+    juce::String p = SPECTRA8AudioProcessor::getGlobalWavetableDir();
+
+    if (p.isEmpty())
+    {
+        // v0.2.0以前のセッションからの移行
+        const juce::String legacy = apvts.state.getProperty("customWavetableDir", juce::String()).toString();
+        if (legacy.isNotEmpty() && juce::File(legacy).isDirectory())
+        {
+            SPECTRA8AudioProcessor::setGlobalWavetableDir(legacy);
+            p = legacy;
+        }
+    }
+
     return p.isNotEmpty() ? juce::File(p) : juce::File();
 }
 
@@ -383,7 +398,7 @@ void ExcitationPanel::chooseFolder()
 
     // SafePointerで生存確認 (ダイアログ表示中にエディタが閉じられた場合のダングリング防止)
     juce::Component::SafePointer<ExcitationPanel> sp(this);
-    mChooser = std::make_unique<juce::FileChooser>("Wavetableフォルダを選択", initial);
+    mChooser = std::make_unique<juce::FileChooser>("Select Wavetable Folder", initial);
     mChooser->launchAsync(juce::FileBrowserComponent::openMode
                         | juce::FileBrowserComponent::canSelectDirectories,
         [sp](const juce::FileChooser& fc)
@@ -393,7 +408,8 @@ void ExcitationPanel::chooseFolder()
             const juce::File dir = fc.getResult();
             if (dir.isDirectory())
             {
-                sp->apvts.state.setProperty("customWavetableDir", dir.getFullPathName(), nullptr);
+                // グローバル設定へ保存 = DAWを再起動しても、別プロジェクトでも残る
+                SPECTRA8AudioProcessor::setGlobalWavetableDir(dir.getFullPathName());
                 sp->showBrowser();   // 登録後すぐ一覧表示
             }
         });
@@ -527,10 +543,12 @@ void ExcitationPanel::resized()
     // DETUNE: 長い値表示のため境界を左右へ拡張 + SNAPをラベル下へ
     {
         const int kx = rightX + 3 * stepX + (stepX - knobSize) / 2;
-        const int extra = juce::jmax(0, (104 - knobSize) / 2);
+        const int extra = juce::jmax(0, (96 - knobSize) / 2);
         mKnobDetune.setBounds(kx - extra, rowY1, knobSize + extra * 2, knobSize + 2);
         mLblDetune.setBounds(kx - 12, rowY1 + knobSize + 2, knobSize + 24, labelH);
-        mBtnDetuneSnap.setBounds(kx + (knobSize - 50) / 2, rowY1 + knobSize + 2 + labelH + 1, 50, 18);
+        // SNAP: GlowToggleはLED分に約20px使うため、"SNAP"(11pt bold)が入る幅を確保する
+        const int snapW = 66;
+        mBtnDetuneSnap.setBounds(kx + (knobSize - snapW) / 2, rowY1 + knobSize + 2 + labelH + 1, snapW, 18);
     }
 
     // MORPHセクション見出し

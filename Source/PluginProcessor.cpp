@@ -5,6 +5,45 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+// ---- グローバル設定ファイル ----
+//  ホスト側のセッション保存とは無関係に、ユーザー設定フォルダへ永続化する。
+//  静的ローカルのコンストラクタで初期化することで初期化の競合を避ける。
+namespace
+{
+    struct GlobalSettingsHolder
+    {
+        juce::ApplicationProperties props;
+        GlobalSettingsHolder()
+        {
+            juce::PropertiesFile::Options o;
+            o.applicationName     = "SPECTRA8";
+            o.filenameSuffix      = "settings";
+            o.folderName          = "SPECTRA8";
+            o.osxLibrarySubFolder = "Application Support";
+            o.storageFormat       = juce::PropertiesFile::storeAsXML;
+            props.setStorageParameters(o);
+        }
+    };
+}
+
+juce::PropertiesFile& SPECTRA8AudioProcessor::getGlobalSettings()
+{
+    static GlobalSettingsHolder holder;
+    return *holder.props.getUserSettings();
+}
+
+juce::String SPECTRA8AudioProcessor::getGlobalWavetableDir()
+{
+    return getGlobalSettings().getValue("customWavetableDir", juce::String());
+}
+
+void SPECTRA8AudioProcessor::setGlobalWavetableDir(const juce::String& path)
+{
+    auto& s = getGlobalSettings();
+    s.setValue("customWavetableDir", path);
+    s.saveIfNeeded();   // 即時ディスク書き込み (DAWが異常終了しても残るように)
+}
+
 SPECTRA8AudioProcessor::SPECTRA8AudioProcessor()
     : AudioProcessor(BusesProperties()
         .withInput("Input", juce::AudioChannelSet::stereo(), true)
@@ -171,11 +210,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
             [](float v, int)
             {
                 static const char* names[13] = {
-                    "1度", "短2度", "長2度", "短3度", "長3度",
-                    "完全4度", "増4度", "完全5度", "短6度",
-                    "長6度", "短7度", "長7度", "8度" };
+                    // 音程名は英語略記で統一 (ホスト/フォント差による文字化けを避けるためASCIIのみ)
+                    //  P=Perfect, M=Major, m=minor, TT=Tritone
+                    "P1", "m2", "M2", "m3", "M3",
+                    "P4", "TT", "P5", "m6",
+                    "M6", "m7", "M7", "P8" };
                 const int st = juce::jlimit(0, 12, (int)std::lround(v / 100.0f));
-                return juce::String((int)std::lround(v)) + " ct (" + juce::String(juce::CharPointer_UTF8(names[st])) + ")";
+                return juce::String((int)std::lround(v)) + " ct (" + juce::String(names[st]) + ")";
             })));
 
     // Detune SNAP: ON時はDetuneノブが100セント(半音=度数)単位でスナップ (GUI挙動用)
