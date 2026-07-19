@@ -39,6 +39,9 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
     setupKnob(mKnobLofi, mLblLofi);
     setupKnob(mKnobBasePitch, mLblBasePitch, " Hz");
     setupKnob(mKnobNoiseColor, mLblNoiseColor, " Hz");
+    // Hz系は小数を出すと "1000.00 Hz" が幅60pxに収まらず "1000..." と省略されるため整数表示
+    mKnobBasePitch.setNumDecimalPlacesToDisplay(0);
+    mKnobNoiseColor.setNumDecimalPlacesToDisplay(0);
     setupKnob(mKnobNoise, mLblNoise, "%");
     setupKnob(mKnobBands, mLblBands);
     setupKnob(mKnobResonance, mLblResonance, "x");

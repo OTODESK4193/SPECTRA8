@@ -65,6 +65,7 @@ target_sources(SPECTRA8 PRIVATE
     Source/DSP/LspConverter.h
     Source/DSP/PostBandEq.h
     Source/DSP/Limiter.h
+    Source/DSP/FxChain.h
 
     # --- GUI モジュール ---
     Source/GUI/ColorPalette.h
@@ -72,12 +73,15 @@ target_sources(SPECTRA8 PRIVATE
     Source/GUI/ArcDial.cpp
     Source/GUI/ValueKnob.h
     Source/GUI/GlowToggle.h
+    Source/GUI/ModRing.h
     Source/GUI/VocoderPanel.h
     Source/GUI/VocoderPanel.cpp
     Source/GUI/ExcitationPanel.h
     Source/GUI/ExcitationPanel.cpp
     Source/GUI/ModPanel.h
     Source/GUI/ModPanel.cpp
+    Source/GUI/FxPanel.h
+    Source/GUI/FxPanel.cpp
     Source/GUI/BandsEqPanel.h
     Source/GUI/BandsEqPanel.cpp
 )

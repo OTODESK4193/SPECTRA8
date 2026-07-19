@@ -18,6 +18,7 @@
 #include "DSP/ModMatrix.h"
 #include "DSP/PitchTracker.h"
 #include "DSP/Limiter.h"
+#include "DSP/FxChain.h"
 
 class SPECTRA8AudioProcessor : public juce::AudioProcessor 
 {
@@ -113,6 +114,7 @@ private:
     PostBandEq mPostEq;                   // フェーズ2 M3: LPC出力へBANDS EQをポスト適用
     ExcitationEngine mExcitationEngine;
     ModMatrix mModMatrix;
+    FxChain mFxChain;                     // 後段FX (4スロット直列)
     PitchTracker mPitchTracker;
     BrickLimiter mLimiter;
 

@@ -33,5 +33,11 @@ namespace SpectraColors
     inline const juce::Colour accentExcitation = pink;      // EXCITATION タブ
     inline const juce::Colour accentMod        = lilac;     // MOD MATRIX タブ
     inline const juce::Colour accentBands      = mint;      // BANDS EQ タブ
+    inline const juce::Colour accentFx         = babyBlue;  // FX タブ
     inline const juce::Colour accentEnv        = peach;     // ADSR
+
+    // モジュレーション表示。白だと背景と値アークに埋もれて見えないため、
+    // どのタブのアクセント色とも被らない明るいピンクを専用に割り当てる。
+    inline const juce::Colour modRange { 0xffff8fb0 };   // 変調レンジ帯
+    inline const juce::Colour modLive  { 0xffffd0dd };   // ライブ位置ドット (帯より明るく)
 }

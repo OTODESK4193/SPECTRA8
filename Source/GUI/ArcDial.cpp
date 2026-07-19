@@ -55,8 +55,13 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
         {
             juce::Path band;
             band.addArc(rx, ry, rw, rw, aLo, aHi, true);
-            g.setColour(juce::Colours::white.withAlpha(0.5f));
-            g.strokePath(band, juce::PathStrokeType(arcThickness + 3.0f,
+
+            // 外側にソフトなグローを敷いてから本体を描く (暗い背景でも輪郭が立つ)
+            g.setColour(SpectraColors::modRange.withAlpha(0.28f));
+            g.strokePath(band, juce::PathStrokeType(arcThickness + 8.0f,
+                         juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.setColour(SpectraColors::modRange.withAlpha(0.95f));
+            g.strokePath(band, juce::PathStrokeType(arcThickness + 3.5f,
                          juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
     }
@@ -92,9 +97,9 @@ void ArcDialLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
         const auto aLive = rotaryStartAngle + live * (rotaryEndAngle - rotaryStartAngle);
         const float dotX = centreX + std::sin(aLive) * radius;
         const float dotY = centreY - std::cos(aLive) * radius;
-        g.setColour(juce::Colours::white.withAlpha(0.30f));
-        g.fillEllipse(dotX - 5.0f, dotY - 5.0f, 10.0f, 10.0f);
-        g.setColour(juce::Colours::white);
-        g.fillEllipse(dotX - 2.6f, dotY - 2.6f, 5.2f, 5.2f);
+        g.setColour(SpectraColors::modRange.withAlpha(0.40f));
+        g.fillEllipse(dotX - 6.0f, dotY - 6.0f, 12.0f, 12.0f);
+        g.setColour(SpectraColors::modLive);
+        g.fillEllipse(dotX - 3.0f, dotY - 3.0f, 6.0f, 6.0f);
     }
 }

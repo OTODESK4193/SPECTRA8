@@ -10,6 +10,7 @@
 #include "GUI/ExcitationPanel.h"
 #include "GUI/ModPanel.h"
 #include "GUI/BandsEqPanel.h"
+#include "GUI/FxPanel.h"
 
 class SPECTRA8AudioProcessorEditor : public juce::AudioProcessorEditor,
                                      public juce::Timer 
@@ -27,18 +28,20 @@ private:
 
     SPECTRA8AudioProcessor& audioProcessor;
     
-    // タブ選択ボタン (4つ)
+    // タブ選択ボタン (5つ)
     juce::TextButton mTabVocoderBtn   { "VOCODER" };
     juce::TextButton mTabExcitationBtn { "EXCITATION" };
     juce::TextButton mTabModBtn        { "MOD MATRIX" };
+    juce::TextButton mTabFxBtn         { "FX" };
     juce::TextButton mTabBandsEqBtn    { "BANDS EQ" };
 
-    int mActiveTab = 0; // 0: VOCODER, 1: EXCITATION, 2: MOD, 3: BANDS EQ
+    int mActiveTab = 0; // 0: VOCODER, 1: EXCITATION, 2: MOD, 3: FX, 4: BANDS EQ
 
     // タブパネルの実体
     VocoderPanel mVocoderPanel;
     ExcitationPanel mExcitationPanel;
     ModPanel mModPanel;
+    FxPanel mFxPanel;
     BandsEqPanel mBandsEqPanel;
 
     // HUD (デバッグ・ステータス表示用)

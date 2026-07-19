@@ -11,6 +11,7 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
       mVocoderPanel(p),
       mExcitationPanel(p),
       mModPanel(p.apvts),
+      mFxPanel(p),
       mBandsEqPanel(p.apvts, p.getBandGains(), p.getBandLevelsForUi())
 {
     // ボタンのスタイルとリスナー初期化
@@ -29,12 +30,14 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
     setupTabButton(mTabVocoderBtn, 0);
     setupTabButton(mTabExcitationBtn, 1);
     setupTabButton(mTabModBtn, 2);
-    setupTabButton(mTabBandsEqBtn, 3);
+    setupTabButton(mTabFxBtn, 3);
+    setupTabButton(mTabBandsEqBtn, 4);
 
     // タブパネルを追加
     addChildComponent(mVocoderPanel);
     addChildComponent(mExcitationPanel);
     addChildComponent(mModPanel);
+    addChildComponent(mFxPanel);
     addChildComponent(mBandsEqPanel);
 
     // HUD の初期化
@@ -87,15 +90,17 @@ void SPECTRA8AudioProcessorEditor::resized()
     auto headerArea = r.removeFromTop(36);
     
     // タブ選択ボタンの配置 (ヘッダーの右半分に並べる)
-    const int tabW = 96;
+    // タブは5つ。96pxのままだとヘッダー左のタイトルに重なるため88pxへ
+    const int tabW = 88;
     const int tabH = 24;
-    int tabX = getWidth() - (tabW * 4) - 16;
+    int tabX = getWidth() - (tabW * 5) - 16;
     const int tabY = (headerArea.getHeight() - tabH) / 2;
 
     mTabVocoderBtn.setBounds(tabX, tabY, tabW, tabH);
     mTabExcitationBtn.setBounds(tabX + tabW, tabY, tabW, tabH);
     mTabModBtn.setBounds(tabX + tabW * 2, tabY, tabW, tabH);
-    mTabBandsEqBtn.setBounds(tabX + tabW * 3, tabY, tabW, tabH);
+    mTabFxBtn.setBounds(tabX + tabW * 3, tabY, tabW, tabH);
+    mTabBandsEqBtn.setBounds(tabX + tabW * 4, tabY, tabW, tabH);
 
     // 2. HUD（下部）のレイアウト
     auto hudArea = r.removeFromBottom(20);
@@ -105,6 +110,7 @@ void SPECTRA8AudioProcessorEditor::resized()
     mVocoderPanel.setBounds(r);
     mExcitationPanel.setBounds(r);
     mModPanel.setBounds(r);
+    mFxPanel.setBounds(r);
     mBandsEqPanel.setBounds(r);
 }
 
@@ -120,13 +126,15 @@ void SPECTRA8AudioProcessorEditor::selectTab(int tabIndex)
     mVocoderPanel.setVisible(mActiveTab == 0);
     mExcitationPanel.setVisible(mActiveTab == 1);
     mModPanel.setVisible(mActiveTab == 2);
-    mBandsEqPanel.setVisible(mActiveTab == 3);
+    mFxPanel.setVisible(mActiveTab == 3);
+    mBandsEqPanel.setVisible(mActiveTab == 4);
 
     // タブに合わせたボタンのトグル状態の再設定
     mTabVocoderBtn.setToggleState(mActiveTab == 0, juce::dontSendNotification);
     mTabExcitationBtn.setToggleState(mActiveTab == 1, juce::dontSendNotification);
     mTabModBtn.setToggleState(mActiveTab == 2, juce::dontSendNotification);
-    mTabBandsEqBtn.setToggleState(mActiveTab == 3, juce::dontSendNotification);
+    mTabFxBtn.setToggleState(mActiveTab == 3, juce::dontSendNotification);
+    mTabBandsEqBtn.setToggleState(mActiveTab == 4, juce::dontSendNotification);
 
     // タブごとのカラーアクセントをボタンに反映して視覚的フィードバックを高める
     auto setBtnHighlight = [](juce::TextButton& btn, bool active, juce::Colour accent)
@@ -139,7 +147,8 @@ void SPECTRA8AudioProcessorEditor::selectTab(int tabIndex)
     setBtnHighlight(mTabVocoderBtn, mActiveTab == 0, SpectraColors::accentVocoder);
     setBtnHighlight(mTabExcitationBtn, mActiveTab == 1, SpectraColors::accentExcitation);
     setBtnHighlight(mTabModBtn, mActiveTab == 2, SpectraColors::accentMod);
-    setBtnHighlight(mTabBandsEqBtn, mActiveTab == 3, SpectraColors::accentBands);
+    setBtnHighlight(mTabFxBtn, mActiveTab == 3, SpectraColors::accentFx);
+    setBtnHighlight(mTabBandsEqBtn, mActiveTab == 4, SpectraColors::accentBands);
 
     repaint();
 }

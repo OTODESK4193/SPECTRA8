@@ -305,6 +305,74 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
             juce::ParameterID(prefix + "wave", 1), prefix + " Wave", ModMatrix::getWaveNames(), 0));
     }
 
+    // --- FX (4スロット直列。GUIからD&Dで並べ替え = Type/Amountの値を入れ替える) ---
+    for (int i = 0; i < FxChain::kNumSlots; ++i)
+    {
+        const juce::String pre = "fx" + juce::String(i + 1);
+        layout.add(std::make_unique<juce::AudioParameterChoice>(
+            juce::ParameterID(pre + "Type", 1), pre + " Type", FxChain::getTypeNames(), 0));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(
+            juce::ParameterID(pre + "Amount", 1), pre + " Amount", 0.0f, 1.0f, 1.0f));
+    }
+
+    // Spectral Resonator
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("resMode", 1), "Res Mode", SpectralResonator::getModeNames(), 0));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("resRoot", 1), "Res Root",
+        juce::NormalisableRange<float>(20.0f, 2000.0f, 0.0f, 0.3f), 110.0f));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("resChord", 1), "Res Chord", SpectralResonator::getChordNames(), 2));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("resFreeMs", 1), "Res Time",
+        juce::NormalisableRange<float>(0.2f, 50.0f, 0.0f, 0.4f), 5.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("resSpread", 1), "Res Spread", 0.0f, 1.0f, 0.4f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("resFeedback", 1), "Res Feedback", 0.0f, 1.0f, 0.85f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("resDamp", 1), "Res Damp", 0.0f, 1.0f, 0.35f));
+
+    // Multiband Drive
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("drvShape", 1), "Drive Shape", MultibandDrive::getShapeNames(), 0));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("drvDrive", 1), "Drive Amount",
+        juce::NormalisableRange<float>(1.0f, 40.0f, 0.0f, 0.4f), 4.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("drvLow", 1), "Drive Low", 0.0f, 1.0f, 0.4f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("drvMid", 1), "Drive Mid", 0.0f, 1.0f, 1.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("drvHigh", 1), "Drive High", 0.0f, 1.0f, 0.7f));
+
+    // Formant Gate
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("gateRate", 1), "Gate Rate", FormantGate::getRateNames(), 4));
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("gatePattern", 1), "Gate Pattern", FormantGate::getPatternNames(), 1));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("gateDepth", 1), "Gate Depth", 0.0f, 1.0f, 1.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("gateVowel", 1), "Gate Vowel", 0.0f, 1.0f, 0.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("gateSmooth", 1), "Gate Smooth", 0.0f, 1.0f, 0.2f));
+
+    // Chorus
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("choRate", 1), "Chorus Rate",
+        juce::NormalisableRange<float>(0.02f, 8.0f, 0.0f, 0.4f), 0.6f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("choDepth", 1), "Chorus Depth", 0.1f, 12.0f, 4.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("choWidth", 1), "Chorus Width", 0.0f, 1.0f, 0.7f));
+
+    // Reverb
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("revSize", 1), "Reverb Size", 0.0f, 1.0f, 0.5f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("revDamp", 1), "Reverb Damp", 0.0f, 0.95f, 0.4f));
+
     // ENV (2基)
     for (int i = 0; i < ModMatrix::kNumEnvs; ++i)
     {
@@ -339,6 +407,7 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     // ホスト48kHz時に常に3倍になる (Tracking使用時に音程が3倍になるバグの原因)。
     mPitchTracker.prepare(LpcVocoder::kInternalSampleRate);
     mLimiter.prepare(sampleRate);
+    mFxChain.prepare(sampleRate);
 
     // ボコーダーモード切替状態の初期化 + PDC報告
     // (LPCモードは分析窓の群遅延 kLatency16k = 窓長/2 @16kHz)
@@ -820,6 +889,58 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             writeR[i] = (dryR * (1.0f - mix) + wetSampleR * mix) * outGain;
         }
         mUpsampleTimeAccum -= (double)num16kSamples;
+    }
+
+    // 5.5 FXチェーン (ボコーダーMix後・出力ゲイン後、リミッターの手前)
+    //     ここに置くのは、Resonator/Driveの効きをMIXノブの結果に対して掛けたい一方で、
+    //     暴れた場合は最終リミッターで受け止められるようにするため。
+    {
+        FxChain::Params fp;
+        for (int s = 0; s < FxChain::kNumSlots; ++s)
+        {
+            const juce::String pre = "fx" + juce::String(s + 1);
+            fp.slot[(size_t)s].type   = (int)apvts.getRawParameterValue(pre + "Type")->load();
+            fp.slot[(size_t)s].amount = apvts.getRawParameterValue(pre + "Amount")->load();
+        }
+        fp.resMode     = (int)apvts.getRawParameterValue("resMode")->load();
+        fp.resRootHz   = apvts.getRawParameterValue("resRoot")->load();
+        fp.resChord    = (int)apvts.getRawParameterValue("resChord")->load();
+        fp.resFreeMs   = apvts.getRawParameterValue("resFreeMs")->load();
+        fp.resSpread   = apvts.getRawParameterValue("resSpread")->load();
+        fp.resFeedback = apvts.getRawParameterValue("resFeedback")->load();
+        fp.resDamp     = apvts.getRawParameterValue("resDamp")->load();
+
+        fp.drvShape = (int)apvts.getRawParameterValue("drvShape")->load();
+        fp.drvDrive = apvts.getRawParameterValue("drvDrive")->load();
+        fp.drvLow   = apvts.getRawParameterValue("drvLow")->load();
+        fp.drvMid   = apvts.getRawParameterValue("drvMid")->load();
+        fp.drvHigh  = apvts.getRawParameterValue("drvHigh")->load();
+
+        fp.gateRate    = (int)apvts.getRawParameterValue("gateRate")->load();
+        fp.gatePattern = (int)apvts.getRawParameterValue("gatePattern")->load();
+        fp.gateDepth   = apvts.getRawParameterValue("gateDepth")->load();
+        fp.gateVowel   = apvts.getRawParameterValue("gateVowel")->load();
+        fp.gateSmooth  = apvts.getRawParameterValue("gateSmooth")->load();
+
+        fp.choRate  = apvts.getRawParameterValue("choRate")->load();
+        fp.choDepth = apvts.getRawParameterValue("choDepth")->load();
+        fp.choWidth = apvts.getRawParameterValue("choWidth")->load();
+
+        fp.revSize = apvts.getRawParameterValue("revSize")->load();
+        fp.revDamp = apvts.getRawParameterValue("revDamp")->load();
+
+        // Gateのテンポ同期用BPM
+        fp.bpm = 120.0;
+        if (auto* pH = getPlayHead())
+            if (auto info = pH->getPosition())
+                if (info->getBpm().hasValue())
+                    fp.bpm = *(info->getBpm());
+
+        mFxChain.syncParameters(fp);
+
+        if (mFxChain.isActive())
+            for (int i = 0; i < numSamples; ++i)
+                mFxChain.processSample(writeL[i], writeR[i]);
     }
 
     // 6. 最終段リミッター
