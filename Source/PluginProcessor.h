@@ -91,6 +91,19 @@ public:
     static juce::String getGlobalWavetableDir();
     static void setGlobalWavetableDir(const juce::String& path);
 
+    // ---- モジュレーション ----
+    // GUI(アークの変調レンジ帯表示)から参照する。
+    const ModMatrix& getModMatrix() const noexcept { return mModMatrix; }
+
+    // 宛先IDを渡すだけで「変調適用済みの実パラメータ値」が返る。
+    //  パラメータID・スケール・掛かり方(線形/オクターブ)はすべてModMatrix側の
+    //  定義に従うため、DSPとGUI表示でスケールがズレる余地が無い。
+    float moddedParam(int dst) const noexcept
+    {
+        const float base = apvts.getRawParameterValue(ModMatrix::destParamId(dst))->load();
+        return ModMatrix::applyMod(dst, base, mModMatrix.get(dst));
+    }
+
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 

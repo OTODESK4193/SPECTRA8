@@ -3,9 +3,11 @@
 // 「VOCODER」タブ・パネル (Granular 準拠)
 // ==========================================
 #include "VocoderPanel.h"
+#include "../PluginProcessor.h"
 
-VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
-    : apvts(state),
+VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
+    : processor(proc),
+      apvts(proc.apvts),
       mBtnLimiter("LIMIT", SpectraColors::rose),
       mBtnFormantFreeze("FREEZE", SpectraColors::accentVocoder)
 {
@@ -114,15 +116,49 @@ VocoderPanel::VocoderPanel(juce::AudioProcessorValueTreeState& state)
     mComboVocoderMode.onChange = [this] { updateEnablement(); };
 
     updateEnablement();
+
+    startTimerHz(30);   // MODレンジ帯の更新
 }
 
 VocoderPanel::~VocoderPanel()
 {
+    stopTimer();
     for (ValueKnob* k : { &mKnobCharacter, &mKnobTracking, &mKnobPitchQuantize, &mKnobFmtShift,
                           &mKnobFmtStretch, &mKnobLofi, &mKnobBasePitch, &mKnobNoiseColor,
                           &mKnobNoise, &mKnobBands, &mKnobResonance, &mKnobAttack, &mKnobDecay,
                           &mKnobSustain, &mKnobRelease, &mKnobMix, &mKnobOutLevel })
         k->setLookAndFeel(nullptr);
+}
+
+// 変調レンジ帯 / ライブ位置ドットの更新。
+//  BANDS はModMatrixの宛先から意図的に外している (変調でフィルタバンク再構築が
+//  走りクリック音が出るため) ので、ここにも登場しない。
+void VocoderPanel::timerCallback()
+{
+    using M = ModMatrix;
+    const auto& mm = processor.getModMatrix();
+
+    const std::pair<ValueKnob*, int> map[] = {
+        { &mKnobCharacter,     M::DstCharacter },
+        { &mKnobTracking,      M::DstTracking },
+        { &mKnobPitchQuantize, M::DstPitchQuantize },
+        { &mKnobFmtShift,      M::DstFormantShift },
+        { &mKnobFmtStretch,    M::DstFormantStretch },
+        { &mKnobLofi,          M::DstLofi },
+        { &mKnobBasePitch,     M::DstBasePitch },
+        { &mKnobNoiseColor,    M::DstNoiseColor },
+        { &mKnobNoise,         M::DstNoise },
+        { &mKnobResonance,     M::DstResonance },
+        { &mKnobAttack,        M::DstAttack },
+        { &mKnobDecay,         M::DstDecay },
+        { &mKnobSustain,       M::DstSustain },
+        { &mKnobRelease,       M::DstRelease },
+        { &mKnobMix,           M::DstMix },
+        { &mKnobOutLevel,      M::DstOutLevel },
+    };
+
+    for (const auto& e : map)
+        ModRing::apply(*e.first, mm, e.second);
 }
 
 void VocoderPanel::updateEnablement()

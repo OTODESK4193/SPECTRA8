@@ -1,74 +1,88 @@
 // ==========================================
 // File: ModPanel.h
 // 「MOD MATRIX」タブ・パネル (Granular 準拠)
+//  - 上段: LFO / ENV のサブタブ切替 (マクロは廃止)
+//      LFO ×3 : Wave / Sync / Rate / Sync Rate
+//      ENV ×2 : A D S R + Loop
+//  - 下段: 6スロット (Source → Dest / Amount / Uni)
+//  変調先ノブ側の「レンジ帯 + ライブ位置」表示は GUI/ModRing.h が担当。
 // ==========================================
 #pragma once
 
 #include <JuceHeader.h>
+#include <array>
+#include <memory>
+#include <vector>
+#include "../DSP/ModMatrix.h"
 #include "ColorPalette.h"
+#include "ValueKnob.h"
+#include "GlowToggle.h"
+#include "ArcDial.h"
 
 class ModPanel : public juce::Component
 {
 public:
-    ModPanel(juce::AudioProcessorValueTreeState& state);
-    ~ModPanel();
+    explicit ModPanel(juce::AudioProcessorValueTreeState& state);
+    ~ModPanel() override;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
 
 private:
+    void setSourceTab(int t);          // 0 = LFO, 1 = ENV
+    void styleTab(juce::TextButton& b, bool active);
+    void setupKnob(ValueKnob& k, const juce::String& paramID);
+    void setupCombo(juce::ComboBox& c, const juce::StringArray& items, const juce::String& paramID);
+    void setupToggle(std::unique_ptr<GlowToggle>& b, const juce::String& text,
+                     juce::Colour accent, const juce::String& paramID);
+    void setupSmallLabel(juce::Label& l, bool bold);
+
     juce::AudioProcessorValueTreeState& apvts;
 
-    // LFO / ENV 設定用コンポーネント (タブ式または並列表示)
-    // 今回はコンパクトにLFO 1〜4、ENV 1〜3の設定を上部に並列配置
+    // --- ソース・サブタブ ---
+    juce::TextButton mLfoTabBtn { "LFO" };
+    juce::TextButton mEnvTabBtn { "ENV" };
+    int mActiveSrcTab = 0;
 
+    // --- LFO ×3 ---
     struct LfoGui
     {
-        juce::Slider rateSlider;
-        juce::ToggleButton syncButton { "SYNC" };
-        juce::ComboBox rateSyncCombo;
-        juce::ComboBox waveCombo;
         juce::Label label;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rateAttach;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> syncAttach;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> rateSyncAttach;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> waveAttach;
+        juce::ComboBox waveBox;
+        juce::ComboBox syncRateBox;
+        ValueKnob rateKnob;
+        juce::Label rateLbl { {}, "RATE" };
+        std::unique_ptr<GlowToggle> syncBtn;
     };
+    std::array<LfoGui, ModMatrix::kNumLfos> mLfos;
 
+    // --- ENV ×2 ---
     struct EnvGui
     {
-        juce::Slider attackSlider;
-        juce::Slider decaySlider;
-        juce::Slider sustainSlider;
-        juce::Slider releaseSlider;
-        juce::ToggleButton loopButton { "LOOP" };
         juce::Label label;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> aAttach, dAttach, sAttach, rAttach;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> loopAttach;
+        ValueKnob a, d, s, r;
+        juce::Label la { {}, "A" }, ld { {}, "D" }, ls { {}, "S" }, lr { {}, "R" };
+        std::unique_ptr<GlowToggle> loopBtn;
     };
+    std::array<EnvGui, ModMatrix::kNumEnvs> mEnvs;
 
-    std::array<LfoGui, 4> mLfoGuis;
-    std::array<EnvGui, 3> mEnvGuis;
-
-    // 12スロットのモジュレーションマトリクス (2列×6行)
+    // --- スロット ×6 ---
     struct SlotGui
     {
-        juce::ComboBox srcCombo;
-        juce::ComboBox dstCombo;
-        juce::Slider amtSlider;
-        juce::ToggleButton uniButton { "UNI" };
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> srcAttach;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> dstAttach;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> amtAttach;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> uniAttach;
+        juce::Label rowLabel;
+        juce::ComboBox srcBox;
+        juce::ComboBox dstBox;
+        ValueKnob amtKnob;
+        std::unique_ptr<GlowToggle> uniBtn;
     };
+    std::array<SlotGui, ModMatrix::kNumSlots> mSlots;
+    juce::Label mSlotHdr { {}, "SOURCE                    DESTINATION                 AMT" };
 
-    std::array<SlotGui, 12> mSlotGuis;   // ModMatrix::kNumSlots と一致 (2列×6行)
+    std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>>   mSliderAttach;
+    std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> mComboAttach;
+    std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>>   mButtonAttach;
 
-    // ビューポート (スロットが画面に収まりきらない場合に備えてスクロール可能にする)
-    juce::Viewport mViewport;
-    juce::Component mSlotContainer;
+    ArcDialLookAndFeel mArcLookAndFeel;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ModPanel)
 };

@@ -142,10 +142,36 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
 
     refreshWaveformDisplay();
     updateBrowseVisibility();
+
+    startTimerHz(30);   // MODレンジ帯の更新
+}
+
+// 変調レンジ帯 / ライブ位置ドットの更新
+void ExcitationPanel::timerCallback()
+{
+    using M = ModMatrix;
+    const auto& mm = processor.getModMatrix();
+
+    const std::pair<ValueKnob*, int> map[] = {
+        { &mKnobWtPos,      M::DstWtPos },
+        { &mKnobPulseWidth, M::DstPulseWidth },
+        { &mKnobPorta,      M::DstPorta },
+        { &mKnobDetune,     M::DstDetune },
+        { &mKnobBendAmt,    M::DstBendAmt },
+        { &mKnobBendShift,  M::DstBendShift },
+        { &mKnobSyncAmt,    M::DstSyncAmt },
+        { &mKnobSyncShift,  M::DstSyncShift },
+        { &mKnobVocAmt,     M::DstVocAmt },
+        { &mKnobVocShift,   M::DstVocShift },
+    };
+
+    for (const auto& e : map)
+        ModRing::apply(*e.first, mm, e.second);
 }
 
 ExcitationPanel::~ExcitationPanel()
 {
+    stopTimer();
     // ListBox破棄時のダングリングモデル参照防止
     mCatList.setModel(nullptr);
     mWtList.setModel(nullptr);

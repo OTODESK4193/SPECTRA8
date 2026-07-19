@@ -14,17 +14,25 @@
 #include "ValueKnob.h"
 #include "GlowToggle.h"
 #include "ArcDial.h"
+#include "ModRing.h"
 
-class VocoderPanel : public juce::Component
+class SPECTRA8AudioProcessor;
+
+class VocoderPanel : public juce::Component,
+                     private juce::Timer
 {
 public:
-    VocoderPanel(juce::AudioProcessorValueTreeState& state);
-    ~VocoderPanel();
+    explicit VocoderPanel(SPECTRA8AudioProcessor& proc);
+    ~VocoderPanel() override;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
 
 private:
+    // 30Hzで各ノブへ変調レンジ帯とライブ位置を反映
+    void timerCallback() override;
+
+    SPECTRA8AudioProcessor& processor;
     juce::AudioProcessorValueTreeState& apvts;
 
     // --- ノブ 16基 ---

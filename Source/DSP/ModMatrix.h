@@ -2,11 +2,18 @@
 // File: ModMatrix.h
 // モジュレーションマトリクス（ブロックレート処理 / Granular 準拠）
 //
-//  Sources : LFO×4 (テンポ同期/フリー, Sine/Tri/Saw/Sqr/S&H/Chaos)
-//            ENV×3 (ループ可能ADSR), Velocity, Note, ModWheel,
-//            Random(ノート毎S&H), Macro×4
-//  Slots   : 16 ( Source × Amount(-1..+1) × Uni/Bipolar → Destination )
-//  Dests   : SPECTRA8 固有 (開発計画書 第2版 ③MOD MATRIXタブ準拠)
+//  Sources : LFO×3 (テンポ同期/フリー, Sine/Tri/Saw/Sqr/S&H/Chaos)
+//            ENV×2 (ループ可能ADSR), Velocity, Note, ModWheel, Random(ノート毎S&H)
+//  Slots   : 6 ( Source × Amount(-1..+1) × Uni/Bipolar → Destination )
+//  Dests   : VOCODER / EXCITATION タブの全ノブ (26個)
+//            ※BANDS(bandCount)のみ除外。変調するとフィルタバンク再構築が走り
+//              切替の度にクリック音が出るため。
+//
+//  【重要】宛先の定義は destParamId / destScale / destKind の3点セットで完結させ、
+//  適用は applyMod() に一本化している。DSP側とGUIのアーク表示が同じ関数を通るので、
+//  スケールの食い違い(表示と実際の効きがズレる)が構造的に起きない。
+//  宛先を追加するときは Dst / getDestNames / destParamId / destScale / destKind の
+//  5箇所を必ず揃えること (順序も一致させる)。
 // ==========================================
 #pragma once
 
@@ -17,43 +24,57 @@
 class ModMatrix
 {
 public:
-    static constexpr int kNumLfos = 4;
-    static constexpr int kNumEnvs = 3;
-    static constexpr int kNumMacros = 4;
-    static constexpr int kNumSlots = 12;  // 2列×6行で全スロットが常時表示できる数 (旧16)
+    static constexpr int kNumLfos = 3;
+    static constexpr int kNumEnvs = 2;
+    static constexpr int kNumSlots = 6;
 
     enum Src
     {
         SrcNone = 0,
-        SrcLfo1, SrcLfo2, SrcLfo3, SrcLfo4,
-        SrcEnv1, SrcEnv2, SrcEnv3,
+        SrcLfo1, SrcLfo2, SrcLfo3,
+        SrcEnv1, SrcEnv2,
         SrcVelocity, SrcNote, SrcModWheel, SrcRandom,
-        SrcMacro1, SrcMacro2, SrcMacro3, SrcMacro4,
         NumSrcs
     };
 
     enum Dst
     {
         DstNone = 0,
-        DstCharacter,
+        // ---- VOCODER タブ ----
+        DstCharacter, DstTracking, DstPitchQuantize,
         DstFormantShift, DstFormantStretch,
-        DstWtPos, DstPulseWidth, DstDetune, DstNoise, DstLofi,
+        DstLofi, DstBasePitch, DstNoiseColor, DstNoise, DstResonance,
+        DstAttack, DstDecay, DstSustain, DstRelease,
         DstMix, DstOutLevel,
+        // ---- EXCITATION タブ ----
+        DstWtPos, DstPulseWidth, DstPorta, DstDetune,
+        DstBendAmt, DstBendShift, DstSyncAmt, DstSyncShift,
+        DstVocAmt, DstVocShift,
         NumDsts
     };
 
+    // 変調の掛かり方。対数的なパラメータ(周波数/時間)は加算だと低域側で使い物に
+    // ならないので、オクターブ倍率で掛ける。
+    enum Kind { KindLinear = 0, KindExpOct };
+
     static juce::StringArray getSourceNames()
     {
-        return { "None", "LFO 1", "LFO 2", "LFO 3", "LFO 4", "ENV 1", "ENV 2", "ENV 3",
-                 "Velocity", "Note", "Mod Wheel", "Random",
-                 "Macro 1", "Macro 2", "Macro 3", "Macro 4" };
+        return { "None", "LFO 1", "LFO 2", "LFO 3", "ENV 1", "ENV 2",
+                 "Velocity", "Note", "Mod Wheel", "Random" };
     }
     static juce::StringArray getDestNames()
     {
-        return { "None", "Character",
+        return { "None",
+                 // VOCODER
+                 "Character", "Tracking", "Pitch Quantize",
                  "Formant Shift", "Formant Stretch",
-                 "WT Position", "Pulse Width", "Detune", "Noise", "LoFi",
-                 "Mix", "Out Level" };
+                 "LoFi", "Base Pitch", "Noise Color", "Noise", "Resonance",
+                 "Attack", "Decay", "Sustain", "Release",
+                 "Mix", "Out Level",
+                 // EXCITATION
+                 "WT Position", "Pulse Width", "Porta", "Detune",
+                 "Bend", "Bend Sym", "Sync", "Sync Ph",
+                 "Vocode", "Vowel" };
     }
     static juce::StringArray getWaveNames()
     {
@@ -65,23 +86,104 @@ public:
                  "1/8", "1/8.", "1/8T", "1/16", "1/16.", "1/16T", "1/32" };
     }
 
-    // 変調1.0あたりの実パラメータ単位スケール（DSPとGUIアーク表示で共有）
+    // 宛先に対応するAPVTSのパラメータID。GUIのノブ紐付けにも使う。
+    static const char* destParamId(int dst) noexcept
+    {
+        switch (dst)
+        {
+        case DstCharacter:      return "character";
+        case DstTracking:       return "tracking";
+        case DstPitchQuantize:  return "pitchQuantize";
+        case DstFormantShift:   return "formantShift";
+        case DstFormantStretch: return "formantStretch";
+        case DstLofi:           return "lofi";
+        case DstBasePitch:      return "basePitch";
+        case DstNoiseColor:     return "noiseColor";
+        case DstNoise:          return "noise";
+        case DstResonance:      return "resonance";
+        case DstAttack:         return "attack";
+        case DstDecay:          return "decay";
+        case DstSustain:        return "sustain";
+        case DstRelease:        return "release";
+        case DstMix:            return "mix";
+        case DstOutLevel:       return "outputLevel";
+        case DstWtPos:          return "wavetablePosition";
+        case DstPulseWidth:     return "pulseWidth";
+        case DstPorta:          return "porta";
+        case DstDetune:         return "detune";
+        case DstBendAmt:        return "bendAmt";
+        case DstBendShift:      return "bendShift";
+        case DstSyncAmt:        return "syncAmt";
+        case DstSyncShift:      return "syncShift";
+        case DstVocAmt:         return "vocAmt";
+        case DstVocShift:       return "vocShift";
+        default:                return "";
+        }
+    }
+
+    // 変調1.0あたりの実パラメータ単位スケール。
+    //  KindLinear : 実単位での加算量  KindExpOct : 倍率のオクターブ数
     static float destScale(int dst) noexcept
     {
         switch (dst)
         {
+        // --- VOCODER ---
         case DstCharacter:      return 1.0f;    // 0..1
+        case DstTracking:       return 100.0f;  // 0..100 %
+        case DstPitchQuantize:  return 100.0f;  // 0..100 %
         case DstFormantShift:   return 24.0f;   // ±24 semitones
         case DstFormantStretch: return 0.75f;   // 0.5..2.0 の半レンジ
+        case DstLofi:           return 1.0f;    // 0..1
+        case DstBasePitch:      return 2.0f;    // ±2 oct  (50..500Hz)
+        case DstNoiseColor:     return 3.0f;    // ±3 oct  (100..10kHz)
+        case DstNoise:          return 100.0f;  // ±100 %
+        case DstResonance:      return 1.5f;    // ±1.5 oct (0.3..3.0)
+        case DstAttack:         return 3.0f;    // ±3 oct  (0.001..5s)
+        case DstDecay:          return 3.0f;
+        case DstSustain:        return 1.0f;    // 0..1
+        case DstRelease:        return 3.0f;
+        case DstMix:            return 100.0f;  // ±100 %
+        case DstOutLevel:       return 24.0f;   // ±24 dB (dBは既に対数なので線形加算)
+        // --- EXCITATION ---
         case DstWtPos:          return 1.0f;    // 0..1
         case DstPulseWidth:     return 45.0f;   // ±45 %
-        case DstDetune:         return 600.0f;  // ±600 cents (UI単位)
-        case DstNoise:          return 100.0f;  // ±100 %
-        case DstLofi:           return 1.0f;    // 0..1
-        case DstMix:            return 100.0f;  // ±100 %
-        case DstOutLevel:       return 24.0f;   // ±24 dB
+        case DstPorta:          return 1.0f;    // ±1 s (0..2)
+        case DstDetune:         return 600.0f;  // ±600 cents
+        case DstBendAmt:        return 1.0f;    // -1..+1
+        case DstBendShift:      return 1.0f;
+        case DstSyncAmt:        return 1.0f;    // 0..1
+        case DstSyncShift:      return 1.0f;    // -1..+1
+        case DstVocAmt:         return 1.0f;    // 0..1
+        case DstVocShift:       return 1.0f;    // -1..+1
         default:                return 0.0f;
         }
+    }
+
+    static int destKind(int dst) noexcept
+    {
+        switch (dst)
+        {
+        case DstBasePitch:
+        case DstNoiseColor:
+        case DstResonance:
+        case DstAttack:
+        case DstDecay:
+        case DstRelease:
+            return KindExpOct;
+        default:
+            return KindLinear;
+        }
+    }
+
+    // 変調適用の単一の真実源。DSPもGUIのアーク表示もこれを通す。
+    //  base    : ノブの生値 (実パラメータ単位)
+    //  modVal  : 合成済み変調量 (概ね -1..+1)
+    static float applyMod(int dst, float base, float modVal) noexcept
+    {
+        const float s = destScale(dst);
+        if (destKind(dst) == KindExpOct)
+            return base * std::pow(2.0f, modVal * s);
+        return base + modVal * s;
     }
 
     struct Params
@@ -92,7 +194,6 @@ public:
 
         std::array<Lfo, kNumLfos> lfo;
         std::array<Env, kNumEnvs> env;
-        std::array<float, kNumMacros> macro { 0.5f, 0.5f, 0.5f, 0.5f };
         std::array<Slot, kNumSlots> slot;
         double bpm = 120.0;
     };
@@ -232,13 +333,11 @@ public:
             }
         }
 
-        // --- MIDI / Macro ---
+        // --- MIDI ---
         src[SrcVelocity] = velocity;
         src[SrcNote] = noteNorm;
         src[SrcModWheel] = modWheel;
         src[SrcRandom] = randomSH;
-        for (int i = 0; i < kNumMacros; ++i)
-            src[SrcMacro1 + i] = p.macro[(size_t)i];
 
         // --- スロット合成 (Uni/Bipolar極性変換 + レンジ算出) ---
         destAccum.fill(0.0f);
@@ -276,7 +375,7 @@ public:
     float getRangeMax(int dst) const noexcept { return rangeMax[(size_t)juce::jlimit(0, (int)NumDsts - 1, dst)]; }
 
     // ソースが本来バイポーラ(±1)か: LFOのみ
-    static bool isBipolarSource(int s) noexcept { return s >= SrcLfo1 && s <= SrcLfo4; }
+    static bool isBipolarSource(int s) noexcept { return s >= SrcLfo1 && s <= SrcLfo3; }
 
 private:
     struct LfoState

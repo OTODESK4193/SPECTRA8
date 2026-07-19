@@ -24,6 +24,7 @@
 #include "ValueKnob.h"
 #include "ArcDial.h"
 #include "GlowToggle.h"
+#include "ModRing.h"
 
 class SPECTRA8AudioProcessor;
 
@@ -270,7 +271,8 @@ private:
     float mVocHarm[3] = { 32.0f, 55.0f, 120.0f };
 };
 
-class ExcitationPanel : public juce::Component
+class ExcitationPanel : public juce::Component,
+                        private juce::Timer
 {
 public:
     explicit ExcitationPanel(SPECTRA8AudioProcessor& proc);
@@ -280,6 +282,9 @@ public:
     void resized() override;
 
 private:
+    // 30Hzで各ノブへ変調レンジ帯とライブ位置を反映
+    void timerCallback() override;
+
     SPECTRA8AudioProcessor& processor;
     juce::AudioProcessorValueTreeState& apvts;
 

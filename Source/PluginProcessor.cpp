@@ -277,7 +277,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("release", 1), "Release", 0.001f, 5.0f, 0.2f));
 
-    // --- モジュレーションマトリクスパラメータ (12スロット = ModMatrix::kNumSlots) ---
+    // --- モジュレーションマトリクスパラメータ (6スロット = ModMatrix::kNumSlots) ---
     for (int i = 0; i < ModMatrix::kNumSlots; ++i)
     {
         const juce::String prefix = "slot" + juce::String(i);
@@ -291,8 +291,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
             juce::ParameterID(prefix + "uni", 1), prefix + " Uni", false));
     }
 
-    // LFO (4基)
-    for (int i = 0; i < 4; ++i)
+    // LFO (3基)
+    for (int i = 0; i < ModMatrix::kNumLfos; ++i)
     {
         const juce::String prefix = "lfo" + juce::String(i);
         layout.add(std::make_unique<juce::AudioParameterFloat>(
@@ -305,8 +305,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
             juce::ParameterID(prefix + "wave", 1), prefix + " Wave", ModMatrix::getWaveNames(), 0));
     }
 
-    // ENV (3基)
-    for (int i = 0; i < 3; ++i)
+    // ENV (2基)
+    for (int i = 0; i < ModMatrix::kNumEnvs; ++i)
     {
         const juce::String prefix = "env" + juce::String(i);
         layout.add(std::make_unique<juce::AudioParameterFloat>(
@@ -552,7 +552,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 mModParams.slot[(size_t)i].amt = apvts.getRawParameterValue(prefix + "amt")->load();
                 mModParams.slot[(size_t)i].uni = (apvts.getRawParameterValue(prefix + "uni")->load() >= 0.5f);
             }
-            for (int i = 0; i < 4; ++i)
+            for (int i = 0; i < ModMatrix::kNumLfos; ++i)
             {
                 const juce::String prefix = "lfo" + juce::String(i);
                 mModParams.lfo[(size_t)i].rateHz = apvts.getRawParameterValue(prefix + "rate")->load();
@@ -560,7 +560,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 mModParams.lfo[(size_t)i].rateSync = (int)(apvts.getRawParameterValue(prefix + "rateSync")->load());
                 mModParams.lfo[(size_t)i].wave = (int)(apvts.getRawParameterValue(prefix + "wave")->load());
             }
-            for (int i = 0; i < 3; ++i)
+            for (int i = 0; i < ModMatrix::kNumEnvs; ++i)
             {
                 const juce::String prefix = "env" + juce::String(i);
                 mModParams.env[(size_t)i].attack = apvts.getRawParameterValue(prefix + "attack")->load();
@@ -572,25 +572,21 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
             mModMatrix.processBlock(32, mModParams);
 
-            // モジュレーションが適用された実効値の算出
-            auto getModVal = [this](const juce::String& paramId, int dstType) -> float
-            {
-                float base = apvts.getRawParameterValue(paramId)->load();
-                float mod = mModMatrix.get(dstType) * ModMatrix::destScale(dstType);
-                return base + mod;
-            };
+            // 変調適用済みの実効値。moddedParam() は宛先IDだけで
+            // パラメータID・スケール・掛かり方が決まる (PluginProcessor.h 参照)。
+            auto modded = [this](int dst) { return moddedParam(dst); };
 
-            effectiveCharacter = juce::jlimit(0.0f, 1.0f, getModVal("character", ModMatrix::DstCharacter));
-            effectiveFormantShift = juce::jlimit(-24.0f, 24.0f, getModVal("formantShift", ModMatrix::DstFormantShift));
-            effectiveFormantStretch = juce::jlimit(0.5f, 2.0f, getModVal("formantStretch", ModMatrix::DstFormantStretch));
-            
-            const float wtPos = juce::jlimit(0.0f, 1.0f, getModVal("wavetablePosition", ModMatrix::DstWtPos));
-            const float pulseWidth = juce::jlimit(5.0f, 95.0f, getModVal("pulseWidth", ModMatrix::DstPulseWidth)) * 0.01f;
-            const float detune = juce::jlimit(0.0f, 1200.0f, getModVal("detune", ModMatrix::DstDetune));
-            const float lofi = juce::jlimit(0.0f, 1.0f, getModVal("lofi", ModMatrix::DstLofi));
+            effectiveCharacter = juce::jlimit(0.0f, 1.0f, modded(ModMatrix::DstCharacter));
+            effectiveFormantShift = juce::jlimit(-24.0f, 24.0f, modded(ModMatrix::DstFormantShift));
+            effectiveFormantStretch = juce::jlimit(0.5f, 2.0f, modded(ModMatrix::DstFormantStretch));
+
+            const float wtPos = juce::jlimit(0.0f, 1.0f, modded(ModMatrix::DstWtPos));
+            const float pulseWidth = juce::jlimit(5.0f, 95.0f, modded(ModMatrix::DstPulseWidth)) * 0.01f;
+            const float detune = juce::jlimit(0.0f, 1200.0f, modded(ModMatrix::DstDetune));
+            const float lofi = juce::jlimit(0.0f, 1.0f, modded(ModMatrix::DstLofi));
 
             // --- NOISE± (BitSpeek式) → ExcitationEngineへ渡す実効ノイズmix(0..1)を算出 ---
-            const float noiseSigned = juce::jlimit(-100.0f, 100.0f, getModVal("noise", ModMatrix::DstNoise)) * 0.01f; // -1..+1
+            const float noiseSigned = juce::jlimit(-100.0f, 100.0f, modded(ModMatrix::DstNoise)) * 0.01f; // -1..+1
             // 有声度の平滑化(入力音声のV/UV)。無声ほど自動でノイズ励起へ。
             const float voicedNow = mPitchTracker.isVoiced() ? 1.0f : 0.0f;
             mVoicedSmooth += 0.25f * (voicedNow - mVoicedSmooth);
@@ -607,25 +603,24 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 noise = juce::jmax(0.0f, noiseSigned);
             }
 
-            const float porta = apvts.getRawParameterValue("porta")->load();
+            const float porta = juce::jlimit(0.0f, 2.0f, modded(ModMatrix::DstPorta));
             const int waveform = (int)(apvts.getRawParameterValue("waveform")->load());
 
-            const float attack = apvts.getRawParameterValue("attack")->load();
-            const float decay = apvts.getRawParameterValue("decay")->load();
-            const float sustain = apvts.getRawParameterValue("sustain")->load();
-            const float release = apvts.getRawParameterValue("release")->load();
-            
-            float noiseColor = 1000.0f;
-            if (auto* p = apvts.getRawParameterValue("noiseColor"))
-                noiseColor = p->load();
+            // ADSRはオクターブ倍率変調 (0.001〜5sを対数的に動かす)
+            const float attack  = juce::jlimit(0.001f, 5.0f, modded(ModMatrix::DstAttack));
+            const float decay   = juce::jlimit(0.001f, 5.0f, modded(ModMatrix::DstDecay));
+            const float sustain = juce::jlimit(0.0f, 1.0f, modded(ModMatrix::DstSustain));
+            const float release = juce::jlimit(0.001f, 5.0f, modded(ModMatrix::DstRelease));
+
+            const float noiseColor = juce::jlimit(100.0f, 10000.0f, modded(ModMatrix::DstNoiseColor));
 
             const int detuneMode = (int)(apvts.getRawParameterValue("detuneMode")->load());
-            const float bendAmt   = apvts.getRawParameterValue("bendAmt")->load();
-            const float bendShift = apvts.getRawParameterValue("bendShift")->load();
-            const float syncAmt   = apvts.getRawParameterValue("syncAmt")->load();
-            const float syncShift = apvts.getRawParameterValue("syncShift")->load();
-            const float vocAmt    = apvts.getRawParameterValue("vocAmt")->load();
-            const float vocShift  = apvts.getRawParameterValue("vocShift")->load();
+            const float bendAmt   = juce::jlimit(-1.0f, 1.0f, modded(ModMatrix::DstBendAmt));
+            const float bendShift = juce::jlimit(-1.0f, 1.0f, modded(ModMatrix::DstBendShift));
+            const float syncAmt   = juce::jlimit(0.0f, 1.0f, modded(ModMatrix::DstSyncAmt));
+            const float syncShift = juce::jlimit(-1.0f, 1.0f, modded(ModMatrix::DstSyncShift));
+            const float vocAmt    = juce::jlimit(0.0f, 1.0f, modded(ModMatrix::DstVocAmt));
+            const float vocShift  = juce::jlimit(-1.0f, 1.0f, modded(ModMatrix::DstVocShift));
 
             // モジュール側の同期
             mExcitationEngine.syncParameters(waveform, wtPos, pulseWidth, detune, noise, lofi, porta,
@@ -658,8 +653,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         const float pitchHz = std::exp2(mPitchLogSmooth);
 
         // Tracking パラメータの適用 (Autoモードでも0%のときは基準ピッチに固定しうねりを防止)
-        float basePitch = apvts.getRawParameterValue("basePitch")->load();
-        float tracking = apvts.getRawParameterValue("tracking")->load() * 0.01f;
+        float basePitch = juce::jlimit(50.0f, 500.0f, moddedParam(ModMatrix::DstBasePitch));
+        float tracking = juce::jlimit(0.0f, 100.0f, moddedParam(ModMatrix::DstTracking)) * 0.01f;
         float activePitch = basePitch + (pitchHz - basePitch) * tracking;
 
         // 安全対策: activePitch が異常値のときは basePitch に戻す
@@ -670,7 +665,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         //  - スケールマスクで許可音のみにスナップ(Chromatic=全音)
         //  - ヒステリシス: 現在保持中の音より「0.3半音以上近い」別の許可音が
         //    現れたときだけ切替える。境界付近での音程チャタリング(ワブル)を防止。
-        float qAmt = apvts.getRawParameterValue("pitchQuantize")->load() * 0.01f;
+        float qAmt = juce::jlimit(0.0f, 100.0f, moddedParam(ModMatrix::DstPitchQuantize)) * 0.01f;
         if (qAmt > 0.001f && activePitch > 20.0f && !std::isnan(activePitch))
         {
             static constexpr uint16_t kScaleMasks[5] = {
@@ -726,7 +721,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float wetR = 0.0f;
 
         const int bandCount = (int)apvts.getRawParameterValue("bandCount")->load();
-        const float resonance = apvts.getRawParameterValue("resonance")->load();
+        const float resonance = juce::jlimit(0.3f, 3.0f, moddedParam(ModMatrix::DstResonance));
 
         auto renderFilterbank = [&](float& l, float& r)
         {
@@ -781,9 +776,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     // 5. アップサンプリング & ドライ・ウェットブレンド
     //    MIX/OUT LEVEL は20msランプでサンプル毎に平滑 (ジッパーノイズ対策)
-    mMixSm.setTargetValue(apvts.getRawParameterValue("mix")->load() * 0.01f);
+    mMixSm.setTargetValue(juce::jlimit(0.0f, 100.0f, moddedParam(ModMatrix::DstMix)) * 0.01f);
     mOutGainSm.setTargetValue(
-        std::pow(10.0f, apvts.getRawParameterValue("outputLevel")->load() / 20.0f));
+        std::pow(10.0f, juce::jlimit(-60.0f, 12.0f, moddedParam(ModMatrix::DstOutLevel)) / 20.0f));
 
     // ゲートゲインの算出 (リニア入力エンベロープに基づくソフトゲート)
     float envVal = mInputEnvelope.load();
