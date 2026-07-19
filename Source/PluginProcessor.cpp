@@ -1024,8 +1024,14 @@ void SPECTRA8AudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
-    
-    // Band EQ ゲインを追加でXMLにシリアライズ
+
+    // 【重要】setStateInformation の replaceState で BAND_EQ_GAINS ごと apvts.state に
+    // 取り込まれるため、copyState() には既に前回のノードが含まれている。
+    // そのまま createNewChildElement すると保存の度にノードが増殖し、
+    // 復元時の getChildByName が「一番古いノード」を拾って EQ が過去の値に戻る
+    // (勝手に値が変わる/リセットが効かない、の原因)。必ず既存分を消してから追加する。
+    xml->deleteAllChildElementsWithTagName("BAND_EQ_GAINS");
+
     auto* eqNode = xml->createNewChildElement("BAND_EQ_GAINS");
     for (int i = 0; i < 48; ++i)
     {
@@ -1040,19 +1046,24 @@ void SPECTRA8AudioProcessor::setStateInformation(const void* data, int sizeInByt
     std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
     if (xmlState != nullptr)
     {
-        if (xmlState->hasTagName(apvts.state.getType()))
-        {
-            apvts.replaceState(juce::ValueTree::fromXml(*xmlState));
-        }
-
-        // Band EQ ゲインの復元
+        // Band EQ ゲインの復元 (replaceState より先に読む)
         if (auto* eqNode = xmlState->getChildByName("BAND_EQ_GAINS"))
         {
             for (int i = 0; i < 48; ++i)
             {
-                float g = (float)eqNode->getDoubleAttribute("gain" + juce::String(i), 1.0);
-                mBandGains[(size_t)i].store(g);
+                const float g = (float)eqNode->getDoubleAttribute("gain" + juce::String(i), 1.0);
+                // 壊れた値(NaN/0/極端値)で無音化しないよう常識的な範囲に丸める
+                mBandGains[(size_t)i].store(
+                    (std::isfinite(g) && g > 0.0f) ? juce::jlimit(0.0631f, 3.98f, g) : 1.0f);
             }
+        }
+
+        if (xmlState->hasTagName(apvts.state.getType()))
+        {
+            // BAND_EQ_GAINS は apvts の管理外。取り込むと保存の度に増殖するので
+            // ValueTree へ移す前に取り除く。
+            xmlState->deleteAllChildElementsWithTagName("BAND_EQ_GAINS");
+            apvts.replaceState(juce::ValueTree::fromXml(*xmlState));
         }
 
         // カスタムWavetableの復元 (パスが保存されていればロード)。

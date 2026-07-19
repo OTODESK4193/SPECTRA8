@@ -31,8 +31,17 @@ public:
 
 private:
     void handleMouse(const juce::MouseEvent& e);
-    void confirmResetAllBands(); // 右クリック→確認ダイアログ→全バンド0dB
+    void showResetConfirm(bool show);   // 右クリック→パネル内に確認バーを出す
     int  bandIndexAt(const juce::MouseEvent& e) const; // 座標→バンド番号 (-1 = 領域外)
+
+    // 確認はパネル内のボタンで行う。
+    //  OSネイティブのメッセージボックスは入れ子のモーダルループを回すため、
+    //  プラグイン/スタンドアロン環境でオーディオデバイスやフォーカスに副作用が出る。
+    //  さらに Yes/No の戻り値インデックスがJUCEのパスによって異なり当てにならない。
+    juce::TextButton mBtnResetYes { "RESET ALL" };
+    juce::TextButton mBtnResetNo  { "CANCEL" };
+    juce::Label      mLblConfirm;
+    bool mConfirmVisible = false;
 
     juce::AudioProcessorValueTreeState& apvts;
     std::array<std::atomic<float>, kMaxBands>& mBandGains;

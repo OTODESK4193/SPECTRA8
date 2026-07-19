@@ -24,27 +24,45 @@ class PostBandEq
 public:
     static constexpr int kMaxBands = 48;
 
-    // 非RT文脈で呼ぶ（中心周波数とQの事前計算）
+    // 非RT文脈で呼ぶ（サンプルレート設定 + 初期レイアウト）
     void prepare(double sampleRate) noexcept
     {
         mSr = (sampleRate > 1000.0) ? sampleRate : 16000.0;
+        mLayoutBands = 0;              // 次の rebuildLayout を必ず走らせる
+        rebuildLayout(kMaxBands);
+        reset();
+    }
 
-        // FilterbankVocoder::prepare と同一の mel 配置(80-7500Hz)
+    // 中心周波数とQを「アクティブなバンド数」で再スパンする。
+    //
+    //  【重要】以前は常に48分割の先頭 bands 本だけを使っていたため、
+    //  BANDS=12 のとき EQ が実際に効くのは 80〜653Hz だけで、
+    //  画面表示(FilterbankVocoder と同じ 80〜7500Hz の12分割)と対応が取れていなかった。
+    //  例: 画面上 2114Hz のバンドを動かすと、実際には 353Hz が動いていた。
+    //  FilterbankVocoder::rebuildLayout と同じ設計に揃える。
+    void rebuildLayout(int bands) noexcept
+    {
+        bands = std::min(kMaxBands, std::max(8, bands));
+        if (bands == mLayoutBands)
+            return;
+        mLayoutBands = bands;
+
         const float fMin = 80.0f, fMax = 7500.0f;
         const float mMin = 2595.0f * std::log10(1.0f + fMin / 700.0f);
         const float mMax = 2595.0f * std::log10(1.0f + fMax / 700.0f);
-        for (int i = 0; i < kMaxBands; ++i)
+        for (int i = 0; i < bands; ++i)
         {
-            const float mv = mMin + (mMax - mMin) * ((float)i / (float)(kMaxBands - 1));
+            const float mv = mMin + (mMax - mMin) * ((float)i / (float)(bands - 1));
             mF0[(size_t)i] = 700.0f * (std::pow(10.0f, mv / 2595.0f) - 1.0f);
         }
 
         // Q = 中心±半バンドが -3dB で交差する程度。隣接バンドの比から算出。
-        for (int i = 0; i < kMaxBands; ++i)
+        // バンド数が少ないほど間隔が広い = Qが低い(なだらか)になり、全域が隙間なく覆われる。
+        for (int i = 0; i < bands; ++i)
         {
             const float lo = (i > 0) ? mF0[(size_t)(i - 1)]
                                      : mF0[0] * mF0[0] / mF0[1];                       // 対数外挿
-            const float hi = (i < kMaxBands - 1) ? mF0[(size_t)(i + 1)]
+            const float hi = (i < bands - 1) ? mF0[(size_t)(i + 1)]
                                      : mF0[(size_t)i] * mF0[(size_t)i] / mF0[(size_t)(i - 1)];
             float bwOct = std::log2(std::sqrt(hi / lo));   // 全幅で約1バンド分のオクターブ幅
             bwOct = std::max(0.05f, bwOct);
@@ -52,6 +70,7 @@ public:
             mQ[(size_t)i] = std::sqrt(twoBW) / (twoBW - 1.0f);
         }
 
+        // レイアウト変更時はフィルタ状態を捨てる (残留状態によるノイズ防止)
         reset();
     }
 
@@ -66,6 +85,7 @@ public:
                       const std::array<std::atomic<float>, kMaxBands>& bandGains) noexcept
     {
         mActive = std::min(kMaxBands, std::max(8, bandCount));
+        rebuildLayout(mActive);   // バンド数が変わった時だけ再スパン(内部で早期return)
 
         constexpr float pi = 3.14159265358979f;
         for (int i = 0; i < mActive; ++i)
@@ -119,6 +139,7 @@ private:
 
     double mSr = 16000.0;
     int mActive = 0;
+    int mLayoutBands = 0;   // 現在のレイアウトが何バンド用か
     std::array<float, kMaxBands> mF0 {};
     std::array<float, kMaxBands> mQ {};
     std::array<Coeff, kMaxBands> mC {};

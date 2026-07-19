@@ -13,10 +13,42 @@ BandsEqPanel::BandsEqPanel(juce::AudioProcessorValueTreeState& state,
       mBandLevelsForUi(bandLevelsForUi),
       mTimer(*this)
 {
+    // --- 全リセットの確認バー (パネル内。ネイティブモーダルは使わない) ---
+    mLblConfirm.setText("Reset all band gains to 0 dB?", juce::dontSendNotification);
+    mLblConfirm.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+    mLblConfirm.setColour(juce::Label::textColourId, SpectraColors::text);
+    mLblConfirm.setJustificationType(juce::Justification::centredRight);
+    addChildComponent(mLblConfirm);
+
+    for (auto* b : { &mBtnResetYes, &mBtnResetNo })
+    {
+        b->setColour(juce::TextButton::buttonColourId, SpectraColors::knobTrack);
+        b->setColour(juce::TextButton::textColourOffId, SpectraColors::text);
+        addChildComponent(*b);
+    }
+    mBtnResetYes.setColour(juce::TextButton::buttonColourId,
+                           SpectraColors::accentBands.withAlpha(0.28f));
+
+    mBtnResetYes.onClick = [this]
+    {
+        for (auto& g : mBandGains)
+            g.store(1.0f);      // リニア 1.0 = 0dB
+        showResetConfirm(false);
+    };
+    mBtnResetNo.onClick = [this] { showResetConfirm(false); };
 }
 
 BandsEqPanel::~BandsEqPanel()
 {
+}
+
+void BandsEqPanel::showResetConfirm(bool show)
+{
+    mConfirmVisible = show;
+    mLblConfirm.setVisible(show);
+    mBtnResetYes.setVisible(show);
+    mBtnResetNo.setVisible(show);
+    repaint();
 }
 
 void BandsEqPanel::paint(juce::Graphics& g)
@@ -65,34 +97,39 @@ void BandsEqPanel::paint(juce::Graphics& g)
     }
 
     // ----------------------------------------------------
-    // レベルメーターの描画 (背景のアナライザー / 上向きのバー)
-    //   ※ EQカーブ(緑=mint)と誤認されないよう、暗い別色(青系)＋低不透明度で
-    //     「あくまで背景の入力レベル表示」であることを視覚的に明確化する。
-    //     さらに表示値を時間平滑化してガタつきを抑える。
+    // 入力アナライザーの描画 (背景)
+    //   ※ 以前は個別のバーとして描いていたため、バンド数が少ないと
+    //     「太いバーの上端が音に合わせて上下する」= EQポイントが勝手に動いている
+    //     ように見えてしまっていた。連続した塗り面 + 不透明度低下で、
+    //     操作対象(EQカーブ)ではなく背景の可視化であることを明確にする。
     // ----------------------------------------------------
-    g.setColour(SpectraColors::babyBlue.withAlpha(0.14f));
-    for (int i = 0; i < activeBands; ++i)
     {
-        const float level = mBandLevelsForUi[(size_t)i].load(); // リニア振幅 (通常 0.0〜1.0)
+        juce::Path fill;
+        fill.startNewSubPath((float)r.getX(), (float)r.getBottom() - 10.0f);
+        for (int i = 0; i < activeBands; ++i)
+        {
+            const float level = mBandLevelsForUi[(size_t)i].load(); // リニア振幅
 
-        // 表示平滑化 (立ち上がりは速め・減衰は緩やか)
-        float& sm = mMeterSmooth[(size_t)i];
-        const float rate = (level > sm) ? 0.5f : 0.2f;
-        sm += rate * (level - sm);
+            // 表示平滑化 (立ち上がりは速め・減衰は緩やか)
+            float& sm = mMeterSmooth[(size_t)i];
+            const float rate = (level > sm) ? 0.5f : 0.2f;
+            sm += rate * (level - sm);
 
-        // デシベル変換 (メーター用)
-        float db = (sm > 1e-5f) ? (20.0f * std::log10(sm)) : -60.0f;
-        db = juce::jlimit(-48.0f, 12.0f, db);
+            float db = (sm > 1e-5f) ? (20.0f * std::log10(sm)) : -60.0f;
+            db = juce::jlimit(-48.0f, 12.0f, db);
 
-        // Y座標算出 (下限を -48dB に設定)
-        float pct = (db - (-48.0f)) / (12.0f - (-48.0f));
-        float y = (float)r.getBottom() - 10.0f - pct * (h - 20.0f);
+            const float pct = (db - (-48.0f)) / (12.0f - (-48.0f));
+            const float y = (float)r.getBottom() - 10.0f - pct * (h - 20.0f);
+            const float x = (float)r.getX() + ((float)i + 0.5f) * bandW;
+            fill.lineTo(x, y);
+        }
+        fill.lineTo((float)r.getRight(), (float)r.getBottom() - 10.0f);
+        fill.closeSubPath();
 
-        float x = (float)r.getX() + (float)i * bandW + 2.0f;
-        float barW = bandW - 4.0f;
-        if (barW < 1.0f) barW = 1.0f;
-
-        g.fillRect(x, y, barW, (float)r.getBottom() - 10.0f - y);
+        g.setColour(SpectraColors::babyBlue.withAlpha(0.10f));
+        g.fillPath(fill);
+        g.setColour(SpectraColors::babyBlue.withAlpha(0.22f));
+        g.strokePath(fill, juce::PathStrokeType(1.0f));
     }
 
     // ----------------------------------------------------
@@ -114,38 +151,77 @@ void BandsEqPanel::paint(juce::Graphics& g)
         points.push_back({ x, y });
     }
 
-    // 線で結ぶ (EQカーブ＝操作対象。メーターより手前・太めで明確に主役化)
-    g.setColour(SpectraColors::accentBands);
+    // 線で結ぶ (EQカーブ＝操作対象。アナライザーより手前・太め・グロー付きで主役化)
     path.startNewSubPath(points[0]);
     for (size_t i = 1; i < points.size(); ++i)
     {
         path.lineTo(points[i]);
     }
+    g.setColour(SpectraColors::accentBands.withAlpha(0.22f));
+    g.strokePath(path, juce::PathStrokeType(7.0f, juce::PathStrokeType::curved,
+                                            juce::PathStrokeType::rounded));
+    g.setColour(SpectraColors::accentBands);
     g.strokePath(path, juce::PathStrokeType(2.6f));
 
     // ドットを描画
-    g.setColour(SpectraColors::text);
     for (const auto& p : points)
     {
-        g.fillEllipse(p.x - 3.5f, p.y - 3.5f, 7.0f, 7.0f);
         g.setColour(SpectraColors::accentBands.withAlpha(0.4f));
         g.drawEllipse(p.x - 5.5f, p.y - 5.5f, 11.0f, 11.0f, 1.0f);
         g.setColour(SpectraColors::text);
+        g.fillEllipse(p.x - 3.5f, p.y - 3.5f, 7.0f, 7.0f);
+    }
+
+    // ----------------------------------------------------
+    // 凡例 — どちらが操作対象なのかを明示する
+    // ----------------------------------------------------
+    {
+        const int ly = r.getBottom() - 13;
+        g.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
+        g.setColour(SpectraColors::accentBands);
+        g.drawText("EQ (drag to edit)", r.getRight() - 240, ly, 118, 12,
+                   juce::Justification::centredRight);
+        g.setColour(SpectraColors::babyBlue.withAlpha(0.55f));
+        g.drawText("ANALYZER (input)", r.getRight() - 118, ly, 112, 12,
+                   juce::Justification::centredRight);
+    }
+
+    // 右クリック確認バーの背景 (ボタン類は子コンポーネント)
+    if (mConfirmVisible)
+    {
+        auto bar = juce::Rectangle<int>(r.getX() + 1, r.getY() + 1, r.getWidth() - 2, 34).toFloat();
+        g.setColour(SpectraColors::panel.brighter(0.16f));
+        g.fillRoundedRectangle(bar, 6.0f);
+        g.setColour(SpectraColors::accentBands.withAlpha(0.7f));
+        g.drawRoundedRectangle(bar.reduced(0.5f), 6.0f, 1.2f);
     }
 }
 
 void BandsEqPanel::resized()
 {
+    // 確認バー: パネル上端に「メッセージ + RESET ALL + CANCEL」を右詰めで並べる
+    auto r = getLocalBounds().reduced(16);
+    auto bar = juce::Rectangle<int>(r.getX() + 1, r.getY() + 1, r.getWidth() - 2, 34).reduced(6, 5);
+
+    mBtnResetNo.setBounds(bar.removeFromRight(80));
+    bar.removeFromRight(6);
+    mBtnResetYes.setBounds(bar.removeFromRight(96));
+    bar.removeFromRight(10);
+    mLblConfirm.setBounds(bar);
 }
 
 void BandsEqPanel::mouseDown(const juce::MouseEvent& e)
 {
-    // 右クリック → 全バンドリセットの確認ダイアログ (誤操作でカーブを消さないための Y/N 確認)
+    // 右クリック → 全バンドリセットの確認バーを表示 (誤操作でカーブを消さないため)
     if (e.mods.isPopupMenu())
     {
-        confirmResetAllBands();
+        showResetConfirm(true);
         return;
     }
+
+    // 確認バー表示中は、誤ってカーブを描かないよう左クリックを無視する
+    if (mConfirmVisible)
+        return;
 
     // ダブルクリックの2回目のクリックではカーブを描き込まない
     // (直後の mouseDoubleClick によるリセットを上書きしないため)
@@ -157,8 +233,8 @@ void BandsEqPanel::mouseDown(const juce::MouseEvent& e)
 
 void BandsEqPanel::mouseDrag(const juce::MouseEvent& e)
 {
-    // 右ドラッグ、およびダブルクリック中の微小ドラッグではカーブを描き込まない
-    if (e.mods.isPopupMenu() || e.getNumberOfClicks() > 1)
+    // 右ドラッグ、確認バー表示中、ダブルクリック中の微小ドラッグではカーブを描き込まない
+    if (e.mods.isPopupMenu() || mConfirmVisible || e.getNumberOfClicks() > 1)
         return;
 
     handleMouse(e);
@@ -167,7 +243,7 @@ void BandsEqPanel::mouseDrag(const juce::MouseEvent& e)
 void BandsEqPanel::mouseDoubleClick(const juce::MouseEvent& e)
 {
     // 左ダブルクリック → そのバンドのみ 0dB にリセット
-    if (e.mods.isPopupMenu()) return;
+    if (e.mods.isPopupMenu() || mConfirmVisible) return;
 
     const int bandIdx = bandIndexAt(e);
     if (bandIdx < 0) return;
@@ -187,30 +263,6 @@ int BandsEqPanel::bandIndexAt(const juce::MouseEvent& e) const
     const float bandW = (float)r.getWidth() / (float)activeBands;
     int bandIdx = (int)(((float)(e.x - r.getX())) / bandW);
     return juce::jlimit(0, activeBands - 1, bandIdx);
-}
-
-void BandsEqPanel::confirmResetAllBands()
-{
-    // プラグインウィンドウでは JUCE製 AlertWindow が表示されない・背面に隠れる事例があるため、
-    // OSネイティブのメッセージボックス (Windows: Win32 MessageBox) を使用する
-    auto options = juce::MessageBoxOptions::makeOptionsYesNo(
-        juce::MessageBoxIconType::QuestionIcon,
-        "BANDS EQ Reset",
-        "Reset all band gains to 0 dB?",
-        "Yes", "No", this);
-
-    juce::NativeMessageBox::showAsync(options,
-        [safeThis = juce::Component::SafePointer<BandsEqPanel>(this)](int result)
-        {
-            // result はボタンの登録順インデックス (0始まり): 0 = Yes, 1 = No
-            // (JUCE 8 Windowsネイティブ実装 TaskDialogIndirect はボタンIDに0始まりの連番を使用)
-            if (result == 0 && safeThis != nullptr)
-            {
-                for (auto& g : safeThis->mBandGains)
-                    g.store(1.0f);
-                safeThis->repaint();
-            }
-        });
 }
 
 void BandsEqPanel::handleMouse(const juce::MouseEvent& e)
