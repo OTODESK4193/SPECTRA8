@@ -14,7 +14,7 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
     auto setupKnob = [this](ValueKnob& k, juce::Label& l, const juce::String& suffix = "")
     {
         k.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-        k.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 64, 16);
+        k.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 15);
         k.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         k.setColour(juce::Slider::textBoxTextColourId, SpectraColors::textDim);
         k.setColour(juce::Slider::rotarySliderFillColourId, SpectraColors::accentExcitation);
@@ -23,7 +23,7 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
         k.setLookAndFeel(&mArcLookAndFeel);
         addAndMakeVisible(k);
 
-        l.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
+        l.setFont(juce::Font(juce::FontOptions(9.5f, juce::Font::bold)));
         l.setJustificationType(juce::Justification::centred);
         l.setColour(juce::Label::textColourId, SpectraColors::textDim);
         addAndMakeVisible(l);
@@ -33,9 +33,19 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
     setupKnob(mKnobPulseWidth, mLblPulseWidth, "%");
     setupKnob(mKnobDetune, mLblDetune);   // 表示はパラメータ側の "N ct (度数)" 書式
     setupKnob(mKnobPorta, mLblPorta, "s");
-    setupKnob(mKnobMorphAmt, mLblMorphAmt);
-    setupKnob(mKnobMorphShift, mLblMorphShift);
-    mKnobDetune.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 110, 16); // "1200 ct (8度)" が収まる幅
+    setupKnob(mKnobBendAmt, mLblBendAmt);
+    setupKnob(mKnobBendShift, mLblBendShift);
+    setupKnob(mKnobSyncAmt, mLblSyncAmt);
+    setupKnob(mKnobSyncShift, mLblSyncShift);
+    setupKnob(mKnobVocAmt, mLblVocAmt);
+    setupKnob(mKnobVocShift, mLblVocShift);
+    mKnobDetune.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 104, 15); // "1200 ct (8度)" 用
+
+    // MORPHセクション見出し
+    mLblMorphHdr.setFont(juce::Font(juce::FontOptions(9.5f, juce::Font::bold)));
+    mLblMorphHdr.setJustificationType(juce::Justification::centredLeft);
+    mLblMorphHdr.setColour(juce::Label::textColourId, SpectraColors::accentExcitation.withAlpha(0.8f));
+    addAndMakeVisible(mLblMorphHdr);
 
     auto setupCombo = [this](juce::ComboBox& c, const juce::StringArray& items)
     {
@@ -51,7 +61,6 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
 
     setupCombo(mComboWaveform, { "Sawtooth", "Pulse", "Wavetable" });
     setupCombo(mComboDetuneMode, { "Dtn: Classic", "Dtn: Linear", "Dtn: Exp", "Dtn: Drift", "Dtn: Chorus" });
-    setupCombo(mComboMorphMode, { "Morph: None", "Morph: Bend +/-", "Morph: Sync", "Morph: Vocode" });
 
     addAndMakeVisible(mWaveDisplay);
     addAndMakeVisible(mBtnDetuneSnap);
@@ -72,15 +81,19 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
     mLblCustomName.setJustificationType(juce::Justification::centredLeft);
     addChildComponent(mLblCustomName);
 
-    // Wavetableリスト
-    mWtList.setModel(this);
-    mWtList.setRowHeight(22);
-    mWtList.setColour(juce::ListBox::backgroundColourId, SpectraColors::bg);
-    mWtList.setColour(juce::ListBox::outlineColourId, SpectraColors::panelLine);
-    addChildComponent(mWtList);
+    // 2ペインのリスト (左=サブカテゴリ / 右=波形ファイル)
+    mCatList.setModel(&mCatModel);
+    mWtList.setModel(&mFileModel);
+    for (auto* lb : { &mCatList, &mWtList })
+    {
+        lb->setRowHeight(20);
+        lb->setColour(juce::ListBox::backgroundColourId, SpectraColors::bg);
+        lb->setColour(juce::ListBox::outlineColourId, SpectraColors::panelLine);
+        addChildComponent(*lb);
+    }
 
     // ブラウザ操作ボタン
-    for (auto* b : { &mBtnBrowserClose, &mBtnFactory })
+    for (auto* b : { &mBtnBrowserClose, &mBtnFactory, &mBtnRandom })
     {
         b->setColour(juce::TextButton::buttonColourId, SpectraColors::knobTrack);
         b->setColour(juce::TextButton::textColourOffId, SpectraColors::text);
@@ -91,8 +104,10 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
     {
         processor.clearCustomWavetable();
         mWtList.deselectAllRows();
+        mWtList.repaint();
         refreshWaveformDisplay();
     };
+    mBtnRandom.onClick = [this] { loadRandomWavetable(); };
 
     // アタッチメント作成
     mAttachmentWtPos      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "wavetablePosition", mKnobWtPos);
@@ -100,18 +115,26 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
     mAttachmentDetune     = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "detune", mKnobDetune);
     mAttachmentPorta      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "porta", mKnobPorta);
 
-    mAttachmentMorphAmt   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "morphAmt", mKnobMorphAmt);
-    mAttachmentMorphShift = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "morphShift", mKnobMorphShift);
+    mAttachmentBendAmt    = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "bendAmt", mKnobBendAmt);
+    mAttachmentBendShift  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "bendShift", mKnobBendShift);
+    mAttachmentSyncAmt    = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "syncAmt", mKnobSyncAmt);
+    mAttachmentSyncShift  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "syncShift", mKnobSyncShift);
+    mAttachmentVocAmt     = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "vocAmt", mKnobVocAmt);
+    mAttachmentVocShift   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "vocShift", mKnobVocShift);
 
     mAttachmentWaveform   = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "waveform", mComboWaveform);
     mAttachmentDetuneMode = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "detuneMode", mComboDetuneMode);
-    mAttachmentMorphMode  = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "morphMode", mComboMorphMode);
     mAttachmentDetuneSnap = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(apvts, "detuneSnap", mBtnDetuneSnap);
 
     // 波形表示・BROWSE表示の追従
     mComboWaveform.onChange       = [this] { refreshWaveformDisplay(); updateBrowseVisibility(); };
     mKnobPulseWidth.onValueChange = [this] { refreshWaveformDisplay(); };
     mKnobWtPos.onValueChange      = [this] { refreshWaveformDisplay(); };
+
+    // Morphノブも波形表示に即反映
+    for (auto* k : { &mKnobBendAmt, &mKnobBendShift, &mKnobSyncAmt,
+                     &mKnobSyncShift, &mKnobVocAmt, &mKnobVocShift })
+        k->onValueChange = [this] { refreshWaveformDisplay(); };
 
     // SNAP: ON中はDetuneを100ct(度数)単位に丸める
     mKnobDetune.onValueChange = [this] { applyDetuneSnap(); };
@@ -123,13 +146,13 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
 
 ExcitationPanel::~ExcitationPanel()
 {
-    mWtList.setModel(nullptr);   // ListBox破棄時のダングリングモデル参照防止
-    mKnobWtPos.setLookAndFeel(nullptr);
-    mKnobPulseWidth.setLookAndFeel(nullptr);
-    mKnobDetune.setLookAndFeel(nullptr);
-    mKnobPorta.setLookAndFeel(nullptr);
-    mKnobMorphAmt.setLookAndFeel(nullptr);
-    mKnobMorphShift.setLookAndFeel(nullptr);
+    // ListBox破棄時のダングリングモデル参照防止
+    mCatList.setModel(nullptr);
+    mWtList.setModel(nullptr);
+    for (auto* k : { &mKnobWtPos, &mKnobPulseWidth, &mKnobDetune, &mKnobPorta,
+                     &mKnobBendAmt, &mKnobBendShift, &mKnobSyncAmt,
+                     &mKnobSyncShift, &mKnobVocAmt, &mKnobVocShift })
+        k->setLookAndFeel(nullptr);
 }
 
 juce::File ExcitationPanel::getWtDir() const
@@ -171,6 +194,12 @@ void ExcitationPanel::refreshWaveformDisplay()
     }
 
     mWaveDisplay.setParams(type, pw, wt);
+    mWaveDisplay.setMorph(apvts.getRawParameterValue("bendAmt")->load(),
+                          apvts.getRawParameterValue("bendShift")->load(),
+                          apvts.getRawParameterValue("syncAmt")->load(),
+                          apvts.getRawParameterValue("syncShift")->load(),
+                          apvts.getRawParameterValue("vocAmt")->load(),
+                          apvts.getRawParameterValue("vocShift")->load());
 }
 
 void ExcitationPanel::updateBrowseVisibility()
@@ -183,26 +212,20 @@ void ExcitationPanel::updateBrowseVisibility()
         hideBrowser();
 }
 
-int ExcitationPanel::getNumRows()
-{
-    return (int)mWtEntries.size();
-}
-
+// ---- Wavetableフォルダのスキャン (再帰。子フォルダ = サブカテゴリ) ----
 void ExcitationPanel::rescanFolder()
 {
-    mWtEntries.clear();
+    mCategories.clear();
     const juce::File dir = getWtDir();
     if (dir.isDirectory())
     {
-        // 再帰スキャンして「サブフォルダ相対パス → ファイル群」でグループ化
-        std::vector<std::pair<juce::String, std::vector<juce::File>>> groups;
-        auto groupFor = [&groups](const juce::String& key) -> std::vector<juce::File>&
+        auto catFor = [this](const juce::String& key) -> WtCategory&
         {
-            for (auto& g : groups)
-                if (g.first == key)
-                    return g.second;
-            groups.push_back({ key, {} });
-            return groups.back().second;
+            for (auto& c : mCategories)
+                if (c.name == key)
+                    return c;
+            mCategories.push_back({ key, {} });
+            return mCategories.back();
         };
 
         for (auto& f : dir.findChildFiles(juce::File::findFiles, true, "*.wav;*.aif;*.aiff"))
@@ -210,47 +233,113 @@ void ExcitationPanel::rescanFolder()
             juce::String rel = f.getParentDirectory().getRelativePathFrom(dir);
             if (rel == ".")
                 rel.clear();
-            groupFor(rel).push_back(f);
+            catFor(rel.isEmpty() ? dir.getFileName() : rel.replaceCharacter('\\', '/')).files.push_back(f);
         }
 
-        // グループをパス名順 (ルート先頭)、グループ内をファイル名順にソート
-        std::sort(groups.begin(), groups.end(),
-                  [](const auto& a, const auto& b)
-                  { return a.first.compareIgnoreCase(b.first) < 0; });
-        for (auto& g : groups)
-            std::sort(g.second.begin(), g.second.end(),
+        std::sort(mCategories.begin(), mCategories.end(),
+                  [](const WtCategory& a, const WtCategory& b)
+                  { return a.name.compareIgnoreCase(b.name) < 0; });
+        for (auto& c : mCategories)
+            std::sort(c.files.begin(), c.files.end(),
                       [](const juce::File& a, const juce::File& b)
                       { return a.getFileName().compareIgnoreCase(b.getFileName()) < 0; });
-
-        for (auto& g : groups)
-        {
-            // サブカテゴリヘッダ (ルート直下は親フォルダ名)
-            WtEntry header;
-            header.isHeader = true;
-            header.label = g.first.isEmpty() ? dir.getFileName()
-                                             : g.first.replaceCharacter('\\', '/');
-            mWtEntries.push_back(header);
-
-            for (auto& f : g.second)
-            {
-                WtEntry e;
-                e.label = f.getFileNameWithoutExtension();
-                e.file = f;
-                mWtEntries.push_back(e);
-            }
-        }
     }
-    mWtList.updateContent();
 
-    // 現在ロード中のファイルがあれば選択状態にする
+    // ロード中ファイルが属するカテゴリを選択状態にする (なければ先頭)
+    mSelectedCat = 0;
     const juce::String cur = processor.getCustomWavetablePath();
-    for (int i = 0; i < (int)mWtEntries.size(); ++i)
-        if (!mWtEntries[(size_t)i].isHeader
-            && mWtEntries[(size_t)i].file.getFullPathName() == cur)
+    for (int c = 0; c < (int)mCategories.size(); ++c)
+        for (auto& f : mCategories[(size_t)c].files)
+            if (f.getFullPathName() == cur)
+            {
+                mSelectedCat = c;
+                c = (int)mCategories.size();   // 外側ループも終了
+                break;
+            }
+
+    mCatList.updateContent();
+    mWtList.updateContent();
+    if (!mCategories.empty())
+        mCatList.selectRow(mSelectedCat);
+
+    // 右ペイン: ロード中ファイルを選択
+    if (mSelectedCat < (int)mCategories.size())
+    {
+        const auto& files = mCategories[(size_t)mSelectedCat].files;
+        for (int i = 0; i < (int)files.size(); ++i)
+            if (files[(size_t)i].getFullPathName() == cur)
+            {
+                mWtList.selectRow(i);
+                break;
+            }
+    }
+}
+
+void ExcitationPanel::loadFileAt(int catIdx, int fileIdx)
+{
+    if (catIdx < 0 || catIdx >= (int)mCategories.size())
+        return;
+    const auto& files = mCategories[(size_t)catIdx].files;
+    if (fileIdx < 0 || fileIdx >= (int)files.size())
+        return;
+
+    const juce::File f = files[(size_t)fileIdx];
+    if (processor.loadCustomWavetable(f))
+    {
+        refreshWaveformDisplay();
+        mWtList.repaint();
+    }
+    else
+    {
+        mLblCustomName.setText("WT: load failed - " + f.getFileNameWithoutExtension(),
+                               juce::dontSendNotification);
+    }
+}
+
+void ExcitationPanel::loadRandomWavetable()
+{
+    if (mCategories.empty())
+        rescanFolder();
+
+    // 全カテゴリの総ファイル数から一様に1つ選ぶ
+    int total = 0;
+    for (auto& c : mCategories)
+        total += (int)c.files.size();
+    if (total <= 0)
+        return;
+
+    int pick = mRng.nextInt(total);
+    for (int c = 0; c < (int)mCategories.size(); ++c)
+    {
+        const int n = (int)mCategories[(size_t)c].files.size();
+        if (pick < n)
         {
-            mWtList.selectRow(i);
-            break;
+            mSelectedCat = c;
+            mCatList.selectRow(c);
+            mWtList.updateContent();
+            mWtList.selectRow(pick);
+            loadFileAt(c, pick);
+            return;
         }
+        pick -= n;
+    }
+}
+
+void ExcitationPanel::setKnobsVisible(bool v)
+{
+    for (auto* c : { (juce::Component*)&mKnobWtPos, (juce::Component*)&mKnobPulseWidth,
+                     (juce::Component*)&mKnobDetune, (juce::Component*)&mKnobPorta,
+                     (juce::Component*)&mKnobBendAmt, (juce::Component*)&mKnobBendShift,
+                     (juce::Component*)&mKnobSyncAmt, (juce::Component*)&mKnobSyncShift,
+                     (juce::Component*)&mKnobVocAmt, (juce::Component*)&mKnobVocShift,
+                     (juce::Component*)&mLblWtPos, (juce::Component*)&mLblPulseWidth,
+                     (juce::Component*)&mLblDetune, (juce::Component*)&mLblPorta,
+                     (juce::Component*)&mLblBendAmt, (juce::Component*)&mLblBendShift,
+                     (juce::Component*)&mLblSyncAmt, (juce::Component*)&mLblSyncShift,
+                     (juce::Component*)&mLblVocAmt, (juce::Component*)&mLblVocShift,
+                     (juce::Component*)&mLblMorphHdr,
+                     (juce::Component*)&mBtnDetuneSnap })
+        c->setVisible(v);
 }
 
 void ExcitationPanel::showBrowser()
@@ -263,20 +352,12 @@ void ExcitationPanel::showBrowser()
 
     rescanFolder();
     mBrowserOpen = true;
+    mCatList.setVisible(true);
     mWtList.setVisible(true);
     mBtnBrowserClose.setVisible(true);
     mBtnFactory.setVisible(true);
-
-    // ノブ側を隠す
-    for (auto* c : { (juce::Component*)&mKnobWtPos, (juce::Component*)&mKnobPulseWidth,
-                     (juce::Component*)&mKnobDetune, (juce::Component*)&mKnobPorta,
-                     (juce::Component*)&mKnobMorphAmt, (juce::Component*)&mKnobMorphShift,
-                     (juce::Component*)&mLblWtPos, (juce::Component*)&mLblPulseWidth,
-                     (juce::Component*)&mLblDetune, (juce::Component*)&mLblPorta,
-                     (juce::Component*)&mLblMorphAmt, (juce::Component*)&mLblMorphShift,
-                     (juce::Component*)&mBtnDetuneSnap })
-        c->setVisible(false);
-
+    mBtnRandom.setVisible(true);
+    setKnobsVisible(false);
     resized();
 }
 
@@ -285,19 +366,12 @@ void ExcitationPanel::hideBrowser()
     if (!mBrowserOpen)
         return;
     mBrowserOpen = false;
+    mCatList.setVisible(false);
     mWtList.setVisible(false);
     mBtnBrowserClose.setVisible(false);
     mBtnFactory.setVisible(false);
-
-    for (auto* c : { (juce::Component*)&mKnobWtPos, (juce::Component*)&mKnobPulseWidth,
-                     (juce::Component*)&mKnobDetune, (juce::Component*)&mKnobPorta,
-                     (juce::Component*)&mKnobMorphAmt, (juce::Component*)&mKnobMorphShift,
-                     (juce::Component*)&mLblWtPos, (juce::Component*)&mLblPulseWidth,
-                     (juce::Component*)&mLblDetune, (juce::Component*)&mLblPorta,
-                     (juce::Component*)&mLblMorphAmt, (juce::Component*)&mLblMorphShift,
-                     (juce::Component*)&mBtnDetuneSnap })
-        c->setVisible(true);
-
+    mBtnRandom.setVisible(false);
+    setKnobsVisible(true);
     resized();
 }
 
@@ -325,59 +399,60 @@ void ExcitationPanel::chooseFolder()
         });
 }
 
-// ---- ListBoxModel ----
-void ExcitationPanel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected)
+// ---- ListBoxModel 転送 ----
+int ExcitationPanel::ListProxy::getNumRows()
 {
-    if (row < 0 || row >= (int)mWtEntries.size())
-        return;
+    if (isCat)
+        return (int)owner.mCategories.size();
+    if (owner.mSelectedCat < 0 || owner.mSelectedCat >= (int)owner.mCategories.size())
+        return 0;
+    return (int)owner.mCategories[(size_t)owner.mSelectedCat].files.size();
+}
 
-    const auto& e = mWtEntries[(size_t)row];
-
-    if (e.isHeader)
-    {
-        // サブカテゴリヘッダ (子フォルダ名)
-        g.setColour(SpectraColors::knobTrack);
-        g.fillRect(0, 0, w, h);
-        g.setColour(SpectraColors::accentExcitation.withAlpha(0.85f));
-        g.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
-        g.drawText(e.label, 6, 0, w - 10, h, juce::Justification::centredLeft);
-        g.setColour(SpectraColors::panelLine);
-        g.drawHorizontalLine(h - 1, 0.0f, (float)w);
+void ExcitationPanel::ListProxy::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected)
+{
+    if (row < 0 || row >= getNumRows())
         return;
-    }
 
     if (selected)
     {
         g.setColour(SpectraColors::accentExcitation.withAlpha(0.20f));
         g.fillRect(0, 0, w, h);
     }
-    const bool isLoaded = (e.file.getFullPathName() == processor.getCustomWavetablePath());
+
+    if (isCat)
+    {
+        g.setColour(selected ? SpectraColors::accentExcitation : SpectraColors::text);
+        g.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+        g.drawText(owner.mCategories[(size_t)row].name, 8, 0, w - 12, h,
+                   juce::Justification::centredLeft);
+        return;
+    }
+
+    const auto& f = owner.mCategories[(size_t)owner.mSelectedCat].files[(size_t)row];
+    const bool isLoaded = (f.getFullPathName() == owner.processor.getCustomWavetablePath());
     g.setColour(isLoaded ? SpectraColors::accentExcitation : SpectraColors::text);
-    g.setFont(juce::Font(juce::FontOptions(12.0f)));
-    g.drawText(e.label, 16, 0, w - 20, h, juce::Justification::centredLeft);
+    g.setFont(juce::Font(juce::FontOptions(11.5f)));
+    g.drawText(f.getFileNameWithoutExtension(), 8, 0, w - 12, h, juce::Justification::centredLeft);
 }
 
-void ExcitationPanel::listBoxItemClicked(int row, const juce::MouseEvent&)
+void ExcitationPanel::ListProxy::listBoxItemClicked(int row, const juce::MouseEvent&)
 {
-    if (row < 0 || row >= (int)mWtEntries.size())
+    if (row < 0 || row >= getNumRows())
         return;
-    const auto& e = mWtEntries[(size_t)row];
-    if (e.isHeader)
+
+    if (isCat)
     {
-        mWtList.deselectAllRows();   // ヘッダは選択対象外
+        // カテゴリ切替 = 右ペインの中身を差し替え (ロードはしない)
+        owner.mSelectedCat = row;
+        owner.mWtList.updateContent();
+        owner.mWtList.deselectAllRows();
+        owner.mWtList.repaint();
         return;
     }
 
-    // クリックで即ロード&反映 (リストは開いたまま=試聴しながら選べる)
-    if (processor.loadCustomWavetable(e.file))
-    {
-        refreshWaveformDisplay();
-        mWtList.repaint();
-    }
-    else
-    {
-        mLblCustomName.setText("WT: load failed - " + e.label, juce::dontSendNotification);
-    }
+    // ファイルクリックで即ロード&反映 (リストは開いたまま=試聴しながら選べる)
+    owner.loadFileAt(owner.mSelectedCat, row);
 }
 
 void ExcitationPanel::paint(juce::Graphics& g)
@@ -397,59 +472,77 @@ void ExcitationPanel::resized()
 
     // --- 左: 波形コンボ + BROWSE/ADD DIR + 2D波形表示 + DETUNE MODE ---
     const int comboH = 26;
-    const int comboW = 160;
-    const int leftX = r.getX() + 16;
-    const int dispW = 288;
-    mComboWaveform.setBounds(leftX, r.getY() + 20, comboW, comboH);
-    mBtnBrowse.setBounds(leftX + comboW + 8, r.getY() + 20, 70, comboH);
-    mBtnAddDir.setBounds(leftX + comboW + 8 + 70 + 6, r.getY() + 20, 70, comboH);
-    mLblCustomName.setBounds(leftX, r.getY() + 20 + comboH + 2, dispW, 12);
+    const int comboW = 140;
+    const int btnW = 62;
+    const int leftX = r.getX() + 12;
+    const int dispW = 280;
+    mComboWaveform.setBounds(leftX, r.getY() + 18, comboW, comboH);
+    mBtnBrowse.setBounds(leftX + comboW + 6, r.getY() + 18, btnW, comboH);
+    mBtnAddDir.setBounds(leftX + comboW + 6 + btnW + 6, r.getY() + 18, btnW, comboH);
+    mLblCustomName.setBounds(leftX, r.getY() + 18 + comboH + 2, dispW, 12);
 
-    const int dispH = 150;
-    const int dispY = r.getY() + 20 + comboH + 16;
+    const int dispH = 148;
+    const int dispY = r.getY() + 18 + comboH + 16;
     mWaveDisplay.setBounds(leftX, dispY, dispW, dispH);
 
     mComboDetuneMode.setBounds(leftX, dispY + dispH + 10, comboW, 22);
-    mComboMorphMode.setBounds(leftX + comboW + 8, dispY + dispH + 10, comboW, 22);
 
-    // --- 右: ノブ 6基 (2×3 グリッド) or Wavetableリスト ---
-    const int knobSize = 60;
-    const int labelH = 14;
-    const int rightX = r.getX() + 360;
+    // --- 右: ノブ 10基 (4列×3行) or 2ペインWavetableブラウザ ---
+    const int rightX = r.getX() + 316;
     const int rightW = r.getRight() - rightX;
-    const int stepX = rightW / 2;
-    const int rowY1 = r.getY() + 16;
-    const int rowY2 = r.getY() + 110;
-    const int rowY3 = r.getY() + 204;
 
     if (mBrowserOpen)
     {
-        auto area = juce::Rectangle<int>(rightX, r.getY() + 8, rightW - 8, r.getHeight() - 16);
+        auto area = juce::Rectangle<int>(rightX, r.getY() + 8, rightW - 4, r.getHeight() - 16);
         auto btnRow = area.removeFromBottom(28);
+        auto catArea = area.removeFromLeft(juce::jmax(110, area.getWidth() / 3));
+        mCatList.setBounds(catArea.withTrimmedRight(4));
         mWtList.setBounds(area);
-        mBtnBrowserClose.setBounds(btnRow.removeFromRight(80).reduced(2));
-        mBtnFactory.setBounds(btnRow.removeFromRight(80).reduced(2));
+        mBtnBrowserClose.setBounds(btnRow.removeFromRight(72).reduced(2));
+        mBtnFactory.setBounds(btnRow.removeFromRight(72).reduced(2));
+        mBtnRandom.setBounds(btnRow.removeFromRight(72).reduced(2));
         return;
     }
+
+    const int knobSize = 54;
+    const int labelH = 13;
+    const int stepX = rightW / 4;
+    // 行送り: 1行目はSNAPボタン分だけ縦に余裕を取る (54+2+13+1+18 = 88)
+    const int rowY1 = r.getY() + 6;
+    const int rowY2 = r.getY() + 108;
+    const int rowY3 = r.getY() + 198;
 
     auto place = [&](ValueKnob& k, juce::Label& l, int gx, int gy)
     {
         const int kx = rightX + gx * stepX + (stepX - knobSize) / 2;
         k.setBounds(kx, gy, knobSize, knobSize);
-        l.setBounds(kx - 10, gy + knobSize, knobSize + 20, labelH);
+        l.setBounds(kx - 12, gy + knobSize, knobSize + 24, labelH);
     };
 
+    // 1行目: キャリア基本
     place(mKnobWtPos,      mLblWtPos,      0, rowY1);
     place(mKnobPulseWidth, mLblPulseWidth, 1, rowY1);
-    place(mKnobPorta,      mLblPorta,      1, rowY2);
-    place(mKnobMorphAmt,   mLblMorphAmt,   0, rowY3);
-    place(mKnobMorphShift, mLblMorphShift, 1, rowY3);
+    place(mKnobPorta,      mLblPorta,      2, rowY1);
 
-    // DETUNE: 長い値表示のため境界を左右へ拡張 + 右にSNAPボタン
+    // DETUNE: 長い値表示のため境界を左右へ拡張 + SNAPをラベル下へ
     {
-        const int kx = rightX + (stepX - knobSize) / 2;
-        mKnobDetune.setBounds(kx - 28, rowY2, knobSize + 56, knobSize + 4);
-        mLblDetune.setBounds(kx - 10, rowY2 + knobSize + 4, knobSize + 20, labelH);
-        mBtnDetuneSnap.setBounds(kx + knobSize + 34, rowY2 + (knobSize - 24) / 2, 58, 24);
+        const int kx = rightX + 3 * stepX + (stepX - knobSize) / 2;
+        const int extra = juce::jmax(0, (104 - knobSize) / 2);
+        mKnobDetune.setBounds(kx - extra, rowY1, knobSize + extra * 2, knobSize + 2);
+        mLblDetune.setBounds(kx - 12, rowY1 + knobSize + 2, knobSize + 24, labelH);
+        mBtnDetuneSnap.setBounds(kx + (knobSize - 50) / 2, rowY1 + knobSize + 2 + labelH + 1, 50, 18);
     }
+
+    // MORPHセクション見出し
+    mLblMorphHdr.setBounds(rightX + 6, rowY2 - 14, rightW - 12, 14);
+
+    // 2行目: Bend / Sync
+    place(mKnobBendAmt,   mLblBendAmt,   0, rowY2);
+    place(mKnobBendShift, mLblBendShift, 1, rowY2);
+    place(mKnobSyncAmt,   mLblSyncAmt,   2, rowY2);
+    place(mKnobSyncShift, mLblSyncShift, 3, rowY2);
+
+    // 3行目: Vocode
+    place(mKnobVocAmt,   mLblVocAmt,   0, rowY3);
+    place(mKnobVocShift, mLblVocShift, 1, rowY3);
 }

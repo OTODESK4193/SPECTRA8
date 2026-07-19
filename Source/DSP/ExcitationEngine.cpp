@@ -93,46 +93,64 @@ void ExcitationEngine::syncParameters(int waveform, float wtPos, float pulseWidt
                                     float noiseMix, float lofi, float portaTimeSec,
                                     float attackSec, float decaySec, float sustainVal, float releaseSec,
                                     float noiseColorHz, int detuneMode,
-                                    int morphMode, float morphAmt, float morphShift) noexcept
+                                    float bendAmt, float bendShift,
+                                    float syncAmt, float syncShift,
+                                    float vocAmt, float vocShift) noexcept
 {
     mWaveform = juce::jlimit(0, 2, waveform);
     mDetuneMode = juce::jlimit(0, 4, detuneMode);
 
     // ---- Morph 事前計算 (BassSynth precomputeWarp 準拠) ----
-    mMorphMode = juce::jlimit(0, 3, morphMode);
-    mMorphAmt = juce::jlimit(-1.0f, 1.0f, morphAmt);
-    mMorphShift = juce::jlimit(-1.0f, 1.0f, morphShift);
-    if (mMorphMode == 1)        // Bend +/-
+    //  Bend / Sync / Vocode は独立ノブで、それぞれ Amt=0 のとき自動バイパス。
+    //  同時に掛けた場合は Bend → Sync → Vocode の順に適用される。
     {
-        mBendSym = juce::jlimit(0.01f, 0.99f, 0.5f + mMorphShift * 0.49f);
-        mBendB = std::exp(-juce::jlimit(-0.99f, 0.99f, mMorphAmt) * 2.0f);
+        const float bA = juce::jlimit(-1.0f, 1.0f, bendAmt);
+        mBendOn = std::abs(bA) > 0.001f;
+        if (mBendOn)
+        {
+            mBendSym = juce::jlimit(0.01f, 0.99f, 0.5f + juce::jlimit(-1.0f, 1.0f, bendShift) * 0.49f);
+            mBendB = std::exp(-juce::jlimit(-0.99f, 0.99f, bA) * 2.0f);
+        }
     }
-    else if (mMorphMode == 2)   // Sync (ハードシンク風)
     {
-        mSyncSt = 1.0f + std::abs(mMorphAmt) * 7.0f;
-        mSyncShiftHalf = mMorphShift * 0.5f;   // ※BassSynthではShift未接続だったのを有効化
+        const float sA = juce::jlimit(0.0f, 1.0f, syncAmt);
+        mSyncOn = sA > 0.001f;
+        if (mSyncOn)
+        {
+            mSyncSt = 1.0f + sA * 7.0f;
+            // ※BassSynthではShift未接続だったのを有効化
+            mSyncShiftHalf = juce::jlimit(-1.0f, 1.0f, syncShift) * 0.5f;
+        }
     }
-    else if (mMorphMode == 3)   // Vocode (A-I-U-E-O フォルマント)
     {
-        // BassSynth SpectralMorphProcessor mode9 のテーブル (値=倍音番号)
-        static const float kFmts[5][3] = {
-            { 32.0f, 55.0f, 120.0f },   // A
-            { 14.0f, 102.0f, 139.0f },  // I
-            { 14.0f, 41.0f, 116.0f },   // U
-            { 18.0f, 74.0f, 111.0f },   // E
-            { 18.0f, 37.0f, 120.0f },   // O
-        };
-        float s = mMorphShift;
-        int seq[5];
-        if (s >= 0.0f) { seq[0]=0; seq[1]=1; seq[2]=2; seq[3]=3; seq[4]=4; }        // A,I,U,E,O
-        else           { seq[0]=0; seq[1]=3; seq[2]=1; seq[3]=4; seq[4]=2; s = -s; } // A,E,I,O,U
-        const float pos = s * 4.0f;
-        const int i0 = juce::jlimit(0, 3, (int)pos);
-        const int i1 = i0 + 1;
-        const float frac = pos - (float)i0;
-        for (int j = 0; j < 3; ++j)
-            mVocHarm[j] = kFmts[seq[i0]][j] * (1.0f - frac) + kFmts[seq[i1]][j] * frac;
-        mVocAmt = std::abs(mMorphAmt);
+        const bool wasOn = (mVocAmt > 0.001f);
+        mVocAmt = juce::jlimit(0.0f, 1.0f, vocAmt);
+        if (wasOn && mVocAmt <= 0.001f)
+        {
+            // OFFへ落ちた瞬間に共振状態を捨てる (再ONでの残響ポップ防止)
+            for (int j = 0; j < 3; ++j) { mVocFilterL[j].reset(); mVocFilterR[j].reset(); }
+        }
+        if (mVocAmt > 0.001f)
+        {
+            // BassSynth SpectralMorphProcessor mode9 のテーブル (値=倍音番号)
+            static const float kFmts[5][3] = {
+                { 32.0f, 55.0f, 120.0f },   // A
+                { 14.0f, 102.0f, 139.0f },  // I
+                { 14.0f, 41.0f, 116.0f },   // U
+                { 18.0f, 74.0f, 111.0f },   // E
+                { 18.0f, 37.0f, 120.0f },   // O
+            };
+            float s = juce::jlimit(-1.0f, 1.0f, vocShift);
+            int seq[5];
+            if (s >= 0.0f) { seq[0]=0; seq[1]=1; seq[2]=2; seq[3]=3; seq[4]=4; }        // A,I,U,E,O
+            else           { seq[0]=0; seq[1]=3; seq[2]=1; seq[3]=4; seq[4]=2; s = -s; } // A,E,I,O,U
+            const float pos = s * 4.0f;
+            const int i0 = juce::jlimit(0, 3, (int)pos);
+            const int i1 = i0 + 1;
+            const float frac = pos - (float)i0;
+            for (int j = 0; j < 3; ++j)
+                mVocHarm[j] = kFmts[seq[i0]][j] * (1.0f - frac) + kFmts[seq[i1]][j] * frac;
+        }
     }
     mWtPos = juce::jlimit(0.0f, 1.0f, wtPos);
     mPulseWidth = juce::jlimit(0.05f, 0.95f, pulseWidth);
@@ -235,26 +253,28 @@ float ExcitationEngine::applyPolyBlep(float phase, float phaseInc) const noexcep
     return 0.0f;
 }
 
-// Morph位相ワープ (BassSynth applyPhaseWarp 準拠、境界フェード付き)
+// Morph位相ワープ (BassSynth applyPhaseWarp 準拠、境界フェード付き)。
+//  Bend → Sync の順に直列適用する (両方ONなら曲げた位相をさらにシンクで繰り返す)。
 float ExcitationEngine::applyMorphPhase(float phase, float phaseInc, float& sMul) const noexcept
 {
-    if (mMorphMode != 1 && mMorphMode != 2)
+    if (!mBendOn && !mSyncOn)
         return phase;
 
     const float orig = phase;
     float warped = phase;
 
-    if (mMorphMode == 1) // Bend +/-
+    if (mBendOn) // Bend +/-
     {
-        if (phase < mBendSym)
-            warped = mBendSym * std::pow(phase / mBendSym, mBendB);
+        if (warped < mBendSym)
+            warped = mBendSym * std::pow(warped / mBendSym, mBendB);
         else
             warped = mBendSym + (1.0f - mBendSym)
-                   * (1.0f - std::pow((1.0f - phase) / (1.0f - mBendSym), mBendB));
+                   * (1.0f - std::pow((1.0f - warped) / (1.0f - mBendSym), mBendB));
     }
-    else // Sync: 位相を1〜8倍で繰り返し、折返し境界で振幅フェード (クリック防止)
+
+    if (mSyncOn) // Sync: 位相を1〜8倍で繰り返し、折返し境界で振幅フェード (クリック防止)
     {
-        float res = (phase + mSyncShiftHalf) * mSyncSt;
+        float res = (warped + mSyncShiftHalf) * mSyncSt;
         res -= std::floor(res);
         if (res > 0.985f)      sMul *= (1.0f - res) / 0.015f;
         else if (res < 0.015f) sMul *= res / 0.015f;
@@ -507,7 +527,7 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
     //  BassSynthはウェーブテーブル倍音(bin=倍音番号)への振幅EQだったため、
     //  中心周波数 = 倍音番号 × 基音 で追従する3基の共振BPFとして実装する。
     //  mag' = mag*(1-|amt|) + mag*env*4*|amt| に対応する dry/wet 構成。
-    if (mMorphMode == 3 && mVocAmt > 0.001f && activeVoiceCount > 0)
+    if (mVocAmt > 0.001f && activeVoiceCount > 0)
     {
         const float f0 = juce::jlimit(30.0f, 2000.0f,
                                       isMidiMode ? mLastTriggeredFreq : externalPitchHz);

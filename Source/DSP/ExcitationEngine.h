@@ -36,7 +36,9 @@ public:
                         float noiseMix, float lofi, float portaTimeSec,
                         float attackSec, float decaySec, float sustainVal, float releaseSec,
                         float noiseColorHz, int detuneMode,
-                        int morphMode, float morphAmt, float morphShift) noexcept;
+                        float bendAmt, float bendShift,
+                        float syncAmt, float syncShift,
+                        float vocAmt, float vocShift) noexcept;
 
     // カスタムWavetableロード用アクセス (メッセージスレッドからのロード専用)
     MorphWavetable& getWavetable() noexcept { return mWavetable; }
@@ -143,11 +145,11 @@ private:
     std::array<float, kMaxVoices> mDriftVal {};
     std::array<float, kMaxVoices> mChorusPhase {};
 
-    // ---- Morph (BassSynthより移植) ----
-    //  0=None / 1=Bend +/- / 2=Sync / 3=Vocode
-    int   mMorphMode = 0;
-    float mMorphAmt = 0.0f;
-    float mMorphShift = 0.0f;
+    // ---- Morph (BassSynthより移植。3種は独立ノブで同時併用可能) ----
+    //  適用順: Bend(位相ワープ) → Sync(位相繰り返し) → Vocode(フォルマントBPF)
+    //  各Amt=0 でその段は完全にバイパス。
+    bool  mBendOn = false;
+    bool  mSyncOn = false;
     // Bend事前計算 (BassSynth precomputeWarp mode1)
     float mBendSym = 0.5f;
     float mBendB = 1.0f;
