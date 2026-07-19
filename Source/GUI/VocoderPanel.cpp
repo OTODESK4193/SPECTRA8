@@ -51,6 +51,7 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
     setupKnob(mKnobSustain, mLblSustain);
     setupKnob(mKnobRelease, mLblRelease, "s");
     setupKnob(mKnobMix, mLblMix, "%");
+    setupKnob(mKnobMasterPitch, mLblMasterPitch);   // 表示はパラメータ側の "0.00 st" 書式
     setupKnob(mKnobOutLevel, mLblOutLevel, " dB");
 
     // コンボボックス共通セットアップ
@@ -99,6 +100,7 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
     mAttachmentSustain       = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "sustain", mKnobSustain);
     mAttachmentRelease       = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "release", mKnobRelease);
     mAttachmentMix           = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "mix", mKnobMix);
+    mAttachmentMasterPitch   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "masterPitch", mKnobMasterPitch);
     mAttachmentOutLevel      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "outputLevel", mKnobOutLevel);
 
     mAttachmentVocoderMode      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "vocoderMode", mComboVocoderMode);
@@ -129,7 +131,8 @@ VocoderPanel::~VocoderPanel()
     for (ValueKnob* k : { &mKnobCharacter, &mKnobTracking, &mKnobPitchQuantize, &mKnobFmtShift,
                           &mKnobFmtStretch, &mKnobLofi, &mKnobBasePitch, &mKnobNoiseColor,
                           &mKnobNoise, &mKnobBands, &mKnobResonance, &mKnobAttack, &mKnobDecay,
-                          &mKnobSustain, &mKnobRelease, &mKnobMix, &mKnobOutLevel })
+                          &mKnobSustain, &mKnobRelease, &mKnobMix, &mKnobMasterPitch,
+                          &mKnobOutLevel })
         k->setLookAndFeel(nullptr);
 }
 
@@ -157,6 +160,7 @@ void VocoderPanel::timerCallback()
         { &mKnobSustain,       M::DstSustain },
         { &mKnobRelease,       M::DstRelease },
         { &mKnobMix,           M::DstMix },
+        { &mKnobMasterPitch,   M::DstMasterPitch },
         { &mKnobOutLevel,      M::DstOutLevel },
     };
 
@@ -271,9 +275,10 @@ void VocoderPanel::resized()
         upper[(size_t)i].second->setBounds(kx - 10, ky + knobSize, knobSize + 20, labelH);
     }
 
-    // 下段（1行）: ADSR + MIX + OUT + ボタン列。
+    // 下段（1行）: ADSR + MIX + M.PITCH + OUT + ボタン列。
     // 下段エリア = 区切り線(divY) 〜 パネル下端。その中でノブ/ボタンを縦中央に配置する。
-    const int lcols = 7;
+    // 列数はノブ7 + ボタン1 = 8 (M.PITCH追加で7→8になった)
+    const int lcols = 8;
     const int lcolW = knobAreaW / lcols;
     const int lowerTop = uy0 + 2 * urowH - 2;        // paint()の区切り線と一致
     const int lowerBottom = r.getBottom();
@@ -283,9 +288,11 @@ void VocoderPanel::resized()
     const int knobBlockH = knobSize + labelH;
     const int ly = lowerTop + (lowerAreaH - knobBlockH) / 2;
 
-    ValueKnob* lower[6]   = { &mKnobAttack, &mKnobDecay, &mKnobSustain, &mKnobRelease, &mKnobMix, &mKnobOutLevel };
-    juce::Label* lowerL[6] = { &mLblAttack, &mLblDecay, &mLblSustain, &mLblRelease, &mLblMix, &mLblOutLevel };
-    for (int i = 0; i < 6; ++i)
+    ValueKnob* lower[7]    = { &mKnobAttack, &mKnobDecay, &mKnobSustain, &mKnobRelease,
+                               &mKnobMix, &mKnobMasterPitch, &mKnobOutLevel };
+    juce::Label* lowerL[7] = { &mLblAttack, &mLblDecay, &mLblSustain, &mLblRelease,
+                               &mLblMix, &mLblMasterPitch, &mLblOutLevel };
+    for (int i = 0; i < 7; ++i)
     {
         const int kx = knobAreaX + i * lcolW + (lcolW - knobSize) / 2;
         lower[i]->setBounds(kx, ly, knobSize, knobSize);
@@ -298,7 +305,7 @@ void VocoderPanel::resized()
     const int btnGap = 8;
     const int stackH = btnH * 2 + btnGap;
     const int by = lowerTop + (lowerAreaH - stackH) / 2;
-    const int bx = knobAreaX + 6 * lcolW + 3;
+    const int bx = knobAreaX + 7 * lcolW + 3;
     mBtnLimiter.setBounds(bx, by, btnW, btnH);
     mBtnFormantFreeze.setBounds(bx, by + btnH + btnGap, btnW, btnH);
 }

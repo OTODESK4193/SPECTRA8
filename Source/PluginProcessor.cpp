@@ -152,6 +152,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("pitchQuantize", 1), "Pitch Quantize", 0.0f, 100.0f, 0.0f));
 
+    // Master Pitch: キャリア全体の移調 (半音)。
+    //  PITCH Q を効かせている状態で動かすと Key/Scale にスナップされるので、
+    //  LFOなどで変調するとスケール上を音が跳ねる (ハーモナイザ的な使い方)。
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("masterPitch", 1), "Master Pitch",
+        juce::NormalisableRange<float>(-24.0f, 24.0f, 0.01f), 0.0f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction(
+            [](float v, int)
+            {
+                return juce::String(v, 2) + " st";
+            })));
+
     // PITCH Q のスナップ先: キー(ルート音)とスケール
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("pitchQKey", 1), "PitchQ Key",
@@ -758,6 +770,17 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         // 安全対策: activePitch が異常値のときは basePitch に戻す
         if (std::isnan(activePitch) || activePitch <= 20.0f || activePitch > 8000.0f)
             activePitch = basePitch;
+
+        // Master Pitch (±24半音) — 量子化の「前」に掛けるのが要点。
+        //  こうすることで、移調後のピッチがそのまま下のKey/Scaleスナップを通り、
+        //  PITCH Q=100%ならスケール外の音は必ずスケール上へ吸着する。
+        //  結果、M.PitchをLFOで振ると該当Key/Scaleの構成音を渡り歩く。
+        {
+            const float mPitch = juce::jlimit(-24.0f, 24.0f, moddedParam(ModMatrix::DstMasterPitch));
+            if (std::abs(mPitch) > 0.0001f)
+                activePitch = juce::jlimit(20.0f, 8000.0f,
+                                           activePitch * std::pow(2.0f, mPitch / 12.0f));
+        }
 
         // ケロケロ（ピッチ量子化）の適用: Key/Scaleスナップ + ヒステリシス
         //  - スケールマスクで許可音のみにスナップ(Chromatic=全音)

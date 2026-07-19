@@ -50,6 +50,10 @@ public:
         DstWtPos, DstPulseWidth, DstPorta, DstDetune,
         DstBendAmt, DstBendShift, DstSyncAmt, DstSyncShift,
         DstVocAmt, DstVocShift,
+        // ※新しい宛先は必ず末尾に足すこと。途中に挿入すると
+        //   AudioParameterChoice がインデックス保存のため既存セッションの
+        //   スロット設定が別の宛先にズレる。
+        DstMasterPitch,
         NumDsts
     };
 
@@ -74,7 +78,8 @@ public:
                  // EXCITATION
                  "WT Position", "Pulse Width", "Porta", "Detune",
                  "Bend", "Bend Sym", "Sync", "Sync Ph",
-                 "Vocode", "Vowel" };
+                 "Vocode", "Vowel",
+                 "Master Pitch" };
     }
     static juce::StringArray getWaveNames()
     {
@@ -117,6 +122,7 @@ public:
         case DstSyncShift:      return "syncShift";
         case DstVocAmt:         return "vocAmt";
         case DstVocShift:       return "vocShift";
+        case DstMasterPitch:    return "masterPitch";
         default:                return "";
         }
     }
@@ -155,6 +161,9 @@ public:
         case DstSyncShift:      return 1.0f;    // -1..+1
         case DstVocAmt:         return 1.0f;    // 0..1
         case DstVocShift:       return 1.0f;    // -1..+1
+        // Master Pitch: ±24半音。PitchQ=100%ならスケールにスナップされるので、
+        // LFOを当てると該当Key/Scale上を音が移動する。
+        case DstMasterPitch:    return 24.0f;
         default:                return 0.0f;
         }
     }
