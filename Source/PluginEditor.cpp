@@ -12,7 +12,7 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
       mExcitationPanel(p),
       mModPanel(p.apvts),
       mFxPanel(p),
-      mBandsEqPanel(p.apvts, p.getBandGains(), p.getBandLevelsForUi())
+      mBandsEqPanel(p.apvts, p.getBandGains(), p.getBandLevelsForUi(), p.getAnalyzer())
 {
     // ボタンのスタイルとリスナー初期化
     auto setupTabButton = [this](juce::TextButton& btn, int tabIdx)

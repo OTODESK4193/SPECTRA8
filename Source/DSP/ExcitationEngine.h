@@ -15,6 +15,7 @@
 #include <vector>
 #include <cmath>
 #include "Wavetable.h"
+#include "ScaleSnap.h"
 
 class ExcitationEngine
 {
@@ -39,6 +40,17 @@ public:
                         float bendAmt, float bendShift,
                         float syncAmt, float syncShift,
                         float vocAmt, float vocShift) noexcept;
+
+    // M.PITCH / PITCH Q をMIDIモードのボイスにも適用するための設定。
+    //  Autoモードでは PluginProcessor 側の activePitch に既に適用済みなので、
+    //  エンジン側の適用は isMidiMode のときだけ行う (二重適用を避ける)。
+    void setPitchShaping(float masterPitchSt, float quantAmt, int key, int scale) noexcept
+    {
+        mMasterPitchSt = juce::jlimit(-24.0f, 24.0f, masterPitchSt);
+        mQuantAmt = juce::jlimit(0.0f, 1.0f, quantAmt);
+        mQuantKey = juce::jlimit(0, 11, key);
+        mQuantScale = juce::jlimit(0, 4, scale);
+    }
 
     // カスタムWavetableロード用アクセス (メッセージスレッドからのロード専用)
     MorphWavetable& getWavetable() noexcept { return mWavetable; }
@@ -102,6 +114,9 @@ private:
         AdsrStage stage = Idle;
         float envValue = 0.0f;
         float releaseStartVal = 0.0f;
+
+        // PITCH Q のヒステリシス状態 (ボイス毎。-1 = 未保持)
+        int quantNoteHeld = -1;
     };
 
     void triggerVoice(int noteNumber, float velocity) noexcept;
@@ -130,6 +145,12 @@ private:
     float mNoiseColor = 1000.0f; // 新設: ノイズ音程 (BPF Cutoff)
     float mLofi = 0.0f;
     float mPortaTime = 0.0f;
+
+    // M.PITCH / PITCH Q (MIDIモードでのみエンジン側が適用する)
+    float mMasterPitchSt = 0.0f;
+    float mQuantAmt = 0.0f;
+    int   mQuantKey = 0;
+    int   mQuantScale = 0;
     
     // ADSR
     float mAttack = 0.01f;

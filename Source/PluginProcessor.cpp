@@ -440,6 +440,9 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mPitchTracker.prepare(LpcVocoder::kInternalSampleRate);
     mLimiter.prepare(sampleRate);
     mFxChain.prepare(sampleRate);
+    mAnalyzer.prepare(sampleRate);
+    // 解析用モノラルバッファはここで確保しておく (processBlock内でのアロケーションを避ける)
+    mAnalyzerMono.assign((size_t)juce::jmax(64, samplesPerBlock), 0.0f);
 
     // ボコーダーモード切替状態の初期化 + PDC報告
     // (LPCモードは分析窓の群遅延 kLatency16k = 窓長/2 @16kHz)
@@ -771,63 +774,24 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         if (std::isnan(activePitch) || activePitch <= 20.0f || activePitch > 8000.0f)
             activePitch = basePitch;
 
-        // Master Pitch (±24半音) — 量子化の「前」に掛けるのが要点。
-        //  こうすることで、移調後のピッチがそのまま下のKey/Scaleスナップを通り、
-        //  PITCH Q=100%ならスケール外の音は必ずスケール上へ吸着する。
-        //  結果、M.PitchをLFOで振ると該当Key/Scaleの構成音を渡り歩く。
+        // M.PITCH と PITCH Q は ScaleSnap に集約 (MIDIモードのExcitationEngineと同一実装)
+
+        // M.PITCH(移調) → PITCH Q(Key/Scale吸着) を ScaleSnap で一括適用。
+        //  移調を吸着より前に行うため、PITCH Q=100%ならM.PITCHをLFOで振ると
+        //  そのKey/Scale上を音が渡り歩く。ヒステリシス付きでワブルも出ない。
+        const float qAmt = juce::jlimit(0.0f, 100.0f, moddedParam(ModMatrix::DstPitchQuantize)) * 0.01f;
+        const float mPitchSt = juce::jlimit(-24.0f, 24.0f, moddedParam(ModMatrix::DstMasterPitch));
+        const int pqKey   = juce::jlimit(0, 11, (int)apvts.getRawParameterValue("pitchQKey")->load());
+        const int pqScale = juce::jlimit(0, 4,  (int)apvts.getRawParameterValue("pitchQScale")->load());
+
+        // ※ qAmt=0 でも M.PITCH は効かせる (transposeAndSnap が内部で分岐)
+        if (activePitch > 20.0f && !std::isnan(activePitch))
         {
-            const float mPitch = juce::jlimit(-24.0f, 24.0f, moddedParam(ModMatrix::DstMasterPitch));
-            if (std::abs(mPitch) > 0.0001f)
-                activePitch = juce::jlimit(20.0f, 8000.0f,
-                                           activePitch * std::pow(2.0f, mPitch / 12.0f));
+            activePitch = ScaleSnap::transposeAndSnap(activePitch, mPitchSt, qAmt,
+                                                      pqKey, pqScale, mQuantNoteHeld);
         }
-
-        // ケロケロ（ピッチ量子化）の適用: Key/Scaleスナップ + ヒステリシス
-        //  - スケールマスクで許可音のみにスナップ(Chromatic=全音)
-        //  - ヒステリシス: 現在保持中の音より「0.3半音以上近い」別の許可音が
-        //    現れたときだけ切替える。境界付近での音程チャタリング(ワブル)を防止。
-        float qAmt = juce::jlimit(0.0f, 100.0f, moddedParam(ModMatrix::DstPitchQuantize)) * 0.01f;
-        if (qAmt > 0.001f && activePitch > 20.0f && !std::isnan(activePitch))
-        {
-            static constexpr uint16_t kScaleMasks[5] = {
-                0b111111111111,  // Chromatic
-                0b101010110101,  // Major     {0,2,4,5,7,9,11}
-                0b010110101101,  // Minor(nat){0,2,3,5,7,8,10}
-                0b001010010101,  // MajPenta  {0,2,4,7,9}
-                0b010010101001,  // MinPenta  {0,3,5,7,10}
-            };
-            const int key   = juce::jlimit(0, 11, (int)apvts.getRawParameterValue("pitchQKey")->load());
-            const int scale = juce::jlimit(0, 4,  (int)apvts.getRawParameterValue("pitchQScale")->load());
-            const uint16_t mask = kScaleMasks[scale];
-
-            const float cont = 12.0f * std::log2(activePitch / 440.0f) + 69.0f; // 連続MIDIノート値
-            auto isAllowed = [&](int n) {
-                const int deg = ((n - key) % 12 + 12) % 12;
-                return (mask >> deg) & 1;
-            };
-            // 最近傍の許可音を探索 (±1オクターブで必ず見つかる)
-            int nearest = (int)std::lround(cont);
-            float bestDist = 1e9f;
-            for (int d = -12; d <= 12; ++d)
-            {
-                const int n = (int)std::lround(cont) + d;
-                if (!isAllowed(n)) continue;
-                const float dist = std::abs(cont - (float)n);
-                if (dist < bestDist) { bestDist = dist; nearest = n; }
-            }
-            // ヒステリシス判定
-            if (mQuantNoteHeld < 0 || !isAllowed(mQuantNoteHeld)
-                || bestDist + 0.3f < std::abs(cont - (float)mQuantNoteHeld))
-                mQuantNoteHeld = nearest;
-
-            const float qPitch = 440.0f * std::pow(2.0f, ((float)mQuantNoteHeld - 69.0f) / 12.0f);
-            if (!std::isnan(qPitch) && qPitch > 20.0f)
-                activePitch = activePitch + (qPitch - activePitch) * qAmt;
-        }
-        else
-        {
+        if (qAmt <= 0.001f)
             mQuantNoteHeld = -1; // PITCH Q無効時は保持解除
-        }
 
         // FMT SHIFT/STRETCH の一次平滑 (τ≈5ms@16k)。制御ブロック毎(2ms)の階段状変化に
         // よるフィルタ係数ジャンプ/ジッパーノイズを防ぐ。
@@ -835,6 +799,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         mFmtShiftSm   += kFmtSmCoef * (effectiveFormantShift   - mFmtShiftSm);
         mFmtStretchSm += kFmtSmCoef * (effectiveFormantStretch - mFmtStretchSm);
 
+        // MIDIモードでは activePitch(=Autoの追従ピッチ) は使われずノート番号で発音するため、
+        // M.PITCH / PITCH Q を別途エンジン側へ渡してボイス毎に適用させる。
+        mExcitationEngine.setPitchShaping(mPitchSt, qAmt, pqKey, pqScale);
         mExcitationEngine.processSample(carrierL, carrierR, activePitch, isMidiMode);
 
         // ボコーディング処理 (vocoderMode: 0=Filterbank / 1=LPC)
@@ -1012,6 +979,19 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     {
         // 天井は内部固定 -0.1 dBFS (BrickLimiter::kCeiling)。突発ピークも天井へ抑える。
         mLimiter.process(writeL, writeR, numSamples);
+    }
+
+    // 7. アナライザーへ最終出力を投入 (表示専用・ロックフリー)。
+    //    ホストが prepareToPlay より大きいブロックを渡してくる場合に備えて容量を確認する
+    //    (RTスレッドなのでリサイズはせず、入る分だけ渡す)。
+    {
+        const int n = juce::jmin(numSamples, (int)mAnalyzerMono.size());
+        if (n > 0)
+        {
+            for (int i = 0; i < n; ++i)
+                mAnalyzerMono[(size_t)i] = 0.5f * (writeL[i] + writeR[i]);
+            mAnalyzer.pushAudio(mAnalyzerMono.data(), n);
+        }
     }
 }
 

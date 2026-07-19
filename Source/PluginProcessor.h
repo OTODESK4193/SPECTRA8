@@ -19,6 +19,7 @@
 #include "DSP/PitchTracker.h"
 #include "DSP/Limiter.h"
 #include "DSP/FxChain.h"
+#include "DSP/AnalyzerDSP.h"
 
 class SPECTRA8AudioProcessor : public juce::AudioProcessor 
 {
@@ -70,6 +71,10 @@ public:
     // Band EQ API (UIとの橋渡し)
     std::array<std::atomic<float>, 48>& getBandGains() { return mBandGains; }
     const std::array<std::atomic<float>, 48>& getBandLevelsForUi() const { return mBandLevelsForUi; }
+
+    // 高精度アナライザー (BANDS EQ の背景表示用)。
+    // プラグイン最終出力を投入しているので「実際に聞こえている音」のスペクトルになる。
+    const AnalyzerDSP& getAnalyzer() const noexcept { return mAnalyzer; }
 
     // ---- カスタムWavetable (メッセージスレッド専用) ----
     // wav/aiff を読み込み 2048smp/フレームのウェーブテーブルとしてエンジンへ適用。
@@ -142,6 +147,8 @@ private:
     ExcitationEngine mExcitationEngine;
     ModMatrix mModMatrix;
     FxChain mFxChain;                     // 後段FX (5スロット直列)
+    AnalyzerDSP mAnalyzer;                // 表示専用 (バックグラウンドスレッド)
+    std::vector<float> mAnalyzerMono;     // 解析へ渡すモノラル和 (事前確保・RT安全)
 
     // FX Resonator の MIDI モード用。押鍵中のノート番号を低い順に保持する。
     // (ExcitationEngineのボイスはスチール式で消えることがあるため、FX用に別管理)

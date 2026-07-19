@@ -9,6 +9,8 @@
 #include <array>
 #include <atomic>
 
+class AnalyzerDSP;
+
 class BandsEqPanel : public juce::Component
 {
 public:
@@ -16,7 +18,8 @@ public:
 
     BandsEqPanel(juce::AudioProcessorValueTreeState& state,
                  std::array<std::atomic<float>, kMaxBands>& bandGains,
-                 const std::array<std::atomic<float>, kMaxBands>& bandLevelsForUi);
+                 const std::array<std::atomic<float>, kMaxBands>& bandLevelsForUi,
+                 const AnalyzerDSP& analyzer);
     ~BandsEqPanel();
 
     void paint(juce::Graphics& g) override;
@@ -46,9 +49,12 @@ private:
     juce::AudioProcessorValueTreeState& apvts;
     std::array<std::atomic<float>, kMaxBands>& mBandGains;
     const std::array<std::atomic<float>, kMaxBands>& mBandLevelsForUi;
+    const AnalyzerDSP& mAnalyzer;
 
-    // メーター表示用の平滑化値（描画スレッドのみが触る。ガタつき低減）
-    std::array<float, kMaxBands> mMeterSmooth {};
+    // アナライザー曲線の描画点 (描画スレッドのみが触る)
+    static constexpr int kCurvePoints = 240;
+    std::array<float, kCurvePoints> mCurveSmooth {};
+    bool mCurveInit = false;
 
     // メーター再描画のためのタイマー
     class MeterTimer : public juce::Timer

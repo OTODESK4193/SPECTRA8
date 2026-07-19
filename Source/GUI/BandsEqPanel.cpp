@@ -3,14 +3,17 @@
 // 「BANDS EQ」タブ・パネル (Granular 準拠)
 // ==========================================
 #include "BandsEqPanel.h"
+#include "../DSP/AnalyzerDSP.h"
 #include <cmath>
 
 BandsEqPanel::BandsEqPanel(juce::AudioProcessorValueTreeState& state,
                            std::array<std::atomic<float>, kMaxBands>& bandGains,
-                           const std::array<std::atomic<float>, kMaxBands>& bandLevelsForUi)
+                           const std::array<std::atomic<float>, kMaxBands>& bandLevelsForUi,
+                           const AnalyzerDSP& analyzer)
     : apvts(state),
       mBandGains(bandGains),
       mBandLevelsForUi(bandLevelsForUi),
+      mAnalyzer(analyzer),
       mTimer(*this)
 {
     // --- 全リセットの確認バー (パネル内。ネイティブモーダルは使わない) ---
@@ -97,39 +100,65 @@ void BandsEqPanel::paint(juce::Graphics& g)
     }
 
     // ----------------------------------------------------
-    // 入力アナライザーの描画 (背景)
-    //   ※ 以前は個別のバーとして描いていたため、バンド数が少ないと
-    //     「太いバーの上端が音に合わせて上下する」= EQポイントが勝手に動いている
-    //     ように見えてしまっていた。連続した塗り面 + 不透明度低下で、
-    //     操作対象(EQカーブ)ではなく背景の可視化であることを明確にする。
+    // スペクトラムアナライザー (背景) — 高精度定Qフィルタバンクの出力を
+    // 画面X座標に対して連続曲線として描く。
+    //   X軸はEQバンドと同じ mel 配置。各描画点の周波数を mel 逆変換で求め、
+    //   アナライザーから対数補間で dB を取り出すので、バンド数に依存せず滑らか。
+    //   色は低域→高域でグラデーション (帯域が一目で分かるように)。
     // ----------------------------------------------------
     {
-        juce::Path fill;
-        fill.startNewSubPath((float)r.getX(), (float)r.getBottom() - 10.0f);
-        for (int i = 0; i < activeBands; ++i)
+        // EQバンドと同じ mel 軸: 画面比 t → 周波数
+        const float fMin = 80.0f, fMax = 7500.0f;
+        const float mMin = 2595.0f * std::log10(1.0f + fMin / 700.0f);
+        const float mMax = 2595.0f * std::log10(1.0f + fMax / 700.0f);
+        auto xToFreq = [&](float t)
         {
-            const float level = mBandLevelsForUi[(size_t)i].load(); // リニア振幅
+            const float mv = mMin + (mMax - mMin) * t;
+            return 700.0f * (std::pow(10.0f, mv / 2595.0f) - 1.0f);
+        };
 
-            // 表示平滑化 (立ち上がりは速め・減衰は緩やか)
-            float& sm = mMeterSmooth[(size_t)i];
-            const float rate = (level > sm) ? 0.5f : 0.2f;
-            sm += rate * (level - sm);
+        const float botY = (float)r.getBottom() - 10.0f;
 
-            float db = (sm > 1e-5f) ? (20.0f * std::log10(sm)) : -60.0f;
-            db = juce::jlimit(-48.0f, 12.0f, db);
+        juce::Path fill, line;
+        fill.startNewSubPath((float)r.getX(), botY);
 
-            const float pct = (db - (-48.0f)) / (12.0f - (-48.0f));
-            const float y = (float)r.getBottom() - 10.0f - pct * (h - 20.0f);
-            const float x = (float)r.getX() + ((float)i + 0.5f) * bandW;
+        for (int i = 0; i < kCurvePoints; ++i)
+        {
+            const float t = (float)i / (float)(kCurvePoints - 1);
+            const float db = juce::jlimit(-48.0f, 12.0f, mAnalyzer.getDbAtFreq(xToFreq(t)));
+
+            // 描画側でも軽く平滑化してフレーム間のちらつきを抑える
+            float& sm = mCurveSmooth[(size_t)i];
+            if (!mCurveInit) sm = db;
+            else             sm += ((db > sm) ? 0.55f : 0.25f) * (db - sm);
+
+            const float pct = (sm - (-48.0f)) / (12.0f - (-48.0f));
+            const float y = botY - pct * (h - 20.0f);
+            const float x = (float)r.getX() + t * w;
+
+            if (i == 0) line.startNewSubPath(x, y);
+            else        line.lineTo(x, y);
             fill.lineTo(x, y);
         }
-        fill.lineTo((float)r.getRight(), (float)r.getBottom() - 10.0f);
+        mCurveInit = true;
+
+        fill.lineTo((float)r.getRight(), botY);
         fill.closeSubPath();
 
-        g.setColour(SpectraColors::babyBlue.withAlpha(0.10f));
+        // 低域(紫)→中域(青)→高域(ミント)のグラデーション
+        juce::ColourGradient grad(SpectraColors::lilac.withAlpha(0.30f), (float)r.getX(), 0.0f,
+                                  SpectraColors::mint.withAlpha(0.30f), (float)r.getRight(), 0.0f,
+                                  false);
+        grad.addColour(0.45, SpectraColors::babyBlue.withAlpha(0.30f));
+        g.setGradientFill(grad);
         g.fillPath(fill);
-        g.setColour(SpectraColors::babyBlue.withAlpha(0.22f));
-        g.strokePath(fill, juce::PathStrokeType(1.0f));
+
+        juce::ColourGradient gradLine(SpectraColors::lilac.withAlpha(0.85f), (float)r.getX(), 0.0f,
+                                      SpectraColors::mint.withAlpha(0.85f), (float)r.getRight(), 0.0f,
+                                      false);
+        gradLine.addColour(0.45, SpectraColors::babyBlue.withAlpha(0.85f));
+        g.setGradientFill(gradLine);
+        g.strokePath(line, juce::PathStrokeType(1.4f, juce::PathStrokeType::curved));
     }
 
     // ----------------------------------------------------
@@ -181,8 +210,8 @@ void BandsEqPanel::paint(juce::Graphics& g)
         g.setColour(SpectraColors::accentBands);
         g.drawText("EQ (drag to edit)", r.getRight() - 240, ly, 118, 12,
                    juce::Justification::centredRight);
-        g.setColour(SpectraColors::babyBlue.withAlpha(0.55f));
-        g.drawText("ANALYZER (input)", r.getRight() - 118, ly, 112, 12,
+        g.setColour(SpectraColors::babyBlue.withAlpha(0.65f));
+        g.drawText("ANALYZER (output)", r.getRight() - 118, ly, 112, 12,
                    juce::Justification::centredRight);
     }
 

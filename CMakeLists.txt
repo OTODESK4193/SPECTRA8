@@ -66,6 +66,9 @@ target_sources(SPECTRA8 PRIVATE
     Source/DSP/PostBandEq.h
     Source/DSP/Limiter.h
     Source/DSP/FxChain.h
+    Source/DSP/ScaleSnap.h
+    Source/DSP/AnalyzerDSP.h
+    Source/DSP/AnalyzerDSP.cpp
 
     # --- GUI モジュール ---
     Source/GUI/ColorPalette.h

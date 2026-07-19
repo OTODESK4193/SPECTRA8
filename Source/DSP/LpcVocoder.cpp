@@ -6,6 +6,57 @@
 #include <cmath>
 #include <algorithm>
 
+namespace
+{
+    // 反射係数k → 直接形係数a (step-up再帰)。order ≤ 16 なので十分軽い。
+    inline void kToA(const float* k, int order, double* a) noexcept
+    {
+        a[0] = 1.0;
+        for (int i = 1; i <= order; ++i) a[i] = 0.0;
+        double tmp[LpcAnalyzer::kMaxOrder + 1];
+        for (int m = 0; m < order; ++m)
+        {
+            for (int i = 0; i <= m + 1; ++i) tmp[i] = a[i];
+            for (int i = 1; i <= m + 1; ++i)
+                a[i] = tmp[i] + (double)k[m] * tmp[m + 1 - i];
+        }
+    }
+
+    // 全極フィルタ 1/A(z) の「励起重み(1/f²)+デエンファシス込み」エネルギー。
+    //   キャリアがコム/ノコギリ(1/f²スペクトル)であることを前提にした聴感レベルの指標。
+    //   白色雑音基準の Π(1-k²) では、この励起では補償が全く足りない
+    //   (3bit量子化時に実測+15.8dBの暴れが残っていた)。
+    inline double weightedEnergy(const double* a, int order) noexcept
+    {
+        constexpr double kPre = 15.0 / 16.0;   // プリエンファシス係数と一致させること
+        double wE = 0.0;
+        for (int m = 0; m < 64; ++m)
+        {
+            const double f = 60.0 * std::pow(7600.0 / 60.0, (double)m / 63.0);
+            const double w = 6.283185307179586 * f / LpcVocoder::kInternalSampleRate;
+            double re = 1.0, im = 0.0;
+            for (int i = 1; i <= order; ++i)
+            {
+                re += a[i] * std::cos(w * (double)i);
+                im -= a[i] * std::sin(w * (double)i);
+            }
+            const double dr = 1.0 - kPre * std::cos(w);
+            const double di = kPre * std::sin(w);
+            const double d2 = 1.0 / std::max(1e-12, dr * dr + di * di);
+            const double h2 = d2 / std::max(1e-18, re * re + im * im);
+            wE += (1.0 / (f * f)) * h2;
+        }
+        return wE;
+    }
+
+    inline double weightedEnergyFromK(const float* k, int order) noexcept
+    {
+        double a[LpcAnalyzer::kMaxOrder + 1];
+        kToA(k, order, a);
+        return weightedEnergy(a, order);
+    }
+}
+
 void LpcVocoder::prepare(double /*hostSampleRate*/)
 {
     mAnalyzer.prepare();
@@ -351,13 +402,20 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
             //  kドメイン一様量子化は |k|→1 付近で極半径への感度が極端に高く、丸め上げで
             //  共振が急増しクリップの原因になるため、感度が均等なLAR領域で丸める
             //  (TMS5220系実機の非一様量子化テーブル相当)。
-            //  さらに量子化によるフィルタ利得変化を G *= sqrt(Π(1-kq²)/Π(1-k²)) で補償し、
-            //  低ビット時の音量暴れ・クリップを防ぐ(レトロな粗さは維持される)。
+            //  さらに量子化によるフィルタ利得変化をゲイン補償して低ビット時の音量暴れを防ぐ
+            //  (レトロな粗さは維持される)。
+            //
+            //  【補償方式の変更】以前は白色雑音基準の G *= sqrt(Π(1-kq²)/Π(1-k²)) を
+            //  使っていたが、本機のキャリアはノコギリ/コム(1/f²スペクトル)であり
+            //  この式では全く足りなかった。実測で 3bit 時に +15.8dB の音量跳ね上がりが
+            //  残っていた(量子化でkが 0.963/0.995 へ寄り超高Q共振が立つため)。
+            //  FMT STRETCH と同じ「励起重み付きエネルギー比」に統一する。
             if (mQuantBits >= 2)
             {
+                const double eBefore = weightedEnergyFromK(&mKTarget[0], order);
+
                 const double Q = (double)((1 << (mQuantBits - 1)) - 1);
                 constexpr double kLarMax = 2.994;   // atanh(0.995)
-                double num = 1.0, den = 1.0;        // Π(1-kq²) / Π(1-k²)
                 for (int p = 0; p < order; ++p)
                 {
                     const double k0   = std::min(0.995, std::max(-0.995, (double)mKTarget[(size_t)p]));
@@ -365,11 +423,15 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                     const double larQ = std::round(lar * (Q / kLarMax)) * (kLarMax / Q);
                     const double kq   = std::min(0.995, std::max(-0.995, std::tanh(larQ)));
                     mKTarget[(size_t)p] = (float)kq;
-                    num *= (1.0 - kq * kq);
-                    den *= (1.0 - k0 * k0);
                 }
-                if (den > 1e-12)
-                    mGTarget *= (float)std::sqrt(num / den);
+
+                const double eAfter = weightedEnergyFromK(&mKTarget[0], order);
+                if (eBefore > 1e-18 && eAfter > 1e-18)
+                {
+                    // 0.05〜2.0 に制限 (極端な補正でかえって不自然にならないように)
+                    const double comp = std::sqrt(eBefore / eAfter);
+                    mGTarget *= (float)std::min(2.0, std::max(0.05, comp));
+                }
             }
 
             // M4: フルホップ補間セグメントを構築(現在値→新ターゲットをホップ全長でモーフ)

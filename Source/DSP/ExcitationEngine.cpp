@@ -180,6 +180,7 @@ void ExcitationEngine::triggerVoice(int noteNumber, float velocity) noexcept
             v.targetFreq = freq;
             v.triggerTime = mTriggerCounter;
             v.stage = Voice::Attack;
+            v.quantNoteHeld = -1;   // 新しい音は前の音の吸着状態を引き継がない
             mLastTriggeredFreq = freq;
             return;
         }
@@ -196,6 +197,7 @@ void ExcitationEngine::triggerVoice(int noteNumber, float velocity) noexcept
             v.targetFreq = freq;
             v.triggerTime = mTriggerCounter;
             v.stage = Voice::Attack;
+            v.quantNoteHeld = -1;   // 新しい音は前の音の吸着状態を引き継がない
 
             // ポルタメント処理
             if (mPortaTime > 0.001f)
@@ -228,6 +230,7 @@ void ExcitationEngine::triggerVoice(int noteNumber, float velocity) noexcept
     v.triggerTime = mTriggerCounter;
     v.stage = Voice::Attack;
     v.envValue = 0.0f; // スチールなのでリセット
+    v.quantNoteHeld = -1;
 
     if (mPortaTime > 0.001f)
         v.currentFreq = mLastTriggeredFreq;
@@ -419,6 +422,18 @@ void ExcitationEngine::processSample(float& outL, float& outR, float externalPit
         // ※旧実装の「lofi>0.5で半音ピッチ量子化」は削除した。
         //   ケロケロ効果は pitchQuantize ノブに一本化(挙動を予測可能に)。
         float pitch = v.currentFreq;
+
+        // M.PITCH / PITCH Q の適用 (MIDIモードのみ)。
+        //  Autoモードでは PluginProcessor 側の activePitch に適用済みなので、
+        //  ここで再度掛けると二重適用になる。
+        //  ボイス毎にヒステリシス状態を持たせ、和音でも各声部が独立に吸着する。
+        if (isMidiMode)
+        {
+            pitch = ScaleSnap::transposeAndSnap(pitch, mMasterPitchSt, mQuantAmt,
+                                                mQuantKey, mQuantScale, v.quantNoteHeld);
+            if (mQuantAmt <= 0.001f)
+                v.quantNoteHeld = -1;
+        }
 
         // 2. デチューン計算 (Detune Mode別の分散アルゴリズム)
         const float detuneCents = mDetuneSm;
