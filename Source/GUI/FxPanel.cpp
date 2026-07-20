@@ -233,7 +233,7 @@ void FxPanel::rebuildDetails()
         comboDefs = { { "resMode", "MODE", 0 }, { "resChord", "CHORD", 0 } };
         // ROOTはMIDIノート番号パラメータ。表示はパラメータ側の音名書式 (例 "A2")。
         knobDefs  = { { "resRoot", "ROOT", 0 }, { "resFreeMs", "TIME ms", 1 },
-                      { "resFeedback", "FEEDBACK", 2 }, { "resDamp", "DAMP", 2 },
+                      { "resDecay", "DECAY", 2 }, { "resDamp", "DAMP", 2 },
                       { "resSpread", "SPREAD", 2 },
                       { "resShimmer", "SHIMMER", 2 }, { "resInharm", "INHARM", 2 } };
         break;

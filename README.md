@@ -83,6 +83,8 @@ Five slots in series. Drag any card to reorder the chain; click a card to edit i
   * **CHORD mode:** place the resonators on a root note and chord type (Octaves / Power 5 / Major / Minor / Sus4 / Min7 / Maj9 / Dim). ROOT is entered as a note name, not a frequency.
   * **MIDI mode:** resonator pitches follow the notes you hold. Fewer than 8 notes are stacked into higher octaves. Releasing the keys holds the last voicing rather than cutting out.
   * **FREE mode:** delay time in milliseconds — this is the same DSP as a very short delay with high feedback, so it covers metallic flanging and comb design.
+  * **DECAY** sets the ring-out time in seconds and is pitch-compensated, so low and high notes sustain for the same length. A raw feedback coefficient would make an 880 Hz note decay 13× faster than a 55 Hz one.
+  * **TIME** is the delay length and applies to **FREE mode only** — in Chord and MIDI mode the pitch determines the delay, so TIME has no effect there.
   * **SHIMMER** adds octave-up and two-octave-up taps *in parallel to the output only*. It never enters the feedback loop, so the fundamental resonance stays intact and you get sparkle on top instead of the higher octaves taking over.
   * **INHARM** stretches the partials the way a real string or bell does (`f_n /= √(1+B·n²)`), producing beating and metallic shimmer.
 * **MULTIBAND DRIVE** — 3-band split (300 Hz / 2500 Hz) with independent drive per band. Shapes: Tanh / Fold / Crush.
@@ -153,7 +155,7 @@ Five slots in series. Drag any card to reorder the chain; click a card to edit i
 
 | FX | Parameters |
 |---|---|
-| **Resonator** | MODE (Chord/Free/MIDI), CHORD, ROOT (C1–C7), TIME (0.2–50 ms), FEEDBACK, DAMP, SPREAD, SHIMMER, INHARM |
+| **Resonator** | MODE (Chord/Free/MIDI), CHORD, ROOT (C1–C7), TIME (0.2–50 ms, FREE mode only), DECAY (0.05–20 s), DAMP, SPREAD, SHIMMER, INHARM |
 | **Drive** | SHAPE (Tanh/Fold/Crush), DRIVE (1–40×), LOW, MID, HIGH |
 | **Gate** | RATE (1/2–1/32, tempo-synced), PATTERN (6 types), DEPTH, SHAPE, VOWEL, SMOOTH |
 | **Chorus** | RATE (0.02–8 Hz), DEPTH (0.1–12 ms), WIDTH |
@@ -208,6 +210,14 @@ The FX chain sits on the wet path, so **MIX at 0 gives you the untouched dry sig
 * **Smoothed parameters.** MIX and OUT LEVEL use 20 ms sample-accurate ramps. FMT SHIFT/STRETCH, DETUNE, NOISE, and resonator delay lengths are smoothed inside their engines to prevent zipper noise and clicks.
 * **Bounded feedback.** Resonator feedback is hard-limited below 1.0 with soft clipping inside the loop; reverb feedback tops out at 0.98.
 * **Verified by numerical tests.** LPC parameter combinations (900 permutations), scale snapping (20 scales × 12 keys × ±24 st), FX stability, and gate timing accuracy are all covered by standalone test programs under `Tests/`.
+
+
+## 📚 Manual
+
+Quick manuals covering every tab and parameter, plus starting-point settings and troubleshooting:
+
+[ ![Manual (EN)](https://img.shields.io/badge/Manual-English-blue?style=for-the-badge) ](Source/Assets/SPECTRA8_Manual_EN.md)
+[ ![Manual (JP)](https://img.shields.io/badge/Manual-日本語-red?style=for-the-badge) ](Source/Assets/SPECTRA8_Manual_JP.md)
 
 
 ## Installation

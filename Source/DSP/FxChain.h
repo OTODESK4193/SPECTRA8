@@ -155,18 +155,23 @@ public:
     // chord     : コード種
     // freeMs    : Free時のディレイ時間(ms)
     // spreadAmt : Free時のボイス間隔の広がり / Chord時のステレオ広がり
-    // feedback  : 0..1 (減衰時間)
-    // damp      : 0..1 (帰還ループ内LPFの強さ)
+    // decaySec  : 余韻(T60)の長さ[秒]。ピッチに依らず一定になるようボイス毎に帰還量を算出する。
+    //             ※旧実装は生の帰還係数だったため、同じ設定でも 55Hz=1.63秒 / 880Hz=0.12秒 と
+    //               13倍も差が出ていた(高い音ほど1周期が短く、同じ係数でも早く減衰するため)。
+    // damp      : 0..1 (帰還ループ内LPFの強さ。高域だけ先に減衰させる音色調整)
     // midiHz/numMidi : MIDIモード時に押鍵中の音の周波数 (0本なら直前の配置を維持)
-    // shimmer   : 0..1 オクターブ上のタップを帰還へ混ぜる + 揺らぎ (キラキラ感)
+    // shimmer   : 0..1 オクターブ上のタップを出力へ加算 (きらめき)
     // inharm    : 0..1 部分音を非調和に伸ばす (ベル/金属的な倍音)
     void setParams(int mode, float rootHz, int chord, float freeMs,
-                   float spreadAmt, float feedback, float damp,
+                   float spreadAmt, float decaySec, float damp,
                    float shimmer, float inharm,
                    const float* midiHz = nullptr, int numMidi = 0) noexcept
     {
         mShimmer = juce::jlimit(0.0f, 1.0f, shimmer);
         mInharm  = juce::jlimit(0.0f, 1.0f, inharm);
+        // 補間損失のぶん実測が短めに出るので、表示値と体感を合わせる較正係数を掛ける
+        // (無補正だと 2.0s設定→実測1.42s、15s設定→7.7s と乖離していた)
+        mDecaySec = juce::jlimit(0.02f, 30.0f, decaySec * 1.55f);
         static const int kChordSemis[NumChords][8] = {
             {  0, 12, 24, 36, 48, 60, 72, 84 },   // Octaves
             {  0,  7, 12, 19, 24, 31, 36, 43 },   // Power 5
@@ -178,7 +183,6 @@ public:
             {  0,  3,  6,  9, 12, 15, 18, 21 },   // Dim
         };
 
-        mFeedback = juce::jlimit(0.0f, 0.995f, feedback);   // 1.0未満に必ず制限 (発散防止)
         mDamp = juce::jlimit(0.0f, 0.95f, damp);
 
         const int ch = juce::jlimit(0, (int)NumChords - 1, chord);
@@ -214,10 +218,13 @@ public:
             }
 
             // 非調和性: 実弦/ベルのように高次部分音ほど上へずれる (f_n *= sqrt(1+B*n²))。
-            // わずかに入れるだけで「うなり」が生まれ、金属的なキラキラ感になる。
+            // 低次はほぼ動かず高次ほど大きくずれるので、基音は保ったまま
+            // 上の倍音だけが「うなる」= ベル/金属的な響きになる。
+            // ※旧値 0.0012 では最上位ボイスでも +3.8% しか動かず体感できなかった。
+            //   0.005 で最上位 +15% 程度になり、はっきりうなりが出る。
             if (mInharm > 0.001f)
             {
-                const float B = mInharm * 0.0012f;
+                const float B = mInharm * 0.005f;
                 const float n = (float)(i + 1);
                 delaySamples /= std::sqrt(1.0f + B * n * n);
             }
@@ -226,6 +233,25 @@ public:
             const float det = sp * 0.02f * ((i % 2 == 0) ? 1.0f : -1.0f);
             voicesL[(size_t)i].targetDelay = delaySamples * (1.0f + det);
             voicesR[(size_t)i].targetDelay = delaySamples * (1.0f - det);
+
+            // --- ボイス毎の帰還量を「余韻の長さ」から逆算する ---
+            //  遅延長 D サンプルのコムは1周につき g 倍になるので、
+            //  -60dB に達するまでの時間は  T60 = -3*D / (log10(g)*sr)
+            //  これを g について解くと   g = 10^(-3*D / (T60*sr))
+            //  こうするとピッチが変わっても余韻の長さが一定になる。
+            for (auto* vv : { &voicesL[(size_t)i], &voicesR[(size_t)i] })
+            {
+                const float D = juce::jmax(2.0f, vv->targetDelay);
+                const float g = std::pow(10.0f, -3.0f * D / (mDecaySec * (float)sampleRate));
+
+                // ※小数遅延の線形補間による損失を打ち消す補正も試したが、
+                //   短い遅延(高い部分音)では補正後の帰還量が1を超えてクランプされ、
+                //   低域だけが減衰せずに残って「ボワつき」になった。
+                //   補間損失は物理的な減衰として受け入れ、素の値をそのまま使う。
+                //   結果として長い設定では実測がやや短めに出るが、
+                //   ノブは単調で、ピッチ依存も旧実装の13倍→1.7倍まで縮んでいる。
+                vv->feedback = juce::jlimit(0.0f, 0.9995f, g);   // 1.0未満を厳守(発散防止)
+            }
         }
     }
 
@@ -274,6 +300,7 @@ private:
         fxutil::OnePole shimHp;      // オクターブ上タップの低域を落とす
         float delaySamples = 100.0f; // 実際に読み出している長さ (平滑後)
         float targetDelay = 100.0f;  // setParams が書き込む目標長
+        float feedback = 0.9f;       // このボイスの帰還量 (DECAYから逆算)
     };
 
     float tick(Voice& v, float in, float mod) noexcept
@@ -285,7 +312,7 @@ private:
         // 帰還ループは常に素のまま。SHIMMERを帰還へ入れると
         // オクターブ上の成分が再循環して増殖し、基音の共鳴を食い潰してしまう
         // (「効果が大きすぎて全てをかき消す」状態になっていた原因)。
-        v.dl.write(fxutil::softClip(in + fb * mFeedback));
+        v.dl.write(fxutil::softClip(in + fb * v.feedback));
 
         float out = delayed;
 
@@ -297,8 +324,8 @@ private:
             const float oct1 = v.dl.read(d * 0.5f);    // +1oct
             const float oct2 = v.dl.read(d * 0.25f);   // +2oct
             float sp = oct1 * 0.55f + oct2 * 0.45f;
-            sp -= v.shimHp.lp(sp, 0.85f);              // 低域を落として「空気感」だけ残す
-            out += sp * mShimmer * 0.45f;
+            sp -= v.shimHp.lp(sp, 0.75f);              // 低域を落として「空気感」だけ残す
+            out += sp * mShimmer * 0.75f;
         }
 
         return out;
@@ -306,8 +333,8 @@ private:
 
     double sampleRate = 44100.0;
     std::array<Voice, kNumVoices> voicesL, voicesR;
-    float mFeedback = 0.7f;
     float mDamp = 0.3f;
+    float mDecaySec = 2.0f;
     float mShimmer = 0.0f;
     float mInharm = 0.0f;
     float mLfoPhase = 0.0f, mLfoPhase2 = 0.33f;
@@ -764,7 +791,7 @@ public:
         int   resChord = 2;
         float resFreeMs = 5.0f;
         float resSpread = 0.4f;
-        float resFeedback = 0.85f;
+        float resDecay = 2.0f;   // 余韻の長さ[秒]
         float resDamp = 0.35f;
 
         // Drive
@@ -809,7 +836,7 @@ public:
     {
         mParams = p;
         mResonator.setParams(p.resMode, p.resRootHz, p.resChord, p.resFreeMs,
-                             p.resSpread, p.resFeedback, p.resDamp,
+                             p.resSpread, p.resDecay, p.resDamp,
                              p.resShimmer, p.resInharm,
                              p.midiHz.data(), p.numMidiHz);
         mDrive.setParams(p.drvShape, p.drvDrive, p.drvLow, p.drvMid, p.drvHigh);

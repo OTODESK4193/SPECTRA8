@@ -350,8 +350,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::NormalisableRange<float>(0.2f, 50.0f, 0.0f, 0.4f), 5.0f));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("resSpread", 1), "Res Spread", 0.0f, 1.0f, 0.4f));
+    // DECAY: 余韻(T60)の長さ[秒]。ピッチに依らず一定になるよう内部で帰還量へ変換する。
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("resFeedback", 1), "Res Feedback", 0.0f, 1.0f, 0.85f));
+        juce::ParameterID("resDecay", 1), "Res Decay",
+        juce::NormalisableRange<float>(0.05f, 20.0f, 0.0f, 0.35f), 2.0f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction(
+            [](float v, int) { return juce::String(v, v < 1.0f ? 2 : 1) + " s"; })));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("resDamp", 1), "Res Damp", 0.0f, 1.0f, 0.35f));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
@@ -942,7 +946,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         fp.resChord    = (int)apvts.getRawParameterValue("resChord")->load();
         fp.resFreeMs   = apvts.getRawParameterValue("resFreeMs")->load();
         fp.resSpread   = apvts.getRawParameterValue("resSpread")->load();
-        fp.resFeedback = apvts.getRawParameterValue("resFeedback")->load();
+        fp.resDecay    = apvts.getRawParameterValue("resDecay")->load();
         fp.resDamp     = apvts.getRawParameterValue("resDamp")->load();
         fp.resShimmer  = apvts.getRawParameterValue("resShimmer")->load();
         fp.resInharm   = apvts.getRawParameterValue("resInharm")->load();
