@@ -280,21 +280,28 @@ private:
     {
         const float d = v.delaySamples * (1.0f + mod);
         const float delayed = v.dl.read(d);
-        float fb = v.damp.lp(delayed, mDamp);
+        const float fb = v.damp.lp(delayed, mDamp);
 
-        // SHIMMER: 半分の長さ = 1オクターブ上のタップを帰還に足す。
-        //  減衰しながら上のオクターブへエネルギーが移り、Ableton Spectral Resonator
-        //  的な「上へ伸びるキラキラ」になる。高域だけ混ぜないと濁るのでHPFを噛ませる。
+        // 帰還ループは常に素のまま。SHIMMERを帰還へ入れると
+        // オクターブ上の成分が再循環して増殖し、基音の共鳴を食い潰してしまう
+        // (「効果が大きすぎて全てをかき消す」状態になっていた原因)。
+        v.dl.write(fxutil::softClip(in + fb * mFeedback));
+
+        float out = delayed;
+
+        // SHIMMER: 1/2 と 1/4 の長さ = 1・2オクターブ上のタップを
+        //  「出力へ並列に加算するだけ」。帰還には一切戻さない。
+        //  基音の共鳴はそのまま残り、その上に倍音の煌めき(Sparkle)だけが乗る。
         if (mShimmer > 0.001f)
         {
-            const float oct = v.dl.read(d * 0.5f);
-            const float octHp = oct - v.shimHp.lp(oct, 0.90f);   // 簡易HPF
-            fb += octHp * mShimmer * 0.55f;
+            const float oct1 = v.dl.read(d * 0.5f);    // +1oct
+            const float oct2 = v.dl.read(d * 0.25f);   // +2oct
+            float sp = oct1 * 0.55f + oct2 * 0.45f;
+            sp -= v.shimHp.lp(sp, 0.85f);              // 低域を落として「空気感」だけ残す
+            out += sp * mShimmer * 0.45f;
         }
 
-        // 入力 + 減衰した帰還。softClipで帰還ループ自体を有界にする。
-        v.dl.write(fxutil::softClip(in + fb * mFeedback));
-        return delayed;
+        return out;
     }
 
     double sampleRate = 44100.0;
