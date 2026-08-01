@@ -611,8 +611,8 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     // バッファ確保
     int maxSafeSize = std::max(samplesPerBlock * 3, 4096);
     mDownsampledBuffer.assign((size_t)maxSafeSize, 0.0f);
-    m16kWetL.assign((size_t)maxSafeSize, 0.0f);
-    m16kWetR.assign((size_t)maxSafeSize, 0.0f);
+    m16kWetL.assign((size_t)(maxSafeSize + 1), 0.0f);   // +1: アップサンプル補間用ガードサンプル
+    m16kWetR.assign((size_t)(maxSafeSize + 1), 0.0f);   // +1: 同上
 }
 
 void SPECTRA8AudioProcessor::releaseResources()
@@ -696,10 +696,14 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         while (mDownsampleTimeAccum < (double)numSamples)
         {
             int idx0 = (int)mDownsampleTimeAccum;
-            int idx1 = std::min(numSamples - 1, idx0 + 1);
             float frac = (float)(mDownsampleTimeAccum - idx0);
 
-            float val = inputL[idx0] * (1.0f - frac) + inputL[idx1] * frac;
+            // ブロック末尾で idx0+1 が範囲外になる場合は前ブロック末尾の
+            // ガードサンプルを使って補間する (旧: idx1 を numSamples-1 にクランプ
+            // → ゼロ次ホールドとなりブロック境界でノイズが発生していた)。
+            float s0 = inputL[idx0];
+            float s1 = (idx0 + 1 < numSamples) ? inputL[idx0 + 1] : mDownGuard;
+            float val = s0 * (1.0f - frac) + s1 * frac;
 
             if (num16kSamples < maxSafeSize)
             {
@@ -709,6 +713,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mDownsampleTimeAccum += step;
         }
         mDownsampleTimeAccum -= (double)numSamples;
+        mDownGuard = inputL[numSamples - 1];   // 次ブロック用ガードサンプルを保持
     }
 
     // 4. 16kHz領域でのDSP処理ループ
@@ -982,6 +987,25 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         m16kWetR[(size_t)s] = wetR;
     }
 
+    // 4a-guard. アップサンプリングのブロック境界補間用ガードサンプルを生成する。
+    //  線形補間の idx1 がバッファ末尾を超えた際、旧実装は idx1 を num16kSamples-1 に
+    //  クランプしていたため、ブロック末尾で出力波形がゼロ次ホールド(平坦)になり、
+    //  ブロックレートのクリック列 = 「ジリジリ」ノイズが発生していた。
+    //  末尾の2サンプルから線形外挿し、m16kWetL/R[num16kSamples] へ書き込むことで
+    //  補間を途切れなく行えるようにする。バッファは prepareToPlay で +1 確保済み。
+    if (num16kSamples >= 2)
+    {
+        m16kWetL[(size_t)num16kSamples] = 2.0f * m16kWetL[(size_t)(num16kSamples - 1)]
+                                        - m16kWetL[(size_t)(num16kSamples - 2)];
+        m16kWetR[(size_t)num16kSamples] = 2.0f * m16kWetR[(size_t)(num16kSamples - 1)]
+                                        - m16kWetR[(size_t)(num16kSamples - 2)];
+    }
+    else if (num16kSamples == 1)
+    {
+        m16kWetL[1] = m16kWetL[0];
+        m16kWetR[1] = m16kWetR[0];
+    }
+
     // 4b. 入力が繋がっていない / ブロックが極小で16kサンプルが生成されなかったときも
     //     LFO・ENV を止めない。上のループの中でしか ModMatrix を回していないため、
     //     MIDIモードでサイドチェイン入力を繋がずに使うと変調が完全に固まっていた。
@@ -1085,10 +1109,15 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             //  frac も同様に負を許す (元実装どおりの後方外挿)。クランプすると段差が出る。
             //  範囲外アクセスの防止は「添字だけ」を丸めることで行う。
             //  num16kSamples > 0 は didProcess 側で保証済みなので idx1 は必ず有効。
+            //
+            //  idx1 の上限は num16kSamples (= ガードサンプル位置)。
+            //  旧実装は num16kSamples-1 だったため、ブロック末尾で idx0==idx1 となり
+            //  ゼロ次ホールド(平坦)→ ブロックレートのクリック列が発生していた。
+            //  ガードサンプル (4a-guard で線形外挿生成済み) を参照可にして解消。
             const int rawIdx = (int)mUpsampleTimeAccum;
             const float frac = (float)(mUpsampleTimeAccum - (double)rawIdx);
             const int idx0 = juce::jlimit(0, num16kSamples - 1, rawIdx);
-            const int idx1 = juce::jlimit(0, num16kSamples - 1, rawIdx + 1);
+            const int idx1 = juce::jlimit(0, num16kSamples, rawIdx + 1);   // ガードサンプルまで参照可
 
             writeL[i] = (m16kWetL[(size_t)idx0] * (1.0f - frac) + m16kWetL[(size_t)idx1] * frac) * gateGain;
             writeR[i] = (m16kWetR[(size_t)idx0] * (1.0f - frac) + m16kWetR[(size_t)idx1] * frac) * gateGain;

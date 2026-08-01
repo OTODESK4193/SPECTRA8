@@ -24,15 +24,16 @@ namespace
 
     // 全極フィルタ 1/A(z) の「励起重み(1/f²)+デエンファシス込み」エネルギー。
     //   キャリアがコム/ノコギリ(1/f²スペクトル)であることを前提にした聴感レベルの指標。
-    //   白色雑音基準の Π(1-k²) では、この励起では補償が全く足りない
-    //   (3bit量子化時に実測+15.8dBの暴れが残っていた)。
+    //   【修正B】評価グリッドを 64点 → 128点 に倍増し、Order 16 等の高次フォルマントが
+    //   周波数グリッドの間隙に落ちてエネルギーを過小評価(ゲイン過大算出)するのを防止。
     inline double weightedEnergy(const double* a, int order) noexcept
     {
         constexpr double kPre = 15.0 / 16.0;   // プリエンファシス係数と一致させること
+        constexpr int kEnergyBins = 128;
         double wE = 0.0;
-        for (int m = 0; m < 64; ++m)
+        for (int m = 0; m < kEnergyBins; ++m)
         {
-            const double f = 60.0 * std::pow(7600.0 / 60.0, (double)m / 63.0);
+            const double f = 60.0 * std::pow(7600.0 / 60.0, (double)m / (double)(kEnergyBins - 1));
             const double w = 6.283185307179586 * f / LpcVocoder::kInternalSampleRate;
             double re = 1.0, im = 0.0;
             for (int i = 1; i <= order; ++i)
@@ -46,7 +47,8 @@ namespace
             const double h2 = d2 / std::max(1e-18, re * re + im * im);
             wE += (1.0 / (f * f)) * h2;
         }
-        return wE;
+        // 64点基準とのエネルギー互換性を維持するためのスケール調整
+        return wE * (64.0 / (double)kEnergyBins);
     }
 
     inline double weightedEnergyFromK(const float* k, int order) noexcept
@@ -468,8 +470,18 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
     if (mCtrlCounter == 0)
     {
         // ゲインの非対称平滑化（att 5ms / rel 30ms）
-        const float coef = (mGTarget > mGSmooth) ? mGAttCoef : mGRelCoef;
-        mGSmooth = mGTarget + (mGSmooth - mGTarget) * coef;
+        // 【修正A】Stepモード(mSegDomain == 0 / k: Off)において、目標ゲインが減少する場合(mGTarget < mGSmooth)は、
+        // 30msのリリース時間を待たずに即座にmGTargetへ引き下げる。
+        // これにより、フィルタが2msで鋭いフォルマントへ変化した際の過渡的な音量膨脹(+28dB)を防止。
+        if (mSegDomain == 0 && mGTarget < mGSmooth)
+        {
+            mGSmooth = mGTarget;
+        }
+        else
+        {
+            const float coef = (mGTarget > mGSmooth) ? mGAttCoef : mGRelCoef;
+            mGSmooth = mGTarget + (mGSmooth - mGTarget) * coef;
+        }
 
         constexpr float inv = 1.0f / (float)kCtrlBlock;
         if (mSegDomain == 0)
@@ -514,6 +526,17 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
     const float dcOutR = mDeempR - mDcX1R + kDcR * mDcY1R;
     mDcX1R = mDeempR; mDcY1R = dcOutR;
 
-    outL = dcOutL;
-    outR = dcOutR;
+    // 【修正C】ソフトセーフティ制限 (Soft Safety Limiter)
+    //  ±1.0f (0dBFS) 以下の通常振幅に対しては完全リニア(歪みゼロ)。
+    //  デエンファシス過渡応答等の突発ピーク(1.0f超)のみを滑らかに1.5f(+3.5dB)以下にアッパーバウンドし、
+    //  +9dB〜+10dB超の突発クリッピングや破綻を物理的に防ぐ。
+    auto softLimit = [](float x) noexcept -> float
+    {
+        if (x > 1.0f)       return 1.0f + std::tanh(x - 1.0f) * 0.5f;
+        else if (x < -1.0f) return -1.0f + std::tanh(x + 1.0f) * 0.5f;
+        return x;
+    };
+
+    outL = softLimit(dcOutL);
+    outR = softLimit(dcOutR);
 }

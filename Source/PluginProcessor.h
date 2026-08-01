@@ -237,6 +237,10 @@ private:
     double mDownsampleTimeAccum = 0.0;
     double mUpsampleTimeAccum = 0.0;
 
+    // ダウンサンプリング用ガードサンプル: 前ブロック末尾のAA済みサンプル。
+    //  ブロック末尾でidx0+1がブロック外になる場合の補間に使用する。
+    float mDownGuard = 0.0f;
+
     std::vector<float> mDownsampledBuffer;
     std::vector<float> m16kWetL;
     std::vector<float> m16kWetR;
