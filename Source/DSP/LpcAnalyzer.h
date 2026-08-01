@@ -53,9 +53,26 @@ public:
     }
 
     // 直前フレームの自己相関 r[0]（窓掛け後・白色雑音補正およびラグ窓の適用前）。
-    //  r0 / Σw² がそのフレームの平均二乗値になるので、
-    //  「合成出力レベルを入力レベルに一致させる」ゲイン算出に使う (LpcVocoder参照)。
+    //  ※【重要】LpcVocoder は分析前にプリエンファシスを掛けた波形を渡すため、
+    //    これは「プリエンファシス後」の平均二乗値であり、原音のレベルではない。
+    //    レベル整合ゲインには使わないこと (windowedEnergy() を使う)。
     double getLastFrameR0() const noexcept { return mLastR0; }
+
+    // 【レベル基準】任意フレーム x の窓掛けエネルギー Σ(w·x)²。
+    //  分析器と同一の窓を使うので、原音(プリエンファシス前)フレームを渡せば
+    //  Σ(w·x)² / Σw² がそのフレームの平均二乗値になる。
+    //  ゲイン算出でプリエンファシスの傾斜(150Hz -21dB 〜 6kHz +5dB)を持ち込まないための入口。
+    double windowedEnergy(const float* x) const noexcept
+    {
+        const auto& w = mWindows[(size_t)mWindowType];
+        double acc = 0.0;
+        for (int n = 0; n < kWindowSize; ++n)
+        {
+            const double v = (double)x[n] * (double)w[(size_t)n];
+            acc += v * v;
+        }
+        return acc;
+    }
 
 private:
     std::array<std::array<float, kWindowSize>, 3> mWindows {};

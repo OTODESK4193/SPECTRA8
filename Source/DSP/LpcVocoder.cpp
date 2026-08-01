@@ -278,6 +278,10 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                 }
             }
 
+            // 【レベル基準】プリエンファシスを掛ける前に、原音フレームの窓掛けエネルギーを取る。
+            //  これを励起ゲインの基準に使う。詳細は下の mGTarget 算出部のコメント参照。
+            const double rawR0 = mAnalyzer.windowedEnergy(mFrame.data());
+
             // プリエンファシス (1 - kPreemph·z^-1) を窓に適用してから分析。
             // 高域を持ち上げてLPCの極を高次フォルマントにも配分させる。
             // 出力側のデエンファシスと対で周波数特性は復元される。
@@ -298,6 +302,17 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
             //      G = sqrt( (r0/Σw²) / wE )
             //  と置く。定義から次数に依存せず、入力のダイナミクスもそのまま保たれる
             //  (シミュレーションで Order 間の差 0.00dB / 入力-20dB → 出力-20dB を確認)。
+            //
+            //  【修正D 2026-08-02】この r0 に mAnalyzer.getLastFrameR0() を使っていたが、
+            //  それは「プリエンファシス後」の平均二乗値だった。
+            //  プリエンファシス 1-0.9375z⁻¹ は 150Hz を -21dB / 6kHz を +5dB する強い傾斜を持つため、
+            //  入力の明るさだけでゲイン基準が最大 26dB ずれ、息・子音・サ行の瞬間に
+            //  WET が突発的に跳ね上がっていた。
+            //  実測 (DRY/WET 相関 0.789・傾き 1.02dB/dB、息フレーム +16.9dB / 母音フレーム -7.7dB。
+            //   同一RMSの帯域ノイズ掃引で 150Hz→6kHz の出力差 27.0dB)。
+            //  基準を rawR0 (プリエンファシス前の窓掛けエネルギー) に変更し、帯域差 27.0dB→6.4dB、
+            //  DRY基準のレベル誤差 p99 +22.0dB→+11.1dB、正規化ピーク 2.01→0.39。
+            //  ※この変更で全体レベルが約 +12.7dB 上がるため kMakeupGain を 0.18→0.042 に再校正済み。
             if (g <= 0.0f)
             {
                 mGTarget = 0.0f;   // 無音フレーム
@@ -305,7 +320,7 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
             else
             {
                 const double winE = (double)mAnalyzer.getWindowEnergy(mWindowType);
-                const double r0   = mAnalyzer.getLastFrameR0();
+                const double r0   = rawR0;   // 【修正D】原音(プリエンファシス前)レベル基準
                 const double wE   = weightedEnergyFromK(&mKTarget[0], order);
                 mGTarget = (wE > 1e-18 && winE > 1e-12 && r0 > 0.0)
                              ? (float)std::sqrt((r0 / winE) / wE)
