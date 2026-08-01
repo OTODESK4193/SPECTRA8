@@ -20,6 +20,7 @@
 #include "DSP/Limiter.h"
 #include "DSP/FxChain.h"
 #include "DSP/AnalyzerDSP.h"
+#include "DSP/ResampleFilter.h"
 
 class SPECTRA8AudioProcessor : public juce::AudioProcessor 
 {
@@ -239,6 +240,13 @@ private:
     std::vector<float> mDownsampledBuffer;
     std::vector<float> m16kWetL;
     std::vector<float> m16kWetR;
+
+    // 16kHz 内部処理のための帯域制限フィルタ (ResampleFilter.h の説明を参照)。
+    //  mAaIn   : デシメーション前の入力に掛けるアンチエイリアス (モノ=解析用ch0のみ)
+    //  mAiOutL/R: 補間後のウェット出力に掛けるアンチイメージング
+    ResampleFilter mAaIn;
+    ResampleFilter mAiOutL, mAiOutR;
+    std::vector<float> mAaInBuf;   // フィルタ済み入力 (原音を壊さないよう別バッファ)
 
     int mControlRateCounter = 0;
     // 入力が無い/ブロックが極小で16kサンプルが生成されないときに、

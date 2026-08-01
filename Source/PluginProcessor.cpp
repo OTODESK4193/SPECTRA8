@@ -564,6 +564,12 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mDryL.assign((size_t)juce::jmax(64, samplesPerBlock), 0.0f);
     mDryR.assign((size_t)juce::jmax(64, samplesPerBlock), 0.0f);
 
+    // 16kHz 内部処理の帯域制限フィルタ (ホストレートで動作)
+    mAaIn.prepare(sampleRate);
+    mAiOutL.prepare(sampleRate);
+    mAiOutR.prepare(sampleRate);
+    mAaInBuf.assign((size_t)juce::jmax(64, samplesPerBlock), 0.0f);
+
     // ボコーダーモード切替状態の初期化 + PDC報告
     // (LPCモードは分析窓の群遅延 kLatency16k = 窓長/2 @16kHz)
     mCurVocoderMode = -1;
@@ -674,9 +680,17 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     // 3. ダウンサンプリング処理 (16kHzへ)
     int num16kSamples = 0;
-    if (numInputs > 0 && mStoredSampleRate > 0.0)
+    if (numInputs > 0 && mStoredSampleRate > 0.0 && (int)mAaInBuf.size() >= numSamples)
     {
-        const float* inputL = buffer.getReadPointer(0);
+        // 【重要】デシメーション前に必ず帯域制限する。
+        //  線形補間だけで 1/3 に間引くと、8kHz を超える成分が 100% そのまま
+        //  可聴域へ折り返す (実測: 20kHz が減衰ゼロで 4kHz に出現)。
+        //  声のサ行や息、シンバル等が非調和なノイズに化け、ボコーダーの
+        //  帯域分析を通って「ジリジリ」という常時ノイズになっていた。
+        //  原音(MIX用)は壊せないので、別バッファへフィルタして解析に使う。
+        mAaIn.process(buffer.getReadPointer(0), mAaInBuf.data(), numSamples);
+
+        const float* inputL = mAaInBuf.data();
         double step = mStoredSampleRate / 16000.0;
         int maxSafeSize = (int)mDownsampledBuffer.size();
 
@@ -1064,6 +1078,18 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         // 壊れた値(NaN/Inf や桁あふれ)のときだけリセットする。
         if (!std::isfinite(mUpsampleTimeAccum) || std::abs(mUpsampleTimeAccum) > 1.0e6)
             mUpsampleTimeAccum = 0.0;
+
+        // 補間後のアンチイメージング。
+        //  16kHz の信号を線形補間で引き伸ばすと 16k±f にイメージが残り、
+        //  8〜16kHz に金属的な付帯音として乗る。ウェットにだけ掛ける
+        //  (原音は既に mDryL/mDryR へ退避済みなので影響しない)。
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float l = mAiOutL.processSample(writeL[i]);
+            const float r = mAiOutR.processSample(writeR[i]);
+            writeL[i] = l;
+            writeR[i] = r;
+        }
     }
     else
     {
@@ -1184,6 +1210,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mLimiter.reset();
             mModMatrix.reset();
             mPostEq.reset();
+            mAaIn.reset();
+            mAiOutL.reset();
+            mAiOutR.reset();
             mMixSm.setCurrentAndTargetValue(mMixSm.getTargetValue());
             mOutGainSm.setCurrentAndTargetValue(mOutGainSm.getTargetValue());
             mFmtShiftSm   = apvts.getRawParameterValue("formantShift")->load();
