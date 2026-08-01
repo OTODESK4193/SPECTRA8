@@ -11,6 +11,7 @@
 #include "GUI/ModPanel.h"
 #include "GUI/BandsEqPanel.h"
 #include "GUI/FxPanel.h"
+#include "GUI/PresetPanel.h"
 #include "GUI/HelpComboBox.h"   // MenuHelpBus (ポップアップ項目のヘルプ受け取り用)
 
 class SPECTRA8AudioProcessorEditor : public juce::AudioProcessorEditor,
@@ -29,14 +30,15 @@ private:
 
     SPECTRA8AudioProcessor& audioProcessor;
     
-    // タブ選択ボタン (5つ)
+    // タブ選択ボタン (6つ)
     juce::TextButton mTabVocoderBtn   { "VOCODER" };
     juce::TextButton mTabExcitationBtn { "EXCITATION" };
     juce::TextButton mTabModBtn        { "MOD MATRIX" };
     juce::TextButton mTabFxBtn         { "FX" };
-    juce::TextButton mTabBandsEqBtn    { "BANDS EQ" };
+    juce::TextButton mTabEqBtn         { "EQ" };
+    juce::TextButton mTabPresetBtn     { "PRESET" };
 
-    int mActiveTab = 0; // 0: VOCODER, 1: EXCITATION, 2: MOD, 3: FX, 4: BANDS EQ
+    int mActiveTab = 0; // 0: VOCODER, 1: EXCITATION, 2: MOD, 3: FX, 4: EQ, 5: PRESET
 
     // タブパネルの実体
     VocoderPanel mVocoderPanel;
@@ -44,6 +46,7 @@ private:
     ModPanel mModPanel;
     FxPanel mFxPanel;
     BandsEqPanel mBandsEqPanel;
+    PresetPanel mPresetPanel;
 
     // 下部ステータス行。通常はモード表示、マウスオーバー中はそのコントロールの英語説明。
     juce::Label mDebugLabel;

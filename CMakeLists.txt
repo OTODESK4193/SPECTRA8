@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.22)
 #  JUCE 8.0 系 / VST3 + Standalone
 #  開発計画書 第2版準拠: C++スカラー設計（AVX2廃止）/ Ableton Live最適化
 # ============================================================================
-project(SPECTRA8 VERSION 0.2.0 LANGUAGES C CXX)
+project(SPECTRA8 VERSION 1.0.0 LANGUAGES C CXX)
 
 # ----------------------------------------------------------------------------
 #  C++20
@@ -36,7 +36,7 @@ juce_add_plugin(SPECTRA8
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     VST3_AUTO_MANIFEST       FALSE
     COPY_PLUGIN_AFTER_BUILD  TRUE
-    VERSION                  "0.2.0"
+    VERSION                  "1.0.0"
 )
 
 # ----------------------------------------------------------------------------
@@ -70,6 +70,10 @@ target_sources(SPECTRA8 PRIVATE
     Source/DSP/AnalyzerDSP.h
     Source/DSP/AnalyzerDSP.cpp
 
+    # --- Presets モジュール ---
+    Source/Presets/FactoryPresets.h
+    Source/Presets/PresetManager.h
+
     # --- GUI モジュール ---
     Source/GUI/ColorPalette.h
     Source/GUI/ArcDial.h
@@ -77,6 +81,7 @@ target_sources(SPECTRA8 PRIVATE
     Source/GUI/ValueKnob.h
     Source/GUI/GlowToggle.h
     Source/GUI/ModRing.h
+    Source/GUI/ModDestSelector.h
     Source/GUI/VocoderPanel.h
     Source/GUI/VocoderPanel.cpp
     Source/GUI/ExcitationPanel.h
@@ -87,6 +92,8 @@ target_sources(SPECTRA8 PRIVATE
     Source/GUI/FxPanel.cpp
     Source/GUI/BandsEqPanel.h
     Source/GUI/BandsEqPanel.cpp
+    Source/GUI/PresetPanel.h
+    Source/GUI/PresetPanel.cpp
 )
 
 # ----------------------------------------------------------------------------

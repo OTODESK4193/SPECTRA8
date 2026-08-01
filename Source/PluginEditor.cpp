@@ -12,7 +12,8 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
       mExcitationPanel(p),
       mModPanel(p.apvts),
       mFxPanel(p),
-      mBandsEqPanel(p.apvts, p.getBandGains(), p.getBandLevelsForUi(), p.getAnalyzer())
+      mBandsEqPanel(p.apvts, p.getBandGains(), p.getBandLevelsForUi(), p.getAnalyzer()),
+      mPresetPanel(p.apvts)
 {
     // ボタンのスタイルとリスナー初期化
     auto setupTabButton = [this](juce::TextButton& btn, int tabIdx)
@@ -31,7 +32,8 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
     setupTabButton(mTabExcitationBtn, 1);
     setupTabButton(mTabModBtn, 2);
     setupTabButton(mTabFxBtn, 3);
-    setupTabButton(mTabBandsEqBtn, 4);
+    setupTabButton(mTabEqBtn, 4);
+    setupTabButton(mTabPresetBtn, 5);
 
     // タブパネルを追加
     addChildComponent(mVocoderPanel);
@@ -39,6 +41,7 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
     addChildComponent(mModPanel);
     addChildComponent(mFxPanel);
     addChildComponent(mBandsEqPanel);
+    addChildComponent(mPresetPanel);
 
     // インフォバーの初期化。
     //  juce::Label は drawFittedText で「高さ / 行の高さ」ぶんの行数まで自動折り返しするので、
@@ -70,15 +73,12 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
     setSize(780, 417);
 
     // タブボタンにも説明を付ける
-    mTabVocoderBtn.setTooltip("VOCODER - core vocoder settings: engine type, voicing mode, "
-                              "formants, band count and output level.");
-    mTabExcitationBtn.setTooltip("EXCITATION - the carrier oscillator that the voice is imprinted on: "
-                                 "waveform, wavetable, detune and waveshaping.");
+    mTabVocoderBtn.setTooltip("VOCODER - core vocoder settings: engine type, voicing mode, formants and level.");
+    mTabExcitationBtn.setTooltip("EXCITATION - the carrier oscillator: waveform, wavetable, detune and shaping.");
     mTabModBtn.setTooltip("MOD MATRIX - route 3 LFOs, 2 envelopes and MIDI sources to any knob.");
-    mTabFxBtn.setTooltip("FX - five serial effect slots applied after the vocoder. "
-                         "Drag the slots to reorder them.");
-    mTabBandsEqBtn.setTooltip("BANDS EQ - per-band gain for the vocoder bands, with a live spectrum "
-                              "of the plugin output behind it.");
+    mTabFxBtn.setTooltip("FX - five serial effect slots applied after the vocoder. Drag to reorder.");
+    mTabEqBtn.setTooltip("EQ - per-band gain for the vocoder bands, with a live spectrum display.");
+    mTabPresetBtn.setTooltip("PRESET - factory and user preset browser with search and favorites.");
 
     startTimer(100); // 10Hzでステータス行/ヘルプ表示を更新
 }
@@ -102,11 +102,11 @@ void SPECTRA8AudioProcessorEditor::paint(juce::Graphics& g)
     // プラグインタイトル
     g.setColour(SpectraColors::text);
     g.setFont(juce::Font(juce::FontOptions(16.0f, juce::Font::bold)));
-    g.drawText("SPECTRA 8", 16, 0, 120, headerRect.getHeight(), juce::Justification::centredLeft);
+    g.drawText("SPECTRA 8", 16, 0, 100, headerRect.getHeight(), juce::Justification::centredLeft);
 
     g.setColour(SpectraColors::textDim);
-    g.setFont(10.0f);
-    g.drawText("v0.2.0 Hybrid Vocoder", 124, 2, 120, headerRect.getHeight(), juce::Justification::centredLeft);
+    g.setFont(juce::FontOptions(10.0f));
+    g.drawText("v1.0.0", 118, 2, 80, headerRect.getHeight(), juce::Justification::centredLeft);
 }
 
 void SPECTRA8AudioProcessorEditor::resized()
@@ -116,18 +116,18 @@ void SPECTRA8AudioProcessorEditor::resized()
     // 1. ヘッダー部のレイアウト
     auto headerArea = r.removeFromTop(36);
     
-    // タブ選択ボタンの配置 (ヘッダーの右半分に並べる)
-    // タブは5つ。96pxのままだとヘッダー左のタイトルに重なるため88pxへ
-    const int tabW = 88;
+    // タブ選択ボタンの配置 (ヘッダーの右側に6個並べる)
+    const int tabW = 76;
     const int tabH = 24;
-    int tabX = getWidth() - (tabW * 5) - 16;
+    int tabX = getWidth() - (tabW * 6) - 12;
     const int tabY = (headerArea.getHeight() - tabH) / 2;
 
     mTabVocoderBtn.setBounds(tabX, tabY, tabW, tabH);
     mTabExcitationBtn.setBounds(tabX + tabW, tabY, tabW, tabH);
     mTabModBtn.setBounds(tabX + tabW * 2, tabY, tabW, tabH);
     mTabFxBtn.setBounds(tabX + tabW * 3, tabY, tabW, tabH);
-    mTabBandsEqBtn.setBounds(tabX + tabW * 4, tabY, tabW, tabH);
+    mTabEqBtn.setBounds(tabX + tabW * 4, tabY, tabW, tabH);
+    mTabPresetBtn.setBounds(tabX + tabW * 5, tabY, tabW, tabH);
 
     // 2. インフォバー（下部・3行）のレイアウト
     //    13px フォント × 3行 + 上下の余白 = 57px
@@ -141,14 +141,10 @@ void SPECTRA8AudioProcessorEditor::resized()
     mModPanel.setBounds(r);
     mFxPanel.setBounds(r);
     mBandsEqPanel.setBounds(r);
+    mPresetPanel.setBounds(r);
 }
 
 // 下部ステータス行の更新。
-//  マウスの下にあるコンポーネントを辿って TooltipClient (Slider / ComboBox / Button は
-//  すべてこれを実装している) を探し、setTooltip() で登録した英語説明文を表示する。
-//  何も指していないときはプラグインの状態表示に戻す。
-//  この方式なら各パネル側は setTooltip("...") を呼ぶだけで済み、
-//  ポップアップが隣のノブを隠すこともない。
 void SPECTRA8AudioProcessorEditor::timerCallback()
 {
     // 左端余白に受信MIDIノートを表示 (FIFO最大8音)
@@ -156,31 +152,15 @@ void SPECTRA8AudioProcessorEditor::timerCallback()
 
     juce::String help;
 
-    // 1) コンボのポップアップが開いていて、項目にマウスが乗っているならそれを最優先。
-    //    (ポップアップは別ウィンドウなので getComponentUnderMouse では辿れない)
-    if (auto* owner = MenuHelpBus::owner())
-        if (owner == this || isParentOf(owner))
-            help = MenuHelpBus::text();
-
-    // 2) それ以外は、マウス下のコンポーネントを親方向へ辿って説明文を探す
-    if (help.isEmpty())
+    if (auto* c = getComponentAt(getMouseXYRelative()))
     {
-        // getMainMouseSource() は値を返すので参照では受けられない (軽量ハンドル)
-        const auto mouse = juce::Desktop::getInstance().getMainMouseSource();
-        if (auto* under = mouse.getComponentUnderMouse())
+        for (auto* comp = c; comp != nullptr && comp != this; comp = comp->getParentComponent())
         {
-            // 自分のエディター内のコンポーネントだけを対象にする
-            if (under == this || isParentOf(under))
+            if (auto* tc = dynamic_cast<juce::TooltipClient*>(comp))
             {
-                for (auto* c = under; c != nullptr && c != this; c = c->getParentComponent())
-                {
-                    if (auto* tc = dynamic_cast<juce::TooltipClient*>(c))
-                    {
-                        help = tc->getTooltip();
-                        if (help.isNotEmpty())
-                            break;
-                    }
-                }
+                help = tc->getTooltip();
+                if (help.isNotEmpty())
+                    break;
             }
         }
     }
@@ -206,13 +186,15 @@ void SPECTRA8AudioProcessorEditor::selectTab(int tabIndex)
     mModPanel.setVisible(mActiveTab == 2);
     mFxPanel.setVisible(mActiveTab == 3);
     mBandsEqPanel.setVisible(mActiveTab == 4);
+    mPresetPanel.setVisible(mActiveTab == 5);
 
     // タブに合わせたボタンのトグル状態の再設定
     mTabVocoderBtn.setToggleState(mActiveTab == 0, juce::dontSendNotification);
     mTabExcitationBtn.setToggleState(mActiveTab == 1, juce::dontSendNotification);
     mTabModBtn.setToggleState(mActiveTab == 2, juce::dontSendNotification);
     mTabFxBtn.setToggleState(mActiveTab == 3, juce::dontSendNotification);
-    mTabBandsEqBtn.setToggleState(mActiveTab == 4, juce::dontSendNotification);
+    mTabEqBtn.setToggleState(mActiveTab == 4, juce::dontSendNotification);
+    mTabPresetBtn.setToggleState(mActiveTab == 5, juce::dontSendNotification);
 
     // タブごとのカラーアクセントをボタンに反映して視覚的フィードバックを高める
     auto setBtnHighlight = [](juce::TextButton& btn, bool active, juce::Colour accent)
@@ -226,7 +208,11 @@ void SPECTRA8AudioProcessorEditor::selectTab(int tabIndex)
     setBtnHighlight(mTabExcitationBtn, mActiveTab == 1, SpectraColors::accentExcitation);
     setBtnHighlight(mTabModBtn, mActiveTab == 2, SpectraColors::accentMod);
     setBtnHighlight(mTabFxBtn, mActiveTab == 3, SpectraColors::accentFx);
-    setBtnHighlight(mTabBandsEqBtn, mActiveTab == 4, SpectraColors::accentBands);
+    setBtnHighlight(mTabEqBtn, mActiveTab == 4, SpectraColors::accentBands);
+    setBtnHighlight(mTabPresetBtn, mActiveTab == 5, SpectraColors::mint);
+
+    if (mActiveTab == 5)
+        mPresetPanel.refreshAll();
 
     repaint();
 }
