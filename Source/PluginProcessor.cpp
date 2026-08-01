@@ -1038,11 +1038,21 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mDryR[(size_t)i] = stereoIn ? writeR[i] : writeL[i];
 
             // 線形補間アップサンプリング。
-            // 読み出し位置は必ず [0, num16kSamples-1] に収める (範囲外アクセス防止)。
-            int idx0 = juce::jlimit(0, num16kSamples - 1, (int)mUpsampleTimeAccum);
-            int idx1 = juce::jlimit(0, num16kSamples - 1, idx0 + 1);
-            float frac = (float)(mUpsampleTimeAccum - (double)idx0);
-            frac = juce::jlimit(0.0f, 1.0f, frac);
+            //
+            //  【重要】mUpsampleTimeAccum は「ブロック境界をまたいで連続する読み出し位相」であり、
+            //  ブロック末尾で num16kSamples を引いた結果はわずかに負になることが普通にある
+            //  (ダウンサンプラーが出す整数個数と、numSamples×step の実数値がぴったり一致しないため)。
+            //  この負の端数は次ブロックで正しく吸収されるので、決して 0 に丸めてはいけない。
+            //  丸めるとブロック毎に読み出し位相が最大1サンプルぶん飛び、
+            //  ブロックレート(48kHz/64smp なら 750Hz)のクリック列 = 常時「ジリジリ」になる。
+            //
+            //  frac も同様に負を許す (元実装どおりの後方外挿)。クランプすると段差が出る。
+            //  範囲外アクセスの防止は「添字だけ」を丸めることで行う。
+            //  num16kSamples > 0 は didProcess 側で保証済みなので idx1 は必ず有効。
+            const int rawIdx = (int)mUpsampleTimeAccum;
+            const float frac = (float)(mUpsampleTimeAccum - (double)rawIdx);
+            const int idx0 = juce::jlimit(0, num16kSamples - 1, rawIdx);
+            const int idx1 = juce::jlimit(0, num16kSamples - 1, rawIdx + 1);
 
             writeL[i] = (m16kWetL[(size_t)idx0] * (1.0f - frac) + m16kWetL[(size_t)idx1] * frac) * gateGain;
             writeR[i] = (m16kWetR[(size_t)idx0] * (1.0f - frac) + m16kWetR[(size_t)idx1] * frac) * gateGain;
@@ -1050,9 +1060,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mUpsampleTimeAccum += step;
         }
         mUpsampleTimeAccum -= (double)num16kSamples;
-        // 端数が溜まって暴走しないよう常識的な範囲へ丸める
-        if (!std::isfinite(mUpsampleTimeAccum) || mUpsampleTimeAccum < 0.0
-            || mUpsampleTimeAccum > 2.0)
+        // ここで範囲を丸めてはいけない (上のコメント参照)。
+        // 壊れた値(NaN/Inf や桁あふれ)のときだけリセットする。
+        if (!std::isfinite(mUpsampleTimeAccum) || std::abs(mUpsampleTimeAccum) > 1.0e6)
             mUpsampleTimeAccum = 0.0;
     }
     else
