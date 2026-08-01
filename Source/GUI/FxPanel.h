@@ -93,6 +93,7 @@ private:
     void selectSlot(int slot);
     void swapSlots(int a, int b);
     void rebuildDetails();      // 選択中FXに応じて下部のノブ/コンボを作り直す
+    void updateResonatorEnablement();
 
     SPECTRA8AudioProcessor& proc;
     std::array<std::unique_ptr<FxSlotCard>, FxChain::kNumSlots> cards;

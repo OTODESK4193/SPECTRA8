@@ -19,6 +19,7 @@
 #include "HelpComboBox.h"
 #include "GlowToggle.h"
 #include "ArcDial.h"
+#include "ModDestSelector.h"
 
 class ModPanel : public juce::Component
 {
@@ -72,7 +73,7 @@ private:
     {
         juce::Label rowLabel;
         HelpComboBox srcBox;
-        HelpComboBox dstBox;
+        ModDestSelector dstBox;
         ValueKnob amtKnob;
         std::unique_ptr<GlowToggle> uniBtn;
     };

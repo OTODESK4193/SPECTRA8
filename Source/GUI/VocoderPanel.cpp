@@ -228,6 +228,27 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
 
     mAttachmentVocoderMode      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "vocoderMode", mComboVocoderMode);
     mAttachmentVoicingMode      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "mode", mComboVoicingMode);
+
+    // ノブの数値表示フォーマット・桁数の最適化
+    mKnobCharacter.setNumDecimalPlacesToDisplay(2);
+    mKnobTracking.setNumDecimalPlacesToDisplay(0);
+    mKnobPitchQuantize.setNumDecimalPlacesToDisplay(0);
+    mKnobFmtShift.setNumDecimalPlacesToDisplay(1);
+    mKnobFmtStretch.setNumDecimalPlacesToDisplay(2);
+    mKnobLofi.setNumDecimalPlacesToDisplay(2);
+    mKnobBasePitch.setNumDecimalPlacesToDisplay(1);
+    mKnobNoiseColor.setNumDecimalPlacesToDisplay(0);
+    mKnobNoise.setNumDecimalPlacesToDisplay(0);
+    mKnobBands.setNumDecimalPlacesToDisplay(0);
+    mKnobResonance.setNumDecimalPlacesToDisplay(2);
+    mKnobWidth.setNumDecimalPlacesToDisplay(2);
+    mKnobAttack.setNumDecimalPlacesToDisplay(2);
+    mKnobDecay.setNumDecimalPlacesToDisplay(2);
+    mKnobSustain.setNumDecimalPlacesToDisplay(2);
+    mKnobRelease.setNumDecimalPlacesToDisplay(2);
+    mKnobMix.setNumDecimalPlacesToDisplay(0);
+    mKnobMasterPitch.setNumDecimalPlacesToDisplay(1);
+    mKnobOutLevel.setNumDecimalPlacesToDisplay(1);
     mAttachmentTrackResponse    = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "trackResponse", mComboTrackResponse);
     mAttachmentPitchQKey        = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "pitchQKey", mComboPitchQKey);
     mAttachmentPitchQScale      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "pitchQScale", mComboPitchQScale);

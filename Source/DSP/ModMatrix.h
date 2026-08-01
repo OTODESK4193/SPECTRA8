@@ -55,6 +55,13 @@ public:
         //   スロット設定が別の宛先にズレる。
         DstMasterPitch,
         DstStereoWidth,   // Filterbank の帯域交互パンニング幅 (0=モノ 〜 1=最大)
+        // ---- FX タブ ----
+        DstFxDrive,
+        DstGateRate, DstGateDepth, DstGateVowel, DstGateSmooth, DstGateShape,
+        DstResDecay, DstResShimmer, DstResDamp, DstResInharm,
+        DstChorusRate, DstChorusDepth, DstChorusWidth, DstChorusMix,
+        DstDelayTime, DstDelayFb, DstDelayTone, DstDelayMix,
+        DstReverbSize, DstReverbDecay, DstReverbPre, DstReverbDamp, DstReverbMix,
         NumDsts
     };
 
@@ -80,7 +87,14 @@ public:
                  "WT Position", "Pulse Width", "Porta", "Detune",
                  "Bend", "Bend Sym", "Sync", "Sync Ph",
                  "Vocode", "Vowel",
-                 "Master Pitch", "Width" };
+                 "Master Pitch", "Width",
+                 // FX
+                 "Drive",
+                 "Gate Rate", "Gate Depth", "Gate Vowel", "Gate Smooth", "Gate Shape",
+                 "Resonator Decay", "Resonator Shimmer", "Resonator Damp", "Resonator Inharm",
+                 "Chorus Rate", "Chorus Depth", "Chorus Width", "Chorus Mix",
+                 "Delay Time", "Delay Feedback", "Delay Tone", "Delay Mix",
+                 "Reverb Size", "Reverb Decay", "Reverb PreDelay", "Reverb Damp", "Reverb Mix" };
     }
     static juce::StringArray getWaveNames()
     {
@@ -125,6 +139,29 @@ public:
         case DstVocShift:       return "vocShift";
         case DstMasterPitch:    return "masterPitch";
         case DstStereoWidth:    return "stereoWidth";
+        case DstFxDrive:        return "drvAmt";
+        case DstGateRate:       return "gateRate";
+        case DstGateDepth:      return "gateDepth";
+        case DstGateVowel:      return "gateVowel";
+        case DstGateSmooth:     return "gateSmooth";
+        case DstGateShape:      return "gateShape";
+        case DstResDecay:       return "resDecay";
+        case DstResShimmer:     return "resShimmer";
+        case DstResDamp:        return "resDamp";
+        case DstResInharm:      return "resInharm";
+        case DstChorusRate:     return "choRate";
+        case DstChorusDepth:    return "choDepth";
+        case DstChorusWidth:    return "choWidth";
+        case DstChorusMix:      return "choMix";
+        case DstDelayTime:      return "dlyTime";
+        case DstDelayFb:        return "dlyFeedback";
+        case DstDelayTone:      return "dlyTone";
+        case DstDelayMix:       return "dlyMix";
+        case DstReverbSize:     return "revSize";
+        case DstReverbDecay:    return "revDecay";
+        case DstReverbPre:      return "revPreDelay";
+        case DstReverbDamp:     return "revDamp";
+        case DstReverbMix:      return "revMix";
         default:                return "";
         }
     }
@@ -167,6 +204,30 @@ public:
         // LFOを当てると該当Key/Scale上を音が移動する。
         case DstMasterPitch:    return 24.0f;
         case DstStereoWidth:    return 1.0f;    // 0..1
+        // --- FX ---
+        case DstFxDrive:        return 1.0f;
+        case DstGateRate:       return 3.0f;
+        case DstGateDepth:      return 1.0f;
+        case DstGateVowel:      return 1.0f;
+        case DstGateSmooth:     return 1.0f;
+        case DstGateShape:      return 1.0f;
+        case DstResDecay:       return 3.0f;
+        case DstResShimmer:     return 1.0f;
+        case DstResDamp:        return 1.0f;
+        case DstResInharm:      return 1.0f;
+        case DstChorusRate:     return 3.0f;
+        case DstChorusDepth:    return 12.0f;
+        case DstChorusWidth:    return 1.0f;
+        case DstChorusMix:      return 1.0f;
+        case DstDelayTime:      return 3.0f;
+        case DstDelayFb:        return 1.0f;
+        case DstDelayTone:      return 1.0f;
+        case DstDelayMix:       return 1.0f;
+        case DstReverbSize:     return 1.0f;
+        case DstReverbDecay:    return 3.0f;
+        case DstReverbPre:      return 3.0f;
+        case DstReverbDamp:     return 1.0f;
+        case DstReverbMix:      return 1.0f;
         default:                return 0.0f;
         }
     }
@@ -181,6 +242,11 @@ public:
         case DstAttack:
         case DstDecay:
         case DstRelease:
+        case DstResDecay:
+        case DstChorusRate:
+        case DstDelayTime:
+        case DstReverbDecay:
+        case DstReverbPre:
             return KindExpOct;
         default:
             return KindLinear;

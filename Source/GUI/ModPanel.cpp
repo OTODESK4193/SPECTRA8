@@ -4,6 +4,76 @@
 // ==========================================
 #include "ModPanel.h"
 
+namespace
+{
+    static juce::PopupMenu buildModDestMenu(int currentDst)
+    {
+        juce::PopupMenu menu;
+        menu.addItem(ModMatrix::DstNone + 1, "None", true, currentDst == ModMatrix::DstNone);
+
+        // 1. VOCODER
+        juce::PopupMenu vocMenu;
+        vocMenu.addItem(ModMatrix::DstCharacter + 1, "Character", true, currentDst == ModMatrix::DstCharacter);
+        vocMenu.addItem(ModMatrix::DstTracking + 1, "Tracking", true, currentDst == ModMatrix::DstTracking);
+        vocMenu.addItem(ModMatrix::DstPitchQuantize + 1, "Pitch Quantize", true, currentDst == ModMatrix::DstPitchQuantize);
+        vocMenu.addItem(ModMatrix::DstFormantShift + 1, "Formant Shift", true, currentDst == ModMatrix::DstFormantShift);
+        vocMenu.addItem(ModMatrix::DstFormantStretch + 1, "Formant Stretch", true, currentDst == ModMatrix::DstFormantStretch);
+        vocMenu.addItem(ModMatrix::DstLofi + 1, "LoFi", true, currentDst == ModMatrix::DstLofi);
+        vocMenu.addItem(ModMatrix::DstBasePitch + 1, "Base Pitch", true, currentDst == ModMatrix::DstBasePitch);
+        vocMenu.addItem(ModMatrix::DstNoiseColor + 1, "Noise Color", true, currentDst == ModMatrix::DstNoiseColor);
+        vocMenu.addItem(ModMatrix::DstNoise + 1, "Noise Mix", true, currentDst == ModMatrix::DstNoise);
+        vocMenu.addItem(ModMatrix::DstResonance + 1, "Resonance", true, currentDst == ModMatrix::DstResonance);
+        vocMenu.addItem(ModMatrix::DstStereoWidth + 1, "Stereo Width", true, currentDst == ModMatrix::DstStereoWidth);
+        vocMenu.addItem(ModMatrix::DstMix + 1, "Mix", true, currentDst == ModMatrix::DstMix);
+        vocMenu.addItem(ModMatrix::DstOutLevel + 1, "Out Level", true, currentDst == ModMatrix::DstOutLevel);
+        menu.addSubMenu("1. Vocoder", vocMenu);
+
+        // 2. EXCITATION
+        juce::PopupMenu excMenu;
+        excMenu.addItem(ModMatrix::DstWtPos + 1, "WT Position", true, currentDst == ModMatrix::DstWtPos);
+        excMenu.addItem(ModMatrix::DstPulseWidth + 1, "Pulse Width", true, currentDst == ModMatrix::DstPulseWidth);
+        excMenu.addItem(ModMatrix::DstPorta + 1, "Portamento", true, currentDst == ModMatrix::DstPorta);
+        excMenu.addItem(ModMatrix::DstDetune + 1, "Detune", true, currentDst == ModMatrix::DstDetune);
+        excMenu.addItem(ModMatrix::DstBendAmt + 1, "Bend Amount", true, currentDst == ModMatrix::DstBendAmt);
+        excMenu.addItem(ModMatrix::DstBendShift + 1, "Bend Shift", true, currentDst == ModMatrix::DstBendShift);
+        excMenu.addItem(ModMatrix::DstSyncAmt + 1, "Sync Amount", true, currentDst == ModMatrix::DstSyncAmt);
+        excMenu.addItem(ModMatrix::DstSyncShift + 1, "Sync Shift", true, currentDst == ModMatrix::DstSyncShift);
+        excMenu.addItem(ModMatrix::DstVocAmt + 1, "Formant Morph", true, currentDst == ModMatrix::DstVocAmt);
+        excMenu.addItem(ModMatrix::DstVocShift + 1, "Formant Shift (Exc)", true, currentDst == ModMatrix::DstVocShift);
+        excMenu.addItem(ModMatrix::DstMasterPitch + 1, "Master Pitch", true, currentDst == ModMatrix::DstMasterPitch);
+        menu.addSubMenu("2. Excitation", excMenu);
+
+        // 3. FX
+        juce::PopupMenu fxMenu;
+        fxMenu.addItem(ModMatrix::DstFxDrive + 1, "Drive", true, currentDst == ModMatrix::DstFxDrive);
+        fxMenu.addItem(ModMatrix::DstGateRate + 1, "Gate Rate", true, currentDst == ModMatrix::DstGateRate);
+        fxMenu.addItem(ModMatrix::DstGateDepth + 1, "Gate Depth", true, currentDst == ModMatrix::DstGateDepth);
+        fxMenu.addItem(ModMatrix::DstGateVowel + 1, "Gate Vowel", true, currentDst == ModMatrix::DstGateVowel);
+        fxMenu.addItem(ModMatrix::DstGateSmooth + 1, "Gate Smooth", true, currentDst == ModMatrix::DstGateSmooth);
+        fxMenu.addItem(ModMatrix::DstGateShape + 1, "Gate Shape", true, currentDst == ModMatrix::DstGateShape);
+        fxMenu.addItem(ModMatrix::DstResDecay + 1, "Resonator Decay", true, currentDst == ModMatrix::DstResDecay);
+        fxMenu.addItem(ModMatrix::DstResShimmer + 1, "Resonator Shimmer", true, currentDst == ModMatrix::DstResShimmer);
+        fxMenu.addItem(ModMatrix::DstResDamp + 1, "Resonator Damp", true, currentDst == ModMatrix::DstResDamp);
+        fxMenu.addItem(ModMatrix::DstResInharm + 1, "Resonator Inharm", true, currentDst == ModMatrix::DstResInharm);
+        fxMenu.addItem(ModMatrix::DstChorusRate + 1, "Chorus Rate", true, currentDst == ModMatrix::DstChorusRate);
+        fxMenu.addItem(ModMatrix::DstChorusDepth + 1, "Chorus Depth", true, currentDst == ModMatrix::DstChorusDepth);
+        fxMenu.addItem(ModMatrix::DstChorusWidth + 1, "Chorus Width", true, currentDst == ModMatrix::DstChorusWidth);
+        fxMenu.addItem(ModMatrix::DstChorusMix + 1, "Chorus Mix", true, currentDst == ModMatrix::DstChorusMix);
+        fxMenu.addItem(ModMatrix::DstDelayTime + 1, "Delay Time", true, currentDst == ModMatrix::DstDelayTime);
+        fxMenu.addItem(ModMatrix::DstDelayFb + 1, "Delay Feedback", true, currentDst == ModMatrix::DstDelayFb);
+        fxMenu.addItem(ModMatrix::DstDelayTone + 1, "Delay Tone", true, currentDst == ModMatrix::DstDelayTone);
+        fxMenu.addItem(ModMatrix::DstDelayMix + 1, "Delay Mix", true, currentDst == ModMatrix::DstDelayMix);
+        fxMenu.addItem(ModMatrix::DstReverbSize + 1, "Reverb Size", true, currentDst == ModMatrix::DstReverbSize);
+        fxMenu.addItem(ModMatrix::DstReverbDecay + 1, "Reverb Decay", true, currentDst == ModMatrix::DstReverbDecay);
+        fxMenu.addItem(ModMatrix::DstReverbPre + 1, "Reverb PreDelay", true, currentDst == ModMatrix::DstReverbPre);
+        fxMenu.addItem(ModMatrix::DstReverbDamp + 1, "Reverb Damp", true, currentDst == ModMatrix::DstReverbDamp);
+        fxMenu.addItem(ModMatrix::DstReverbMix + 1, "Reverb Mix", true, currentDst == ModMatrix::DstReverbMix);
+        menu.addSubMenu("3. FX", fxMenu);
+
+        return menu;
+    }
+}
+
 // ------------------------------------------
 // 共通セットアップ
 // ------------------------------------------
@@ -156,7 +226,12 @@ ModPanel::ModPanel(juce::AudioProcessorValueTreeState& state)
         setupSmallLabel(S.rowLabel, false);
 
         setupCombo(S.srcBox, ModMatrix::getSourceNames(), prefix + "src");
-        setupCombo(S.dstBox, ModMatrix::getDestNames(), prefix + "dst");
+
+        // PicoSampler 準拠のツリー表示 ModDestSelector
+        S.dstBox.buildMenu = [](int currentDst) { return buildModDestMenu(currentDst); };
+        S.dstBox.bindTo(apvts, prefix + "dst");
+        addAndMakeVisible(S.dstBox);
+
         setupToggle(S.uniBtn, "UNI", SpectraColors::accentMod, prefix + "uni");
 
         const juce::String n = juce::String(i + 1);

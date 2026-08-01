@@ -55,6 +55,13 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
     mDebugLabel.setMinimumHorizontalScale(1.0f);   // 縮小せず必ず折り返す
     addAndMakeVisible(mDebugLabel);
 
+    // インフォバー左側余白の受信ノート名ラベル初期化
+    mMidiNotesLabel.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+    mMidiNotesLabel.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    mMidiNotesLabel.setColour(juce::Label::textColourId, SpectraColors::accentVocoder);
+    mMidiNotesLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(mMidiNotesLabel);
+
     // 初期タブの選択
     mTabVocoderBtn.setToggleState(true, juce::sendNotification);
 
@@ -126,6 +133,7 @@ void SPECTRA8AudioProcessorEditor::resized()
     //    13px フォント × 3行 + 上下の余白 = 57px
     auto hudArea = r.removeFromBottom(57);
     mDebugLabel.setBounds(hudArea);
+    mMidiNotesLabel.setBounds(hudArea.getX() + 6, hudArea.getY() + 4, kInfoTextInset - 12, 18);
 
     // 3. メインパネル（中央）のレイアウト
     mVocoderPanel.setBounds(r);
@@ -143,6 +151,9 @@ void SPECTRA8AudioProcessorEditor::resized()
 //  ポップアップが隣のノブを隠すこともない。
 void SPECTRA8AudioProcessorEditor::timerCallback()
 {
+    // 左端余白に受信MIDIノートを表示 (FIFO最大8音)
+    mMidiNotesLabel.setText(audioProcessor.getHeldNotesText(), juce::dontSendNotification);
+
     juce::String help;
 
     // 1) コンボのポップアップが開いていて、項目にマウスが乗っているならそれを最優先。

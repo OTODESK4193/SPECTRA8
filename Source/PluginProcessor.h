@@ -115,6 +115,57 @@ public:
         return ModMatrix::applyMod(d, p->load(), mModMatrix.get(d));
     }
 
+    // 押鍵リストの維持 (FIFO先入れ先出し・最大8音、9音目は最古消去)
+    void addHeldNote(int note) noexcept
+    {
+        for (int i = 0; i < mNumHeldNotes; ++i)
+            if (mHeldNotes[(size_t)i] == note) return;      // 既に押されている
+
+        if (mNumHeldNotes < (int)mHeldNotes.size())
+        {
+            mHeldNotes[(size_t)mNumHeldNotes] = note;
+            ++mNumHeldNotes;
+        }
+        else
+        {
+            // 8音満杯時に9音目が来たら最初の音(0番目)を消して9音目を末尾(8音目)にする
+            for (size_t i = 0; i < mHeldNotes.size() - 1; ++i)
+                mHeldNotes[i] = mHeldNotes[i + 1];
+            mHeldNotes[mHeldNotes.size() - 1] = note;
+        }
+    }
+    void removeHeldNote(int note) noexcept
+    {
+        for (int i = 0; i < mNumHeldNotes; ++i)
+            if (mHeldNotes[(size_t)i] == note)
+            {
+                for (int j = i; j < mNumHeldNotes - 1; ++j)
+                    mHeldNotes[(size_t)j] = mHeldNotes[(size_t)j + 1];
+                --mNumHeldNotes;
+                return;
+            }
+    }
+
+    // GUI インフォバー用: 現在保持されている受信ノートの音名一覧文字列を取得
+    juce::String getHeldNotesText() const
+    {
+        if (mNumHeldNotes <= 0)
+            return "MIDI: --";
+
+        juce::String text = "MIDI: ";
+        static const char* kNoteNames[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        for (int i = 0; i < mNumHeldNotes; ++i)
+        {
+            const int n = mHeldNotes[(size_t)i];
+            if (n >= 0 && n <= 127)
+            {
+                if (i > 0) text += " ";
+                text += kNoteNames[n % 12];
+            }
+        }
+        return text;
+    }
+
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -167,33 +218,6 @@ private:
     std::array<LfoPtrs,  ModMatrix::kNumLfos>  mLfoPtrs {};
     std::array<EnvPtrs,  ModMatrix::kNumEnvs>  mEnvPtrs {};
     std::array<FxSlotPtrs, FxChain::kNumSlots> mFxPtrs {};
-
-    // 押鍵リストの維持 (低い順・重複なし・最大8音)
-    void addHeldNote(int note) noexcept
-    {
-        for (int i = 0; i < mNumHeldNotes; ++i)
-            if (mHeldNotes[(size_t)i] == note) return;      // 既に押されている
-        if (mNumHeldNotes >= (int)mHeldNotes.size()) return; // 満杯なら無視
-        int pos = mNumHeldNotes;
-        while (pos > 0 && mHeldNotes[(size_t)pos - 1] > note)
-        {
-            mHeldNotes[(size_t)pos] = mHeldNotes[(size_t)pos - 1];
-            --pos;
-        }
-        mHeldNotes[(size_t)pos] = note;
-        ++mNumHeldNotes;
-    }
-    void removeHeldNote(int note) noexcept
-    {
-        for (int i = 0; i < mNumHeldNotes; ++i)
-            if (mHeldNotes[(size_t)i] == note)
-            {
-                for (int j = i; j < mNumHeldNotes - 1; ++j)
-                    mHeldNotes[(size_t)j] = mHeldNotes[(size_t)j + 1];
-                --mNumHeldNotes;
-                return;
-            }
-    }
 
     // モジュールインスタンス
     FilterbankVocoder mFilterbankVocoder;

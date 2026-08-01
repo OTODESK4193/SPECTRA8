@@ -47,6 +47,7 @@ private:
 
     // 下部ステータス行。通常はモード表示、マウスオーバー中はそのコントロールの英語説明。
     juce::Label mDebugLabel;
+    juce::Label mMidiNotesLabel;   // 左側余白に表示する受信MIDIノート名 (例: MIDI: D F A C E G B C)
     bool mShowingHelp = false;   // 文字色切替のための現在状態
 
     // インフォバー本文の左余白。コンボのポップアップ(左端に出る)の幅より広く取り、

@@ -408,7 +408,39 @@ void FxPanel::rebuildDetails()
         detailKnobLabels.push_back(std::move(l));
     }
 
+    // Resonator モード(Chord / Free / MIDI) に応じた各コントロールの活性化 / 非活性化 (グレーアウト)
+    if (getSlotType(selectedSlot) == FxChain::Resonator)
+    {
+        if (!detailCombos.empty() && detailCombos[0] != nullptr)
+        {
+            detailCombos[0]->onChange = [this] { updateResonatorEnablement(); };
+        }
+        updateResonatorEnablement();
+    }
+
     resized();
+}
+
+void FxPanel::updateResonatorEnablement()
+{
+    if (getSlotType(selectedSlot) != FxChain::Resonator)
+        return;
+
+    const int mode = (int)proc.apvts.getRawParameterValue("resMode")->load();
+    // comboDefs: 0=resMode, 1=resChord
+    // knobDefs: 0=resRoot, 1=resFreeMs, 2=resDecay, 3=resDamp, 4=resSpread, 5=resShimmer, 6=resInharm
+
+    // resChord コンボ (index 1): Chord モード (mode == 0) のみ有効
+    if (detailCombos.size() > 1 && detailCombos[1] != nullptr)
+        detailCombos[1]->setEnabled(mode == 0);
+
+    // resRoot ノブ (index 0): Chord モード (mode == 0) のみ有効
+    if (detailKnobs.size() > 0 && detailKnobs[0] != nullptr)
+        detailKnobs[0]->setEnabled(mode == 0);
+
+    // resFreeMs ノブ (index 1): Free モード (mode == 1) のみ有効
+    if (detailKnobs.size() > 1 && detailKnobs[1] != nullptr)
+        detailKnobs[1]->setEnabled(mode == 1);
 }
 
 void FxPanel::paint(juce::Graphics& g)

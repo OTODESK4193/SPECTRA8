@@ -178,6 +178,18 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
     mAttachmentVocShift   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "vocShift", mKnobVocShift);
 
     mAttachmentWaveform   = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "waveform", mComboWaveform);
+
+    // ノブの数値表示フォーマット・桁数の最適化
+    mKnobWtPos.setNumDecimalPlacesToDisplay(2);
+    mKnobPulseWidth.setNumDecimalPlacesToDisplay(0);
+    mKnobDetune.setNumDecimalPlacesToDisplay(0);
+    mKnobPorta.setNumDecimalPlacesToDisplay(2);
+    mKnobBendAmt.setNumDecimalPlacesToDisplay(2);
+    mKnobBendShift.setNumDecimalPlacesToDisplay(2);
+    mKnobSyncAmt.setNumDecimalPlacesToDisplay(2);
+    mKnobSyncShift.setNumDecimalPlacesToDisplay(2);
+    mKnobVocAmt.setNumDecimalPlacesToDisplay(2);
+    mKnobVocShift.setNumDecimalPlacesToDisplay(2);
     mAttachmentDetuneMode = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "detuneMode", mComboDetuneMode);
     mAttachmentDetuneSnap = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(apvts, "detuneSnap", mBtnDetuneSnap);
 

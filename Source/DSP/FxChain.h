@@ -441,7 +441,9 @@ public:
     }
     static juce::StringArray getPatternNames()
     {
-        return { "All On", "Off Beat", "Gallop", "Random 1", "Random 2", "Build" };
+        return { "All On", "Off Beat", "Gallop", "Syncopate 1", "Syncopate 2",
+                 "Trance Gate", "Stutter 4", "Straight 4", "Random 1", "Random 2",
+                 "Build", "Sparse" };
     }
 
     void prepare(double sr) { sampleRate = sr; reset(); }
@@ -458,15 +460,13 @@ public:
     // depth: 0..1 ゲートの深さ / vowelAmt: 0..1 フォルマントの効き / smooth: 0..1 立ち上がり鈍化
     // shape: 0..1 ステップ内の減衰。0=そのステップ全体を保持(従来) /
     //        1=各ステップ頭で鋭く減衰する打点になる。
-    //        ※これが無いと連続ONのステップが繋がってしまい、"All On" では
-    //          ゲートが全く動かず、1/32を選んでも連打にならなかった。
     void setParams(int rate, int pattern, float depth, float vowelAmt, float smooth,
                    float shape, double bpm) noexcept
     {
         mShape = juce::jlimit(0.0f, 1.0f, shape);
         static const double kBeats[7] = { 2.0, 1.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125 };
         mRate = juce::jlimit(0, 6, rate);
-        mPattern = juce::jlimit(0, 5, pattern);
+        mPattern = juce::jlimit(0, 11, pattern);
         mDepth = juce::jlimit(0.0f, 1.0f, depth);
         mVowel = juce::jlimit(0.0f, 1.0f, vowelAmt);
         mSmooth = juce::jlimit(0.0f, 1.0f, smooth);
@@ -483,24 +483,18 @@ public:
         {
             phase -= 1.0;
             stepIdx = (stepIdx + 1) % kNumSteps;
-            // SHAPE>0 のとき、各ステップ頭でエンベロープを叩き直す(リトリガー)。
-            // これにより連続するONステップも一発ずつ発音し、
-            // RATE=1/32 なら 1/32 の連打になる。
             if (mShape > 0.001f && stepOn(stepIdx))
                 env = 0.0f;
         }
 
         // --- ゲートエンベロープ (smoothで立ち上がり/下がりを鈍らせクリック防止) ---
-        // SHAPE>0 では「ステップ内で目標が1→0へ落ちる」ことで打点になる。
         float target = stepOn(stepIdx) ? 1.0f : 0.0f;
         if (mShape > 0.001f && target > 0.5f)
         {
-            // ステップ内位相 phase(0..1) に沿って減衰。SHAPEが大きいほど短い打点。
             const float decayPos = (float)phase / juce::jmax(0.05f, 1.0f - mShape * 0.92f);
             target = juce::jlimit(0.0f, 1.0f, 1.0f - decayPos);
         }
 
-        // smooth=0 でも 1ms 程度はかける
         const float tauMs = 1.0f + mSmooth * 60.0f;
         const float coeff = 1.0f - std::exp(-1.0f / (tauMs * 0.001f * (float)sampleRate));
         env += coeff * (target - env);
@@ -539,14 +533,20 @@ public:
 private:
     bool stepOn(int i) const noexcept
     {
-        // 16bitのパターンマスク (LSB = step0)
-        static const uint16_t kMasks[6] = {
+        // 16bitのパターンマスク (全12種類)
+        static const uint16_t kMasks[12] = {
             0xFFFF,             // All On
             0b1010101010101010, // Off Beat
             0b1101110111011101, // Gallop
+            0b1001001001001001, // Syncopate 1
+            0b0100100100100100, // Syncopate 2
+            0b1100110011001100, // Trance Gate
+            0b1111000011110000, // Stutter 4
+            0b1000100010001000, // Straight 4
             0b1011010110110101, // Random 1
             0b1110010110100111, // Random 2
             0b1000100010101111, // Build
+            0b1000000110000001, // Sparse
         };
         return (kMasks[mPattern] >> i) & 1;
     }
