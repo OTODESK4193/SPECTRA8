@@ -952,6 +952,20 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                                       lpcGamma, mFmtShiftSm, mFmtStretchSm);
             // BANDS EQ をポストEQとしてLPC出力へ適用 (クロスフェード時もLPC側のみに掛かる)
             mPostEq.process(l, r);
+
+            // BANDS EQ 通過後の最終セーフティ・ガード (0.0 dBFS / 1.0f 厳密遵守)。
+            //  PostBandEq の帯域ゲインブーストや位相回転によるレベル跳ね上がりを抑え込み、
+            //  LPC WET 出力が絶対に 0 dBFS (1.0f) を超えないように保護。
+            auto postLimit = [](float x) noexcept -> float
+            {
+                constexpr float thresh = 0.85f;
+                constexpr float headroom = 0.15f;
+                if (x > thresh)       return thresh + headroom * std::tanh((x - thresh) / headroom);
+                else if (x < -thresh) return -thresh + headroom * std::tanh((x + thresh) / headroom);
+                return x;
+            };
+            l = postLimit(l);
+            r = postLimit(r);
         };
 
         if (mVocXfadeRemaining > 0)

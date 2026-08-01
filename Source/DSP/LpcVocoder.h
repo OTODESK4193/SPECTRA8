@@ -34,11 +34,9 @@ public:
     static constexpr float kPreemph = 0.9375f;
 
     // 励起メイクアップ。
-    //  旧値 0.918 は G = sqrt(E_P) 方式に対する較正値だった。
-    //  励起ゲインを「レベル整合方式」に変更した結果、G が約 +11.0dB 大きくなるため
-    //  (Docs/sim/lpc2.py で3種の入力すべて -11.0dB 前後と確認)、
-    //  0.918 × 10^(-11.0/20) ≒ 0.259 として従来と同じ音量に揃える。
-    static constexpr float kMakeupGain = 0.259f;
+    //  和音キャリアや Formant モーフィング時のパワー過剰による 0dBFS 超えを防ぐため、
+    //  0.259f → 0.18f (約 -3.1dB) にキャリブレーション調整。
+    static constexpr float kMakeupGain = 0.18f;
 
     // 出力DCブロッカーのカットオフ。
     //  デエンファシス 1/(1-0.9375z⁻¹) は DC 利得が 16倍(+24dB)あるため、

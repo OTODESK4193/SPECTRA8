@@ -527,13 +527,15 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
     mDcX1R = mDeempR; mDcY1R = dcOutR;
 
     // 【修正C】ソフトセーフティ制限 (Soft Safety Limiter)
-    //  ±1.0f (0dBFS) 以下の通常振幅に対しては完全リニア(歪みゼロ)。
-    //  デエンファシス過渡応答等の突発ピーク(1.0f超)のみを滑らかに1.5f(+3.5dB)以下にアッパーバウンドし、
-    //  +9dB〜+10dB超の突発クリッピングや破綻を物理的に防ぐ。
+    //  ±0.85f (-1.4dBFS) 以下の通常振幅に対しては完全リニア(歪みゼロ)。
+    //  デエンファシス過渡応答等の突発大振幅(0.85f超)のみを tanh で滑らかに収束させ、
+    //  出力上限を絶対に ±1.0f (0.0 dBFS) 以下に抑え込む。
     auto softLimit = [](float x) noexcept -> float
     {
-        if (x > 1.0f)       return 1.0f + std::tanh(x - 1.0f) * 0.5f;
-        else if (x < -1.0f) return -1.0f + std::tanh(x + 1.0f) * 0.5f;
+        constexpr float thresh = 0.85f;
+        constexpr float headroom = 0.15f;
+        if (x > thresh)       return thresh + headroom * std::tanh((x - thresh) / headroom);
+        else if (x < -thresh) return -thresh + headroom * std::tanh((x + thresh) / headroom);
         return x;
     };
 
