@@ -70,10 +70,12 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
     mLblMorphHdr.setColour(juce::Label::textColourId, SpectraColors::accentExcitation.withAlpha(0.8f));
     addAndMakeVisible(mLblMorphHdr);
 
-    auto setupCombo = [this](juce::ComboBox& c, const juce::StringArray& items,
-                             const juce::String& tip)
+    auto setupCombo = [this](HelpComboBox& c, const juce::StringArray& items,
+                             const juce::String& tip,
+                             const juce::StringArray& itemHelp = {})
     {
         c.setTooltip(tip);
+        c.setItemHelp(itemHelp);
         c.setColour(juce::ComboBox::backgroundColourId, SpectraColors::knobTrack);
         c.setColour(juce::ComboBox::textColourId, SpectraColors::text);
         c.setColour(juce::ComboBox::outlineColourId, SpectraColors::panelLine);
@@ -86,11 +88,26 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
 
     setupCombo(mComboWaveform, { "Sawtooth", "Pulse", "Wavetable" },
         "WAVEFORM - carrier source. Sawtooth is the classic full-spectrum vocoder carrier, "
-        "Pulse is thinner and more nasal, Wavetable lets you load your own single-cycle waves.");
+        "Pulse is thinner and more nasal, Wavetable lets you load your own single-cycle waves.",
+        { "SAWTOOTH - every harmonic present at full strength. The classic vocoder carrier: "
+          "gives the bands the most material to work with, so words stay clearest.",
+          "PULSE - hollow and nasal. PULSE WIDTH thins it further and removes harmonics, "
+          "good for reedy or telephone-like voices.",
+          "WAVETABLE - use your own single-cycle waves. WT POSITION scans through the frames. "
+          "Load files with BROWSE, or register a folder with ADD DIR." });
     setupCombo(mComboDetuneMode, { "Dtn: Classic", "Dtn: Linear", "Dtn: Exp", "Dtn: Drift", "Dtn: Chorus" },
         "DETUNE MODE - how the unison voices are spread. Classic is the original fixed spread, "
         "Linear spaces them evenly, Exp packs them near the centre for a supersaw feel, "
-        "Drift wanders like analogue oscillators, Chorus sweeps them with a slow LFO.");
+        "Drift wanders like analogue oscillators, Chorus sweeps them with a slow LFO.",
+        { "CLASSIC - the original fixed spread. Predictable and tight, good general purpose.",
+          "LINEAR - voices spaced evenly across the detune range. Widest and most even "
+          "thickening.",
+          "EXP - voices packed near the centre with a few far out. The supersaw recipe: "
+          "solid core plus shimmer on the edges.",
+          "DRIFT - each voice wanders slowly at random, like analogue oscillators that never "
+          "quite stay in tune. Never repeats.",
+          "CHORUS - each voice is swept by its own slow LFO, giving a built-in chorus without "
+          "using an FX slot." });
 
     addAndMakeVisible(mWaveDisplay);
     mBtnDetuneSnap.setTooltip("SNAP - constrains DETUNE to whole semitones, so the unison "

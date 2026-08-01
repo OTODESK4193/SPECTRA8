@@ -16,6 +16,7 @@
 #include "../DSP/ModMatrix.h"
 #include "ColorPalette.h"
 #include "ValueKnob.h"
+#include "HelpComboBox.h"
 #include "GlowToggle.h"
 #include "ArcDial.h"
 
@@ -32,7 +33,7 @@ private:
     void setSourceTab(int t);          // 0 = LFO, 1 = ENV
     void styleTab(juce::TextButton& b, bool active);
     void setupKnob(ValueKnob& k, const juce::String& paramID);
-    void setupCombo(juce::ComboBox& c, const juce::StringArray& items, const juce::String& paramID);
+    void setupCombo(HelpComboBox& c, const juce::StringArray& items, const juce::String& paramID);
     void setupToggle(std::unique_ptr<GlowToggle>& b, const juce::String& text,
                      juce::Colour accent, const juce::String& paramID);
     void setupSmallLabel(juce::Label& l, bool bold);
@@ -48,8 +49,8 @@ private:
     struct LfoGui
     {
         juce::Label label;
-        juce::ComboBox waveBox;
-        juce::ComboBox syncRateBox;
+        HelpComboBox waveBox;
+        HelpComboBox syncRateBox;
         ValueKnob rateKnob;
         juce::Label rateLbl { {}, "RATE" };
         std::unique_ptr<GlowToggle> syncBtn;
@@ -70,8 +71,8 @@ private:
     struct SlotGui
     {
         juce::Label rowLabel;
-        juce::ComboBox srcBox;
-        juce::ComboBox dstBox;
+        HelpComboBox srcBox;
+        HelpComboBox dstBox;
         ValueKnob amtKnob;
         std::unique_ptr<GlowToggle> uniBtn;
     };

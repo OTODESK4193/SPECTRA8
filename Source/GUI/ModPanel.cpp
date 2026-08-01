@@ -31,7 +31,7 @@ void ModPanel::setupKnob(ValueKnob& k, const juce::String& paramID)
         std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, paramID, k));
 }
 
-void ModPanel::setupCombo(juce::ComboBox& c, const juce::StringArray& items, const juce::String& paramID)
+void ModPanel::setupCombo(HelpComboBox& c, const juce::StringArray& items, const juce::String& paramID)
 {
     c.setColour(juce::ComboBox::backgroundColourId, SpectraColors::knobTrack);
     c.setColour(juce::ComboBox::textColourId, SpectraColors::text);
@@ -98,6 +98,17 @@ ModPanel::ModPanel(juce::AudioProcessorValueTreeState& state)
         L.waveBox.setTooltip("LFO " + n + " WAVE - Sine and Triangle are smooth, Saw and Square "
                              "step abruptly, S&H jumps to a new random value each cycle, "
                              "Chaos layers two out-of-tune sines for a drifting, never-repeating shape.");
+        L.waveBox.setItemHelp(
+            { "SINE - the smoothest shape. Best for gentle vibrato, tremolo and slow formant sweeps.",
+              "TRIANGLE - linear rise and fall. Similar to Sine but with a sharper turn at the peaks.",
+              "SAW - ramps up then drops instantly. Good for repeating sweeps that always restart "
+              "from the same place.",
+              "SQUARE - jumps between two values with nothing in between. Use it to flip a knob "
+              "between two settings in time.",
+              "S&H - holds a new random value for each cycle. Stepped randomness, great on "
+              "PITCH Q, WT POSITION or FMT SHIFT.",
+              "CHAOS - two sines at an irrational ratio. Drifts and never repeats, so it sounds "
+              "organic rather than looped." });
         L.rateKnob.setTooltip("LFO " + n + " RATE - free-running speed in Hz. "
                               "Ignored while SYNC is lit.");
         L.syncRateBox.setTooltip("LFO " + n + " SYNC RATE - note division locked to the host tempo. "

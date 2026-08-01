@@ -36,6 +36,17 @@ FxSlotCard::FxSlotCard(SPECTRA8AudioProcessor& processor, int slotIndex,
     typeBox.setTooltip("SLOT " + juce::String(slot + 1)
                        + " TYPE - which effect sits in this slot. Slots run left to right; "
                          "drag a card onto another to change the order.");
+    typeBox.setItemHelp(
+        { "--- - slot is empty and passes audio through untouched.",
+          "RESONATOR - a bank of tuned resonators that rings in a chord or with your MIDI notes. "
+          "Turns speech into a pitched, harmonic pad.",
+          "DRIVE - multiband distortion. Drives low, mid and high separately so you can add bite "
+          "on top without muddying the bottom.",
+          "GATE - tempo-synced rhythmic gate with an optional vowel filter. Chops the voice into "
+          "a talking rhythm.",
+          "CHORUS - ensemble chorus. Thickens and widens the result, classic on vocoder pads.",
+          "REVERB - room and tail with pre-delay, damping and a low cut so the reverb stays out "
+          "of the way of the words." });
     addAndMakeVisible(typeBox);
     typeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         proc.apvts, pre + "Type", typeBox);
@@ -343,7 +354,7 @@ void FxPanel::rebuildDetails()
 
     for (const auto& d : comboDefs)
     {
-        auto c = std::make_unique<juce::ComboBox>();
+        auto c = std::make_unique<HelpComboBox>();
         c->setColour(juce::ComboBox::backgroundColourId, SpectraColors::knobTrack);
         c->setColour(juce::ComboBox::textColourId, SpectraColors::text);
         c->setColour(juce::ComboBox::outlineColourId, SpectraColors::panelLine);

@@ -40,18 +40,24 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
     addChildComponent(mFxPanel);
     addChildComponent(mBandsEqPanel);
 
-    // HUD の初期化
+    // インフォバーの初期化。
+    //  juce::Label は drawFittedText で「高さ / 行の高さ」ぶんの行数まで自動折り返しするので、
+    //  高さを 3 行ぶん確保するだけで説明文が3行で回り込む。
+    //  複数行を読ませるので中央揃えではなく左揃えにする。
     mDebugLabel.setColour(juce::Label::backgroundColourId, SpectraColors::panel);
     mDebugLabel.setColour(juce::Label::textColourId, SpectraColors::textDim);
-    mDebugLabel.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
-    mDebugLabel.setJustificationType(juce::Justification::centred);
+    mDebugLabel.setFont(juce::Font(juce::FontOptions(11.5f)));
+    mDebugLabel.setJustificationType(juce::Justification::topLeft);
+    mDebugLabel.setBorderSize(juce::BorderSize<int>(4, 10, 3, 10));
+    mDebugLabel.setMinimumHorizontalScale(1.0f);   // 縮小せず必ず折り返す
     addAndMakeVisible(mDebugLabel);
 
     // 初期タブの選択
     mTabVocoderBtn.setToggleState(true, juce::sendNotification);
 
     // ウィンドウサイズ設定 (Granular準拠のワイド表示)
-    setSize(780, 380);
+    //  インフォバーを3行(20→52px)にしたぶん、縦を 380 → 412 へ広げてパネル面積を保つ。
+    setSize(780, 412);
 
     // タブボタンにも説明を付ける
     mTabVocoderBtn.setTooltip("VOCODER - core vocoder settings: engine type, voicing mode, "
@@ -113,8 +119,9 @@ void SPECTRA8AudioProcessorEditor::resized()
     mTabFxBtn.setBounds(tabX + tabW * 3, tabY, tabW, tabH);
     mTabBandsEqBtn.setBounds(tabX + tabW * 4, tabY, tabW, tabH);
 
-    // 2. HUD（下部）のレイアウト
-    auto hudArea = r.removeFromBottom(20);
+    // 2. インフォバー（下部・3行）のレイアウト
+    //    11.5px フォント × 3行 + 上下の余白 = 52px
+    auto hudArea = r.removeFromBottom(52);
     mDebugLabel.setBounds(hudArea);
 
     // 3. メインパネル（中央）のレイアウト
@@ -135,19 +142,30 @@ void SPECTRA8AudioProcessorEditor::timerCallback()
 {
     juce::String help;
 
-    auto& mouse = juce::Desktop::getInstance().getMainMouseSource();
-    if (auto* under = mouse.getComponentUnderMouse())
+    // 1) コンボのポップアップが開いていて、項目にマウスが乗っているならそれを最優先。
+    //    (ポップアップは別ウィンドウなので getComponentUnderMouse では辿れない)
+    if (auto* owner = MenuHelpBus::owner())
+        if (owner == this || isParentOf(owner))
+            help = MenuHelpBus::text();
+
+    // 2) それ以外は、マウス下のコンポーネントを親方向へ辿って説明文を探す
+    if (help.isEmpty())
     {
-        // 自分のエディター内のコンポーネントだけを対象にする
-        if (under == this || isParentOf(under))
+        // getMainMouseSource() は値を返すので参照では受けられない (軽量ハンドル)
+        const auto mouse = juce::Desktop::getInstance().getMainMouseSource();
+        if (auto* under = mouse.getComponentUnderMouse())
         {
-            for (auto* c = under; c != nullptr && c != this; c = c->getParentComponent())
+            // 自分のエディター内のコンポーネントだけを対象にする
+            if (under == this || isParentOf(under))
             {
-                if (auto* tc = dynamic_cast<juce::TooltipClient*>(c))
+                for (auto* c = under; c != nullptr && c != this; c = c->getParentComponent())
                 {
-                    help = tc->getTooltip();
-                    if (help.isNotEmpty())
-                        break;
+                    if (auto* tc = dynamic_cast<juce::TooltipClient*>(c))
+                    {
+                        help = tc->getTooltip();
+                        if (help.isNotEmpty())
+                            break;
+                    }
                 }
             }
         }

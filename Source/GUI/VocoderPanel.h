@@ -12,6 +12,7 @@
 #include <utility>
 #include "ColorPalette.h"
 #include "ValueKnob.h"
+#include "HelpComboBox.h"
 #include "GlowToggle.h"
 #include "ArcDial.h"
 #include "ModRing.h"
@@ -60,16 +61,16 @@ private:
     ValueKnob mKnobOutLevel;
 
     // --- コンボ 8種 (左1列) ---
-    juce::ComboBox mComboVocoderMode;
-    juce::ComboBox mComboVoicingMode;
-    juce::ComboBox mComboTrackResponse;   // Tracking応答速度 (両モード共通)
-    juce::ComboBox mComboPitchQKey;       // PITCH Q キー (両モード共通)
-    juce::ComboBox mComboPitchQScale;     // PITCH Q スケール (両モード共通)
-    juce::ComboBox mComboLpcOrder;        // LPC専用
-    juce::ComboBox mComboAnalysisWindow;  // LPC専用
-    juce::ComboBox mComboFrameRate;       // LPC専用
-    juce::ComboBox mComboQuantBits;       // LPC専用
-    juce::ComboBox mComboLpcInterpolation;// LPC専用
+    HelpComboBox mComboVocoderMode;
+    HelpComboBox mComboVoicingMode;
+    HelpComboBox mComboTrackResponse;   // Tracking応答速度 (両モード共通)
+    HelpComboBox mComboPitchQKey;       // PITCH Q キー (両モード共通)
+    HelpComboBox mComboPitchQScale;     // PITCH Q スケール (両モード共通)
+    HelpComboBox mComboLpcOrder;        // LPC専用
+    HelpComboBox mComboAnalysisWindow;  // LPC専用
+    HelpComboBox mComboFrameRate;       // LPC専用
+    HelpComboBox mComboQuantBits;       // LPC専用
+    HelpComboBox mComboLpcInterpolation;// LPC専用
 
     // --- 点灯式トグルボタン ---
     GlowToggle mBtnLimiter;         // LIMIT (Outノブ近く)

@@ -22,6 +22,7 @@
 #include <vector>
 #include "ColorPalette.h"
 #include "ValueKnob.h"
+#include "HelpComboBox.h"
 #include "ArcDial.h"
 #include "GlowToggle.h"
 #include "ModRing.h"
@@ -339,8 +340,8 @@ private:
     ValueKnob mKnobVocShift;    // Morph: 母音モーフ位置
 
     // コンボ + トグル + ボタン
-    juce::ComboBox mComboWaveform;
-    juce::ComboBox mComboDetuneMode;
+    HelpComboBox mComboWaveform;
+    HelpComboBox mComboDetuneMode;
     GlowToggle mBtnDetuneSnap;
     juce::TextButton mBtnBrowse { "BROWSE" };
     juce::TextButton mBtnAddDir { "ADD DIR" };

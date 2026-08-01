@@ -95,10 +95,14 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
         "OUT LEVEL - final output gain, applied after the mix and before the limiter.", " dB");
 
     // コンボボックス共通セットアップ
-    auto setupCombo = [this](juce::ComboBox& c, const juce::StringArray& items,
-                             const juce::String& tip)
+    // tip      = コンボ全体の説明 (項目別ヘルプが無いときのフォールバック)
+    // itemHelp = 開いたメニューの各項目にマウスを乗せたときに出る説明 (items と同じ並び)
+    auto setupCombo = [this](HelpComboBox& c, const juce::StringArray& items,
+                             const juce::String& tip,
+                             const juce::StringArray& itemHelp = {})
     {
         c.setTooltip(tip);
+        c.setItemHelp(itemHelp);
         c.setColour(juce::ComboBox::backgroundColourId, SpectraColors::knobTrack);
         c.setColour(juce::ComboBox::textColourId, SpectraColors::text);
         c.setColour(juce::ComboBox::outlineColourId, SpectraColors::panelLine);
@@ -112,14 +116,31 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
     setupCombo(mComboVocoderMode, { "Filterbank", "LPC Mode" },
         "ENGINE - Filterbank is the classic analogue-style bank of band filters: bright, wide "
         "and musical. LPC models the vocal tract itself: more speech-like and intelligible, "
-        "and the source of the retro BitSpeek-style tones.");
+        "and the source of the retro BitSpeek-style tones.",
+        { "FILTERBANK - the classic vocoder: a bank of 8 to 48 band filters tracks the voice "
+          "and shapes the carrier. Bright, wide and musical. Use RESONANCE, BANDS and WIDTH "
+          "to shape it.",
+          "LPC MODE - models the vocal tract as a resonant tube instead of fixed bands. "
+          "More speech-like and far more intelligible on words, and the only mode where the "
+          "retro speech-chip controls (ORDER, FRAME RATE, K QUANT) are available." });
     setupCombo(mComboVoicingMode, { "Auto Mode", "MIDI Mode" },
         "VOICING - Auto derives the carrier pitch from the incoming voice, so no keyboard is "
         "needed. MIDI plays the carrier from notes you send, letting you sing one line and "
-        "play chords under it.");
+        "play chords under it.",
+        { "AUTO MODE - the carrier pitch is detected from the incoming voice. No keyboard "
+          "needed: just play audio in. Use TRACKING to decide how much it follows, and "
+          "BASE PITCH for the fallback note.",
+          "MIDI MODE - the carrier is played from MIDI notes, up to 8 at once. Sing one line "
+          "and play chords under it. The ADSR knobs on the lower row become active here." });
     setupCombo(mComboTrackResponse, { "Track: Fast", "Track: Natural", "Track: Smooth" },
         "TRACK RESPONSE - how quickly detected pitch is allowed to move. Fast keeps every "
-        "inflection, Smooth irons out wobble and glitches at the cost of some expression.");
+        "inflection, Smooth irons out wobble and glitches at the cost of some expression.",
+        { "FAST (2 ms) - follows every inflection and slide. Most expressive, but detection "
+          "glitches also get through.",
+          "NATURAL (6 ms) - the default balance. Keeps normal singing expression while "
+          "smoothing out small jitter.",
+          "SMOOTH (20 ms) - irons out wobble and octave jumps. Best on noisy or breathy "
+          "sources, at the cost of some expression." });
     setupCombo(mComboPitchQKey, { "Key: C", "Key: C#", "Key: D", "Key: D#", "Key: E", "Key: F",
                                   "Key: F#", "Key: G", "Key: G#", "Key: A", "Key: A#", "Key: B" },
         "KEY - root note that PITCH Q and M.PITCH snap to.");
@@ -128,20 +149,51 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
         "narrower scales give a stronger, more obviously tuned effect.");
     setupCombo(mComboLpcOrder, { "Order 8", "Order 10", "Order 12", "Order 16" },
         "LPC ORDER - number of poles used to model the vocal tract. 8-10 is the classic "
-        "speech-chip sound, 16 resolves more formants and is clearer but less retro.");
+        "speech-chip sound, 16 resolves more formants and is clearer but less retro.",
+        { "ORDER 8 - only 4 formants can be modelled. Coarse and unmistakably retro, the "
+          "roughest speech-chip setting.",
+          "ORDER 10 - the classic vintage speech-synth order. Retro character but words are "
+          "still readable.",
+          "ORDER 12 - middle ground. Noticeably clearer than 10 while keeping some grit.",
+          "ORDER 16 - resolves the most formants. Cleanest and most intelligible, best for "
+          "modern hi-fi vocoding rather than retro tones." });
     setupCombo(mComboAnalysisWindow, { "Hann Window", "Hamming Window", "Blackman Window" },
         "ANALYSIS WINDOW - shape applied before LPC analysis. Hann is neutral, Hamming is "
-        "slightly sharper, Blackman is the smoothest and most stable on noisy input.");
+        "slightly sharper, Blackman is the smoothest and most stable on noisy input.",
+        { "HANN - the neutral default. Good balance of formant sharpness and stability.",
+          "HAMMING - slightly sharper formant peaks, a little more edge. Good on clear "
+          "close-miked vocals.",
+          "BLACKMAN - the smoothest and most stable. Best when the input is noisy, breathy "
+          "or has background bleed." });
     setupCombo(mComboFrameRate, { "8 Hz", "15 Hz", "25 Hz", "50 Hz", "80 Hz" },
         "FRAME RATE - how often the vocal tract model is re-analysed. Low rates make the voice "
-        "step and stutter like an old speech chip; 50-80 Hz sounds natural.");
+        "step and stutter like an old speech chip; 50-80 Hz sounds natural.",
+        { "8 Hz - extreme stepping. The voice lurches between mouth shapes, the most obviously "
+          "robotic setting.",
+          "15 Hz - heavy stepping, still recognisable as speech. Strong toy-computer feel.",
+          "25 Hz - mild stepping. Adds vintage character without destroying the words.",
+          "50 Hz - the natural default. Smooth speech with no audible stepping.",
+          "80 Hz - fastest tracking. Catches quick consonants, best for fast rapping or "
+          "detailed articulation." });
     setupCombo(mComboQuantBits, { "K: Off", "K: 6bit", "K: 5bit", "K: 4bit", "K: 3bit" },
         "K QUANT - bit depth of the vocal tract coefficients. Fewer bits makes the throat "
-        "shape coarse and grainy, the core of the vintage speech-synth character.");
+        "shape coarse and grainy, the core of the vintage speech-synth character.",
+        { "OFF - full precision. Clean modern LPC with no added grain.",
+          "6 BIT - subtle roughening. Adds character without hurting intelligibility.",
+          "5 BIT - clearly grainy. The throat shape starts snapping between coarse steps.",
+          "4 BIT - strong vintage grain, close to real speech-chip hardware.",
+          "3 BIT - the coarsest setting. Harsh and unmistakably 1980s. Level is compensated "
+          "automatically so it does not jump in volume." });
     setupCombo(mComboLpcInterpolation, { "Step Interp", "LSP Interp", "LAR Interp" },
         "INTERPOLATION - how the model morphs between analysis frames. Step jumps quickly and "
         "keeps the toy-like stepping; LSP and LAR glide across the whole frame for smooth, "
-        "natural formant movement.");
+        "natural formant movement.",
+        { "STEP - snaps to each new frame quickly. Combined with a low FRAME RATE this is what "
+          "produces the classic stuttering toy-robot movement.",
+          "LSP - glides across the whole frame in the line-spectrum domain. The most natural "
+          "formant movement, best for smooth singing.",
+          "LAR - glides in the log-area-ratio domain (the vocal tract cross-section). Similar "
+          "to LSP but lighter on CPU and slightly different in character." });
 
     // 点灯式トグルボタン
     mBtnLimiter.setTooltip("LIMIT - brickwall limiter on the output, ceiling -0.1 dBFS. "

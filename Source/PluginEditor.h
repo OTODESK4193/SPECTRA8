@@ -11,6 +11,7 @@
 #include "GUI/ModPanel.h"
 #include "GUI/BandsEqPanel.h"
 #include "GUI/FxPanel.h"
+#include "GUI/HelpComboBox.h"   // MenuHelpBus (ポップアップ項目のヘルプ受け取り用)
 
 class SPECTRA8AudioProcessorEditor : public juce::AudioProcessorEditor,
                                      public juce::Timer 

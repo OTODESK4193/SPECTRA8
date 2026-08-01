@@ -18,6 +18,7 @@
 #include "../DSP/FxChain.h"
 #include "ColorPalette.h"
 #include "ValueKnob.h"
+#include "HelpComboBox.h"
 #include "ArcDial.h"
 
 class SPECTRA8AudioProcessor;
@@ -59,7 +60,7 @@ private:
     std::function<void(int)> onSelect;
     std::function<void()> onTypeChanged;
 
-    juce::ComboBox typeBox;
+    HelpComboBox typeBox;
     ValueKnob amountKnob;
     juce::Label amountLabel { {}, "AMT" };
 
@@ -103,7 +104,7 @@ private:
     // 詳細エリアは選択FXごとに作り直すため動的保持
     std::vector<std::unique_ptr<ValueKnob>>    detailKnobs;
     std::vector<std::unique_ptr<juce::Label>>  detailKnobLabels;
-    std::vector<std::unique_ptr<juce::ComboBox>> detailCombos;
+    std::vector<std::unique_ptr<HelpComboBox>> detailCombos;
     std::vector<std::unique_ptr<juce::Label>>  detailComboLabels;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>>   detailKnobAttach;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> detailComboAttach;
