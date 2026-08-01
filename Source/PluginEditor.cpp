@@ -125,8 +125,11 @@ void SPECTRA8AudioProcessorEditor::resized()
     mTabVocoderBtn.setBounds(tabX, tabY, tabW, tabH);
     mTabExcitationBtn.setBounds(tabX + tabW, tabY, tabW, tabH);
     mTabModBtn.setBounds(tabX + tabW * 2, tabY, tabW, tabH);
-    mTabFxBtn.setBounds(tabX + tabW * 3, tabY, tabW, tabH);
-    mTabEqBtn.setBounds(tabX + tabW * 4, tabY, tabW, tabH);
+    // ヘッダの並びは信号の流れ順にする: … MOD MATRIX → EQ → FX → PRESET。
+    // (実際の処理順も ボコーダー → BANDS EQ → FX なのでタブ順と一致する)
+    // タブID自体は変えず (FX=3 / EQ=4)、表示位置だけ入れ替える。
+    mTabEqBtn.setBounds(tabX + tabW * 3, tabY, tabW, tabH);
+    mTabFxBtn.setBounds(tabX + tabW * 4, tabY, tabW, tabH);
     mTabPresetBtn.setBounds(tabX + tabW * 5, tabY, tabW, tabH);
 
     // 2. インフォバー（下部・3行）のレイアウト

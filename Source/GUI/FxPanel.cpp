@@ -394,8 +394,10 @@ void FxPanel::rebuildDetails()
         detailKnobAttach.push_back(
             std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
                 proc.apvts, d.id, *k));
-        // Attachment生成後に設定する (生成時に既定桁数へ戻されるため)
-        k->setNumDecimalPlacesToDisplay(d.dec);
+        // ※ setNumDecimalPlacesToDisplay は SliderAttachment が
+        //   textFromValueFunction を上書きするため効かない。桁数と単位は
+        //   createParameterLayout の withStringFromValueFunction 側で決めている。
+        juce::ignoreUnused(d.dec);
 
         auto l = std::make_unique<juce::Label>();
         l->setText(d.label, juce::dontSendNotification);

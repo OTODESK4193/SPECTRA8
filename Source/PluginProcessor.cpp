@@ -111,9 +111,63 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
+    // ============================================================================
+    //  数値表示フォーマッタ (2026-08-02)
+    //
+    //  【重要】GUI 側の setNumDecimalPlacesToDisplay() は効かない。
+    //  juce::SliderAttachment はコンストラクタで slider.textFromValueFunction を
+    //  上書きし、パラメータ側の getText() を使うようにするため。
+    //  AudioParameterFloat の既定 getText() は「小数2桁固定・単位なし」なので、
+    //  何を設定しても "0.00" になり、NOISE COLOR は "1000.00" と枠からはみ出していた。
+    //  → 単位と桁は必ずここ (withStringFromValueFunction) で決めること。
+    //     こうすると DAW のオートメーション表示も同じ表記になる。
+    // ============================================================================
+    using Attr = juce::AudioParameterFloatAttributes;
+
+    // 0〜1 のノブを 0〜100% で見せる
+    auto fmtPercent01 = [](float v, int) { return juce::String(juce::roundToInt(v * 100.0f)) + " %"; };
+    // 既に 0〜100 のノブ
+    auto fmtPercent   = [](float v, int) { return juce::String(juce::roundToInt(v)) + " %"; };
+    // ± の % (NOISE± は既に -100..100、Bend/Sync/Voc 系は -1..1)
+    auto fmtPercentSigned = [](float v, int)
+    {
+        const int i = juce::roundToInt(v);
+        return juce::String(i > 0 ? "+" : "") + juce::String(i) + " %";
+    };
+    auto fmtPercentSigned01 = [](float v, int)
+    {
+        const int i = juce::roundToInt(v * 100.0f);
+        return juce::String(i > 0 ? "+" : "") + juce::String(i) + " %";
+    };
+    // 半音 (符号付き・小数1桁)
+    auto fmtSemitone = [](float v, int)
+    {
+        return (v > 0.0f ? "+" : "") + juce::String(v, 1) + " st";
+    };
+    // 倍率
+    auto fmtRatio = [](float v, int) { return juce::String::fromUTF8("\xc3\x97") + juce::String(v, 2); };
+    // 周波数 (1kHz 以上は kHz 表記に切り替え)
+    auto fmtHz = [](float v, int)
+    {
+        return v >= 1000.0f ? juce::String(v / 1000.0f, 2) + " kHz"
+                            : juce::String(juce::roundToInt(v)) + " Hz";
+    };
+    // 時間 (1秒未満は ms)
+    auto fmtTime = [](float v, int)
+    {
+        return v < 1.0f ? juce::String(juce::roundToInt(v * 1000.0f)) + " ms"
+                        : juce::String(v, 2) + " s";
+    };
+    // dB (符号付き・小数1桁)
+    auto fmtDb = [](float v, int)
+    {
+        return (v > 0.0f ? "+" : "") + juce::String(v, 1) + " dB";
+    };
+
     // --- ボコーダー基本パラメータ ---
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("character", 1), "Character", 0.0f, 1.0f, 1.0f));
+        juce::ParameterID("character", 1), "Character", juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
 
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("vocoderMode", 1), "Vocoder Mode", juce::StringArray{ "Filterbank", "LPC Mode" }, 0));
@@ -125,15 +179,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("bandCount", 1), "Band Count", 8, 48, 48));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("formantShift", 1), "Formant Shift", -24.0f, 24.0f, 0.0f));
+        juce::ParameterID("formantShift", 1), "Formant Shift",
+        juce::NormalisableRange<float>(-24.0f, 24.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtSemitone)));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("formantStretch", 1), "Formant Stretch", 0.5f, 2.0f, 1.0f));
+        juce::ParameterID("formantStretch", 1), "Formant Stretch",
+        juce::NormalisableRange<float>(0.5f, 2.0f), 1.0f,
+        Attr().withStringFromValueFunction(fmtRatio)));
 
     // BPF Bank のバンド幅スケール (バンド間隔連動Qに乗算)。1.0=標準(中域で旧Q=10相当)
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("resonance", 1), "Resonance",
-        juce::NormalisableRange<float>(0.3f, 3.0f, 0.0f, 0.5f), 1.0f));
+        juce::NormalisableRange<float>(0.3f, 3.0f, 0.0f, 0.5f), 1.0f,
+        Attr().withStringFromValueFunction(fmtRatio)));   // 帯域Qの倍率なので ×1.00 表記
 
     // Filterbank の帯域交互パンニング幅。
     //  旧実装は 1.0 固定で、高域は偶数バンドが完全L・奇数バンドが完全Rへ振り切っており、
@@ -141,10 +200,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     //  (モノ化するとピークが -4dB 落ち音色も変わる)。既定を 0.6 にしてノブ化する。
     //  0.0 = 完全センター(モノ) / 1.0 = 旧来の振り切り。
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("stereoWidth", 1), "Stereo Width", 0.0f, 1.0f, 0.6f));
+        juce::ParameterID("stereoWidth", 1), "Stereo Width",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.6f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("tracking", 1), "Tracking", 0.0f, 100.0f, 0.0f)); // レポート留意点5
+        juce::ParameterID("tracking", 1), "Tracking",
+        juce::NormalisableRange<float>(0.0f, 100.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));   // レポート留意点5
 
     // Tracking応答速度: ピッチ追従のlog域平滑時定数 (Fast=2ms/Natural=6ms/Smooth=20ms)
     layout.add(std::make_unique<juce::AudioParameterChoice>(
@@ -152,13 +215,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::StringArray{ "Fast", "Natural", "Smooth" }, 1));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("mix", 1), "Mix", 0.0f, 100.0f, 100.0f));
+        juce::ParameterID("mix", 1), "Mix",
+        juce::NormalisableRange<float>(0.0f, 100.0f), 100.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("outputLevel", 1), "Output Level", -60.0f, 12.0f, 0.0f));
+        juce::ParameterID("outputLevel", 1), "Output Level",
+        juce::NormalisableRange<float>(-60.0f, 12.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtDb)));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("pitchQuantize", 1), "Pitch Quantize", 0.0f, 100.0f, 0.0f));
+        juce::ParameterID("pitchQuantize", 1), "Pitch Quantize",
+        juce::NormalisableRange<float>(0.0f, 100.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
 
     // Master Pitch: キャリア全体の移調 (半音)。
     //  PITCH Q を効かせている状態で動かすと Key/Scale にスナップされるので、
@@ -217,10 +286,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("waveform", 1), "Waveform", juce::StringArray{ "Saw", "Pulse", "Wavetable" }, 0));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("wavetablePosition", 1), "Wavetable Position", 0.0f, 1.0f, 0.0f));
+        juce::ParameterID("wavetablePosition", 1), "Wavetable Position",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("pulseWidth", 1), "Pulse Width", 5.0f, 95.0f, 50.0f));
+        juce::ParameterID("pulseWidth", 1), "Pulse Width",
+        juce::NormalisableRange<float>(5.0f, 95.0f), 50.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
 
     // Detune: cent値と度数(音程名)の併記表示
     layout.add(std::make_unique<juce::AudioParameterFloat>(
@@ -256,46 +329,75 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     //  Vocode   = A-I-U-E-O フォルマントフィルタ (Amt=効き, Shift=母音モーフ位置)
     //  Amt=0 でそのMorphは無効。全て同時に掛けられる (Bend→Sync→Vocodeの順に適用)。
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("bendAmt", 1), "Bend Amount", -1.0f, 1.0f, 0.0f));
+        juce::ParameterID("bendAmt", 1), "Bend Amount",
+        juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercentSigned01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("bendShift", 1), "Bend Shift", -1.0f, 1.0f, 0.0f));
+        juce::ParameterID("bendShift", 1), "Bend Shift",
+        juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercentSigned01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("syncAmt", 1), "Sync Amount", 0.0f, 1.0f, 0.0f));
+        juce::ParameterID("syncAmt", 1), "Sync Amount",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("syncShift", 1), "Sync Shift", -1.0f, 1.0f, 0.0f));
+        juce::ParameterID("syncShift", 1), "Sync Shift",
+        juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercentSigned01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("vocAmt", 1), "Vocode Amount", 0.0f, 1.0f, 0.0f));
+        juce::ParameterID("vocAmt", 1), "Vocode Amount",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("vocShift", 1), "Vocode Vowel", -1.0f, 1.0f, 0.0f));
+        juce::ParameterID("vocShift", 1), "Vocode Vowel",
+        juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercentSigned01)));
 
     // Noise: BitSpeek式の双方向コントロール。
     //  Filterbank : 0〜100% がキャリアへのノイズ混入（負値は0扱い＝従来と同一）
     //  LPC        : -100%=ノイズ除去(純トーン) / 0%=自動V/UV追従 / +100%=全ノイズ(ウィスパー)
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("noise", 1), "Noise", -100.0f, 100.0f, 0.0f));
+        juce::ParameterID("noise", 1), "Noise",
+        juce::NormalisableRange<float>(-100.0f, 100.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercentSigned)));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("lofi", 1), "LoFi", 0.0f, 1.0f, 0.0f));
+        juce::ParameterID("lofi", 1), "LoFi",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("porta", 1), "Portamento", 0.0f, 2.0f, 0.1f)); // ポルタメント
+        juce::ParameterID("porta", 1), "Portamento",
+        juce::NormalisableRange<float>(0.0f, 2.0f), 0.1f,
+        Attr().withStringFromValueFunction(fmtTime)));   // ポルタメント
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("basePitch", 1), "Base Pitch", 50.0f, 500.0f, 130.0f));
+        juce::ParameterID("basePitch", 1), "Base Pitch",
+        juce::NormalisableRange<float>(50.0f, 500.0f), 130.0f,
+        Attr().withStringFromValueFunction(fmtHz)));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("noiseColor", 1), "Noise Color", 
-        juce::NormalisableRange<float>(100.0f, 10000.0f, 0.0f, 0.25f), 1000.0f));
+        juce::NormalisableRange<float>(100.0f, 10000.0f, 0.0f, 0.25f), 1000.0f,
+        Attr().withStringFromValueFunction(fmtHz)));
 
     // MIDI用ADSR
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("attack", 1), "Attack", 0.001f, 5.0f, 0.01f));
+        juce::ParameterID("attack", 1), "Attack",
+        juce::NormalisableRange<float>(0.001f, 5.0f, 0.0f, 0.35f), 0.01f,
+        Attr().withStringFromValueFunction(fmtTime)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("decay", 1), "Decay", 0.001f, 5.0f, 0.1f));
+        juce::ParameterID("decay", 1), "Decay",
+        juce::NormalisableRange<float>(0.001f, 5.0f, 0.0f, 0.35f), 0.1f,
+        Attr().withStringFromValueFunction(fmtTime)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("sustain", 1), "Sustain", 0.0f, 1.0f, 0.8f));
+        juce::ParameterID("sustain", 1), "Sustain",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.8f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("release", 1), "Release", 0.001f, 5.0f, 0.2f));
+        juce::ParameterID("release", 1), "Release",
+        juce::NormalisableRange<float>(0.001f, 5.0f, 0.0f, 0.35f), 0.2f,
+        Attr().withStringFromValueFunction(fmtTime)));
 
     // --- モジュレーションマトリクスパラメータ (6スロット = ModMatrix::kNumSlots) ---
     for (int i = 0; i < ModMatrix::kNumSlots; ++i)
@@ -306,7 +408,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         layout.add(std::make_unique<juce::AudioParameterChoice>(
             juce::ParameterID(prefix + "dst", 1), prefix + " Dest", ModMatrix::getDestNames(), 0));
         layout.add(std::make_unique<juce::AudioParameterFloat>(
-            juce::ParameterID(prefix + "amt", 1), prefix + " Amount", -1.0f, 1.0f, 0.0f));
+            juce::ParameterID(prefix + "amt", 1), prefix + " Amount",
+            juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f,
+            Attr().withStringFromValueFunction(fmtPercentSigned01)));
         layout.add(std::make_unique<juce::AudioParameterBool>(
             juce::ParameterID(prefix + "uni", 1), prefix + " Uni", false));
     }
@@ -316,7 +420,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     {
         const juce::String prefix = "lfo" + juce::String(i);
         layout.add(std::make_unique<juce::AudioParameterFloat>(
-            juce::ParameterID(prefix + "rate", 1), prefix + " Rate", 0.01f, 50.0f, 1.0f));
+            juce::ParameterID(prefix + "rate", 1), prefix + " Rate",
+            juce::NormalisableRange<float>(0.01f, 50.0f, 0.0f, 0.35f), 1.0f,
+            Attr().withStringFromValueFunction([](float v, int) { return juce::String(v, 2) + " Hz"; })));
         layout.add(std::make_unique<juce::AudioParameterBool>(
             juce::ParameterID(prefix + "sync", 1), prefix + " Sync", false));
         layout.add(std::make_unique<juce::AudioParameterChoice>(
@@ -332,7 +438,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         layout.add(std::make_unique<juce::AudioParameterChoice>(
             juce::ParameterID(pre + "Type", 1), pre + " Type", FxChain::getTypeNames(), 0));
         layout.add(std::make_unique<juce::AudioParameterFloat>(
-            juce::ParameterID(pre + "Amount", 1), pre + " Amount", 0.0f, 1.0f, 1.0f));
+            juce::ParameterID(pre + "Amount", 1), pre + " Amount",
+            juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f,
+            Attr().withStringFromValueFunction(fmtPercent01)));
     }
 
     // Spectral Resonator
@@ -355,9 +463,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("resChord", 1), "Res Chord", SpectralResonator::getChordNames(), 2));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("resFreeMs", 1), "Res Time",
-        juce::NormalisableRange<float>(0.2f, 50.0f, 0.0f, 0.4f), 5.0f));
+        juce::NormalisableRange<float>(0.2f, 50.0f, 0.0f, 0.4f), 5.0f,
+        Attr().withStringFromValueFunction([](float v, int) { return juce::String(v, 1) + " ms"; })));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("resSpread", 1), "Res Spread", 0.0f, 1.0f, 0.4f));
+        juce::ParameterID("resSpread", 1), "Res Spread",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.4f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     // DECAY: 余韻(T60)の長さ[秒]。ピッチに依らず一定になるよう内部で帰還量へ変換する。
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("resDecay", 1), "Res Decay",
@@ -365,24 +476,37 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::AudioParameterFloatAttributes().withStringFromValueFunction(
             [](float v, int) { return juce::String(v, v < 1.0f ? 2 : 1) + " s"; })));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("resDamp", 1), "Res Damp", 0.0f, 1.0f, 0.35f));
+        juce::ParameterID("resDamp", 1), "Res Damp",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.35f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("resShimmer", 1), "Res Shimmer", 0.0f, 1.0f, 0.0f));
+        juce::ParameterID("resShimmer", 1), "Res Shimmer",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("resInharm", 1), "Res Inharm", 0.0f, 1.0f, 0.0f));
+        juce::ParameterID("resInharm", 1), "Res Inharm",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
 
     // Multiband Drive
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("drvShape", 1), "Drive Shape", MultibandDrive::getShapeNames(), 0));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("drvDrive", 1), "Drive Amount",
-        juce::NormalisableRange<float>(1.0f, 40.0f, 0.0f, 0.4f), 4.0f));
+        juce::NormalisableRange<float>(1.0f, 40.0f, 0.0f, 0.4f), 4.0f,
+        Attr().withStringFromValueFunction(fmtRatio)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("drvLow", 1), "Drive Low", 0.0f, 1.0f, 0.4f));
+        juce::ParameterID("drvLow", 1), "Drive Low",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.4f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("drvMid", 1), "Drive Mid", 0.0f, 1.0f, 1.0f));
+        juce::ParameterID("drvMid", 1), "Drive Mid",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("drvHigh", 1), "Drive High", 0.0f, 1.0f, 0.7f));
+        juce::ParameterID("drvHigh", 1), "Drive High",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.7f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
 
     // Formant Gate
     layout.add(std::make_unique<juce::AudioParameterChoice>(
@@ -390,52 +514,83 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("gatePattern", 1), "Gate Pattern", FormantGate::getPatternNames(), 1));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("gateDepth", 1), "Gate Depth", 0.0f, 1.0f, 1.0f));
+        juce::ParameterID("gateDepth", 1), "Gate Depth",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("gateVowel", 1), "Gate Vowel", 0.0f, 1.0f, 0.0f));
+        juce::ParameterID("gateVowel", 1), "Gate Vowel",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("gateSmooth", 1), "Gate Smooth", 0.0f, 1.0f, 0.2f));
+        juce::ParameterID("gateSmooth", 1), "Gate Smooth",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.2f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     // SHAPE: 0=ステップ保持 / 1=各ステップ頭で鋭く減衰する打点 (連打が作れる)
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("gateShape", 1), "Gate Shape", 0.0f, 1.0f, 0.0f));
+        juce::ParameterID("gateShape", 1), "Gate Shape",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
 
     // Chorus
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("choRate", 1), "Chorus Rate",
-        juce::NormalisableRange<float>(0.02f, 8.0f, 0.0f, 0.4f), 0.6f));
+        juce::NormalisableRange<float>(0.02f, 8.0f, 0.0f, 0.4f), 0.6f,
+        Attr().withStringFromValueFunction([](float v, int) { return juce::String(v, 2) + " Hz"; })));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("choDepth", 1), "Chorus Depth", 0.1f, 12.0f, 4.0f));
+        juce::ParameterID("choDepth", 1), "Chorus Depth",
+        juce::NormalisableRange<float>(0.1f, 12.0f), 4.0f,
+        Attr().withStringFromValueFunction([](float v, int) { return juce::String(v, 1) + " ms"; })));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("choWidth", 1), "Chorus Width", 0.0f, 1.0f, 0.7f));
+        juce::ParameterID("choWidth", 1), "Chorus Width",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.7f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
 
     // Reverb
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("revSize", 1), "Reverb Size", 0.0f, 1.0f, 0.5f));
+        juce::ParameterID("revSize", 1), "Reverb Size",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.5f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("revDamp", 1), "Reverb Damp", 0.0f, 0.95f, 0.4f));
+        juce::ParameterID("revDamp", 1), "Reverb Damp",
+        juce::NormalisableRange<float>(0.0f, 0.95f), 0.4f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("revPredelay", 1), "Reverb Predelay",
-        juce::NormalisableRange<float>(0.0f, 200.0f, 0.0f, 0.5f), 20.0f));
+        juce::NormalisableRange<float>(0.0f, 200.0f, 0.0f, 0.5f), 20.0f,
+        Attr().withStringFromValueFunction([](float v, int) { return juce::String(juce::roundToInt(v)) + " ms"; })));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("revWidth", 1), "Reverb Width", 0.0f, 1.0f, 0.6f));
+        juce::ParameterID("revWidth", 1), "Reverb Width",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.6f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("revLowCut", 1), "Reverb Low Cut",
-        juce::NormalisableRange<float>(20.0f, 1000.0f, 0.0f, 0.35f), 200.0f));
+        juce::NormalisableRange<float>(20.0f, 1000.0f, 0.0f, 0.35f), 200.0f,
+        Attr().withStringFromValueFunction(fmtHz)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("revMod", 1), "Reverb Mod", 0.0f, 1.0f, 0.3f));
+        juce::ParameterID("revMod", 1), "Reverb Mod",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.3f,
+        Attr().withStringFromValueFunction(fmtPercent01)));
 
     // ENV (2基)
     for (int i = 0; i < ModMatrix::kNumEnvs; ++i)
     {
         const juce::String prefix = "env" + juce::String(i);
         layout.add(std::make_unique<juce::AudioParameterFloat>(
-            juce::ParameterID(prefix + "attack", 1), prefix + " Attack", 0.001f, 5.0f, 0.1f));
+            juce::ParameterID(prefix + "attack", 1), prefix + " Attack",
+            juce::NormalisableRange<float>(0.001f, 5.0f, 0.0f, 0.35f), 0.1f,
+            Attr().withStringFromValueFunction(fmtTime)));
         layout.add(std::make_unique<juce::AudioParameterFloat>(
-            juce::ParameterID(prefix + "decay", 1), prefix + " Decay", 0.001f, 5.0f, 0.3f));
+            juce::ParameterID(prefix + "decay", 1), prefix + " Decay",
+            juce::NormalisableRange<float>(0.001f, 5.0f, 0.0f, 0.35f), 0.3f,
+            Attr().withStringFromValueFunction(fmtTime)));
         layout.add(std::make_unique<juce::AudioParameterFloat>(
-            juce::ParameterID(prefix + "sustain", 1), prefix + " Sustain", 0.0f, 1.0f, 1.0f));
+            juce::ParameterID(prefix + "sustain", 1), prefix + " Sustain",
+            juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f,
+            Attr().withStringFromValueFunction(fmtPercent01)));
         layout.add(std::make_unique<juce::AudioParameterFloat>(
-            juce::ParameterID(prefix + "release", 1), prefix + " Release", 0.001f, 5.0f, 0.5f));
+            juce::ParameterID(prefix + "release", 1), prefix + " Release",
+            juce::NormalisableRange<float>(0.001f, 5.0f, 0.0f, 0.35f), 0.5f,
+            Attr().withStringFromValueFunction(fmtTime)));
         layout.add(std::make_unique<juce::AudioParameterBool>(
             juce::ParameterID(prefix + "loop", 1), prefix + " Loop", false));
     }
@@ -948,6 +1103,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                                              bandCount, effectiveCharacter, resonance,
                                              mFmtShiftSm, mFmtStretchSm,
                                              stereoWidth, mBandGains, mBandLevelsForUi);
+            // ※ BANDS EQ (mPostEq) は Filterbank モードでは掛けない。
+            //   Filterbank は帯域ゲイン mBandGains を合成の中で直接適用しており
+            //   (FilterbankVocoder.cpp の gain)、そこで既に EQ が効いているため。
+            //   ここでさらに mPostEq を通すと EQ が二重に掛かる。
         };
         // character(0..1) → 帯域拡張γ(0.97=ぼやけ 〜 0.998=シャープ) へマッピング (M3)
         const float lpcGamma = 0.970f + 0.028f * juce::jlimit(0.0f, 1.0f, effectiveCharacter);

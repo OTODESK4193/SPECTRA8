@@ -23,7 +23,10 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
         k.setColour(juce::Slider::textBoxTextColourId, SpectraColors::textDim);
         k.setColour(juce::Slider::rotarySliderFillColourId, SpectraColors::accentVocoder);
         k.setColour(juce::Slider::rotarySliderOutlineColourId, SpectraColors::knobTrack);
-        k.setTextValueSuffix(suffix);
+        // 単位はパラメータ側 (createParameterLayout の withStringFromValueFunction) が
+        // 付けるので、ここでサフィックスを足すと "0 % %" のように二重になる。
+        // 引数 suffix はツールチップ生成の互換のため残してあるが未使用。
+        juce::ignoreUnused(suffix);
         k.setLookAndFeel(&mArcLookAndFeel);
         addAndMakeVisible(k);
 
@@ -60,8 +63,6 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
         "NOISE COLOR - centre frequency of the band-passed noise source. "
         "Low = breathy rumble, high = airy hiss and sibilance.", " Hz");
     // Hz系は小数を出すと "1000.00 Hz" が幅60pxに収まらず "1000..." と省略されるため整数表示
-    mKnobBasePitch.setNumDecimalPlacesToDisplay(0);
-    mKnobNoiseColor.setNumDecimalPlacesToDisplay(0);
     setupKnob(mKnobNoise, mLblNoise,
         "NOISE MIX - blends noise into the carrier for breath and consonants. "
         "In LPC mode it is bipolar: negative removes noise for a pure tone, "
@@ -229,26 +230,6 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
     mAttachmentVocoderMode      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "vocoderMode", mComboVocoderMode);
     mAttachmentVoicingMode      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "mode", mComboVoicingMode);
 
-    // ノブの数値表示フォーマット・桁数の最適化
-    mKnobCharacter.setNumDecimalPlacesToDisplay(2);
-    mKnobTracking.setNumDecimalPlacesToDisplay(0);
-    mKnobPitchQuantize.setNumDecimalPlacesToDisplay(0);
-    mKnobFmtShift.setNumDecimalPlacesToDisplay(1);
-    mKnobFmtStretch.setNumDecimalPlacesToDisplay(2);
-    mKnobLofi.setNumDecimalPlacesToDisplay(2);
-    mKnobBasePitch.setNumDecimalPlacesToDisplay(1);
-    mKnobNoiseColor.setNumDecimalPlacesToDisplay(0);
-    mKnobNoise.setNumDecimalPlacesToDisplay(0);
-    mKnobBands.setNumDecimalPlacesToDisplay(0);
-    mKnobResonance.setNumDecimalPlacesToDisplay(2);
-    mKnobWidth.setNumDecimalPlacesToDisplay(2);
-    mKnobAttack.setNumDecimalPlacesToDisplay(2);
-    mKnobDecay.setNumDecimalPlacesToDisplay(2);
-    mKnobSustain.setNumDecimalPlacesToDisplay(2);
-    mKnobRelease.setNumDecimalPlacesToDisplay(2);
-    mKnobMix.setNumDecimalPlacesToDisplay(0);
-    mKnobMasterPitch.setNumDecimalPlacesToDisplay(1);
-    mKnobOutLevel.setNumDecimalPlacesToDisplay(1);
     mAttachmentTrackResponse    = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "trackResponse", mComboTrackResponse);
     mAttachmentPitchQKey        = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "pitchQKey", mComboPitchQKey);
     mAttachmentPitchQScale      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "pitchQScale", mComboPitchQScale);

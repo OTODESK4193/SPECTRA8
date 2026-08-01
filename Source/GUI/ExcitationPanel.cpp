@@ -22,7 +22,10 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
         k.setColour(juce::Slider::textBoxTextColourId, SpectraColors::textDim);
         k.setColour(juce::Slider::rotarySliderFillColourId, SpectraColors::accentExcitation);
         k.setColour(juce::Slider::rotarySliderOutlineColourId, SpectraColors::knobTrack);
-        k.setTextValueSuffix(suffix);
+        // 単位はパラメータ側 (createParameterLayout の withStringFromValueFunction) が
+        // 付けるので、ここでサフィックスを足すと "0 % %" のように二重になる。
+        // 引数 suffix はツールチップ生成の互換のため残してあるが未使用。
+        juce::ignoreUnused(suffix);
         k.setLookAndFeel(&mArcLookAndFeel);
         addAndMakeVisible(k);
 
@@ -179,17 +182,6 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
 
     mAttachmentWaveform   = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "waveform", mComboWaveform);
 
-    // ノブの数値表示フォーマット・桁数の最適化
-    mKnobWtPos.setNumDecimalPlacesToDisplay(2);
-    mKnobPulseWidth.setNumDecimalPlacesToDisplay(0);
-    mKnobDetune.setNumDecimalPlacesToDisplay(0);
-    mKnobPorta.setNumDecimalPlacesToDisplay(2);
-    mKnobBendAmt.setNumDecimalPlacesToDisplay(2);
-    mKnobBendShift.setNumDecimalPlacesToDisplay(2);
-    mKnobSyncAmt.setNumDecimalPlacesToDisplay(2);
-    mKnobSyncShift.setNumDecimalPlacesToDisplay(2);
-    mKnobVocAmt.setNumDecimalPlacesToDisplay(2);
-    mKnobVocShift.setNumDecimalPlacesToDisplay(2);
     mAttachmentDetuneMode = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "detuneMode", mComboDetuneMode);
     mAttachmentDetuneSnap = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(apvts, "detuneSnap", mBtnDetuneSnap);
 

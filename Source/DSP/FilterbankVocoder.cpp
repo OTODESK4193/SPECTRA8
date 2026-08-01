@@ -12,6 +12,14 @@ FilterbankVocoder::FilterbankVocoder()
 void FilterbankVocoder::prepare(double sampleRate)
 {
     mSampleRate = sampleRate;
+    // 【修正H】キャリア帯域正規化の追従係数。
+    //  非対称にするのが要点。対称(30ms)だとキャリアの帯域レベルが急に上がったとき
+    //  正規化ゲインの下げが間に合わず盛大にオーバーシュートし、
+    //  実測でピークが 48band 1.80 / 8band 5.09 / RESO0.3 10.11 まで跳ねた。
+    //  アタックを速く(1ms)してゲインを即座に絞り、リリースを遅く(100ms)して
+    //  スペクトル正規化としての性格を保つと 0.35 / 0.33 / 0.93 まで収まる。
+    mCarAttCoef = 1.0f - std::exp(-1.0f / (0.001f * (float)kInternalSampleRate));
+    mCarRelCoef = 1.0f - std::exp(-1.0f / (0.100f * (float)kInternalSampleRate));
     // mCurBands = 0 のまま残し、最初の processSample / analyzeForMeter で
     // 「実際に要求されたバンド数」を即時構築させる。
     // ここで 48 を先に組んでしまうと、BANDS=24 のプリセットを読んだ瞬間に
@@ -91,6 +99,7 @@ void FilterbankVocoder::reset()
         mSynthSvfR[(size_t)i][1].reset();
 
         mEnvValues[(size_t)i] = 0.0f;
+        mCarEnv[(size_t)i] = 0.0f;
     }
 
     // BANDS フェードとEQゲイン平滑も初期状態へ
@@ -98,6 +107,7 @@ void FilterbankVocoder::reset()
     mFadeDir = 0;
     mFadeCounter = 0;
     mGainSmPrimed = false;
+    mCarBroad = 0.0f;
 }
 
 void FilterbankVocoder::processSample(float modulator, float carrierL, float carrierR,
@@ -154,6 +164,12 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
 
     // フォルマント・シフト倍率
     const float shiftFactor = std::pow(2.0f, formantShift / 12.0f);
+
+    // 【修正H】キャリア広帯域レベル (帯域正規化のフロア基準)
+    {
+        const float mag = 0.5f * (std::abs(carrierL) + std::abs(carrierR));
+        mCarBroad += (mag > mCarBroad ? mCarAttCoef : mCarRelCoef) * (mag - mCarBroad);
+    }
 
     float sumL = 0.0f;
     float sumR = 0.0f;
@@ -228,8 +244,21 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
         gs = mGainSmPrimed ? (gs + kGainSmCoef * (gainTarget - gs)) : gainTarget;
         const float gain = gs;
 
-        const float modulatedL = carrierOutL * mEnvValues[(size_t)i] * gain;
-        const float modulatedR = carrierOutR * mEnvValues[(size_t)i] * gain;
+        // 【修正H】キャリア帯域の正規化。
+        //  この帯域のキャリア振幅で割ることで「振幅1の帯域信号」にしてから
+        //  モジュレーターの包絡を掛ける。これでキャリア自身のスペクトル傾斜が
+        //  出力に残らなくなり、出力の帯域レベル = モジュレーターの帯域レベル になる。
+        {
+            const float cMag = 0.5f * (std::abs(carrierOutL) + std::abs(carrierOutR));
+            float& ce = mCarEnv[(size_t)i];
+            ce += (cMag > ce ? mCarAttCoef : mCarRelCoef) * (cMag - ce);
+        }
+        const float carFloor = juce::jmax(kCarFloorRel * mCarBroad, 1.0e-7f);
+        const float carNorm  = juce::jmin(kCarMaxBoost,
+                                          1.0f / juce::jmax(mCarEnv[(size_t)i], carFloor));
+
+        const float modulatedL = carrierOutL * carNorm * mEnvValues[(size_t)i] * gain;
+        const float modulatedR = carrierOutR * carNorm * mEnvValues[(size_t)i] * gain;
 
         // ステレオパンニング処理 (帯域交互パンニング)
         // 80Hz以下は定位保護のためセンターに固定、高域にいくほどパン幅を広げる
