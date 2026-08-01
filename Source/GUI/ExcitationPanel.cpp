@@ -11,8 +11,11 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
       apvts(proc.apvts),
       mBtnDetuneSnap("SNAP", SpectraColors::accentExcitation)
 {
-    auto setupKnob = [this](ValueKnob& k, juce::Label& l, const juce::String& suffix = "")
+    // tip = 下部ステータス行に出す英語の説明文
+    auto setupKnob = [this](ValueKnob& k, juce::Label& l, const juce::String& tip,
+                            const juce::String& suffix = "")
     {
+        k.setTooltip(tip);
         k.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
         k.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 15);
         k.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
@@ -29,16 +32,36 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
         addAndMakeVisible(l);
     };
 
-    setupKnob(mKnobWtPos, mLblWtPos);
-    setupKnob(mKnobPulseWidth, mLblPulseWidth, "%");
-    setupKnob(mKnobDetune, mLblDetune);   // 表示はパラメータ側の "N ct (P5)" 書式
-    setupKnob(mKnobPorta, mLblPorta, "s");
-    setupKnob(mKnobBendAmt, mLblBendAmt);
-    setupKnob(mKnobBendShift, mLblBendShift);
-    setupKnob(mKnobSyncAmt, mLblSyncAmt);
-    setupKnob(mKnobSyncShift, mLblSyncShift);
-    setupKnob(mKnobVocAmt, mLblVocAmt);
-    setupKnob(mKnobVocShift, mLblVocShift);
+    setupKnob(mKnobWtPos, mLblWtPos,
+        "WT POSITION - scans through the frames of the loaded wavetable. "
+        "Only active when the waveform is set to Wavetable.");
+    setupKnob(mKnobPulseWidth, mLblPulseWidth,
+        "PULSE WIDTH - duty cycle of the pulse wave. 50% is a hollow square; "
+        "moving away from centre thins the tone and adds nasal upper harmonics.", "%");
+    setupKnob(mKnobDetune, mLblDetune,
+        "DETUNE - spread between the three unison carrier voices, in cents. "
+        "Small values thicken the sound, large values give chorus and interval effects "
+        "(the interval name is shown next to the value).");
+    setupKnob(mKnobPorta, mLblPorta,
+        "PORTAMENTO - glide time between pitches. Higher values slur notes together.", "s");
+    setupKnob(mKnobBendAmt, mLblBendAmt,
+        "BEND - warps the oscillator phase, squeezing the waveform toward one side. "
+        "Brightens or hollows the carrier without changing its pitch. 0 = off.");
+    setupKnob(mKnobBendShift, mLblBendShift,
+        "BEND SYM - where along the cycle the bend is centred. Shifts which part of the "
+        "waveform gets stretched.");
+    setupKnob(mKnobSyncAmt, mLblSyncAmt,
+        "SYNC - hard-sync style phase repeat, 1x to 8x. Adds a bright metallic edge, "
+        "classic for aggressive vocoder leads. 0 = off.");
+    setupKnob(mKnobSyncShift, mLblSyncShift,
+        "SYNC PH - phase offset of the sync restart point. Changes the timbre of the "
+        "sync edge without changing the ratio.");
+    setupKnob(mKnobVocAmt, mLblVocAmt,
+        "VOCODE - resonant vowel filter applied to the carrier itself, so the carrier "
+        "already has a mouth shape before it reaches the vocoder. 0 = off.");
+    setupKnob(mKnobVocShift, mLblVocShift,
+        "VOWEL - morphs the carrier vowel. Positive sweeps A-I-U-E-O, negative sweeps "
+        "A-E-I-O-U, so both directions give a different vowel journey.");
     mKnobDetune.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 96, 15); // "1200 ct (P8)" 用
 
     // MORPHセクション見出し
@@ -47,8 +70,10 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
     mLblMorphHdr.setColour(juce::Label::textColourId, SpectraColors::accentExcitation.withAlpha(0.8f));
     addAndMakeVisible(mLblMorphHdr);
 
-    auto setupCombo = [this](juce::ComboBox& c, const juce::StringArray& items)
+    auto setupCombo = [this](juce::ComboBox& c, const juce::StringArray& items,
+                             const juce::String& tip)
     {
+        c.setTooltip(tip);
         c.setColour(juce::ComboBox::backgroundColourId, SpectraColors::knobTrack);
         c.setColour(juce::ComboBox::textColourId, SpectraColors::text);
         c.setColour(juce::ComboBox::outlineColourId, SpectraColors::panelLine);
@@ -59,10 +84,23 @@ ExcitationPanel::ExcitationPanel(SPECTRA8AudioProcessor& proc)
         addAndMakeVisible(c);
     };
 
-    setupCombo(mComboWaveform, { "Sawtooth", "Pulse", "Wavetable" });
-    setupCombo(mComboDetuneMode, { "Dtn: Classic", "Dtn: Linear", "Dtn: Exp", "Dtn: Drift", "Dtn: Chorus" });
+    setupCombo(mComboWaveform, { "Sawtooth", "Pulse", "Wavetable" },
+        "WAVEFORM - carrier source. Sawtooth is the classic full-spectrum vocoder carrier, "
+        "Pulse is thinner and more nasal, Wavetable lets you load your own single-cycle waves.");
+    setupCombo(mComboDetuneMode, { "Dtn: Classic", "Dtn: Linear", "Dtn: Exp", "Dtn: Drift", "Dtn: Chorus" },
+        "DETUNE MODE - how the unison voices are spread. Classic is the original fixed spread, "
+        "Linear spaces them evenly, Exp packs them near the centre for a supersaw feel, "
+        "Drift wanders like analogue oscillators, Chorus sweeps them with a slow LFO.");
 
     addAndMakeVisible(mWaveDisplay);
+    mBtnDetuneSnap.setTooltip("SNAP - constrains DETUNE to whole semitones, so the unison "
+                              "voices land on musical intervals instead of a smooth spread.");
+    mBtnBrowse.setTooltip("BROWSE - open the wavetable browser to pick a single-cycle wave file.");
+    mBtnAddDir.setTooltip("ADD DIR - register a folder of wavetables. The path is remembered "
+                          "across sessions and DAW restarts.");
+    mBtnFactory.setTooltip("FACTORY - switch back to the built-in wavetables.");
+    mBtnRandom.setTooltip("RANDOM - load a random wavetable from the current list.");
+    mBtnBrowserClose.setTooltip("CLOSE - close the wavetable browser.");
     addAndMakeVisible(mBtnDetuneSnap);
 
     // BROWSE / ADD DIR ボタン (Wavetable選択時のみ表示)

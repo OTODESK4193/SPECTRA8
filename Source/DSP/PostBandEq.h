@@ -70,8 +70,10 @@ public:
             mQ[(size_t)i] = std::sqrt(twoBW) / (twoBW - 1.0f);
         }
 
-        // レイアウト変更時はフィルタ状態を捨てる (残留状態によるノイズ防止)
-        reset();
+        // 【変更】ここで reset() すると、BANDS を1つ動かしただけで全biquadの状態が
+        // ゼロへ飛び、信号が不連続になって「プツッ」と鳴っていた。
+        // ピーキングEQの状態を引き継いだ方が連続性が保たれ、実害も無いため残す。
+        mGainPrimed = false;   // ゲイン平滑だけ新レイアウトで取り直す
     }
 
     void reset() noexcept
@@ -81,17 +83,25 @@ public:
     }
 
     // ブロックレートで係数を更新する。bandGains はリニア(1.0 = 0dB)。
+    //  smoothCoef: 帯域ゲインの1極平滑係数 (0〜1)。呼び出し側がブロック長から
+    //  coef = 1 - exp(-blockSec / 0.02) として渡す。1.0 で平滑なし(従来動作)。
+    //  EQ をドラッグ中はゲインがブロック毎に階段状に跳んでジッパーノイズになるため。
     void updateCoeffs(int bandCount,
-                      const std::array<std::atomic<float>, kMaxBands>& bandGains) noexcept
+                      const std::array<std::atomic<float>, kMaxBands>& bandGains,
+                      float smoothCoef = 1.0f) noexcept
     {
         mActive = std::min(kMaxBands, std::max(8, bandCount));
         rebuildLayout(mActive);   // バンド数が変わった時だけ再スパン(内部で早期return)
 
+        const float sc = std::min(1.0f, std::max(0.0f, smoothCoef));
         constexpr float pi = 3.14159265358979f;
         for (int i = 0; i < mActive; ++i)
         {
-            float gLin = bandGains[(size_t)i].load();
-            gLin = std::max(1.0e-4f, gLin);            // -80dB 下限
+            const float target = std::max(1.0e-4f, bandGains[(size_t)i].load());
+            float& g = mGainSm[(size_t)i];
+            g = mGainPrimed ? (g + sc * (target - g)) : target;
+
+            float gLin = std::max(1.0e-4f, g);         // -80dB 下限
             const float A = std::sqrt(gLin);           // ピーキング: A = 10^(dB/40)
 
             float w0 = 2.0f * pi * mF0[(size_t)i] / (float)mSr;
@@ -109,6 +119,7 @@ public:
             c.a1 = (-2.0f * cw)       * inv;
             c.a2 = (1.0f - alpha / A) * inv;
         }
+        mGainPrimed = true;
     }
 
     // 毎サンプル・ステレオ処理（LPC合成後に呼ぶ）
@@ -145,4 +156,8 @@ private:
     std::array<Coeff, kMaxBands> mC {};
     std::array<State, kMaxBands> mStL {};
     std::array<State, kMaxBands> mStR {};
+
+    // 帯域ゲインの平滑値 (ブロック毎に1極で追従)
+    std::array<float, kMaxBands> mGainSm {};
+    bool mGainPrimed = false;
 };

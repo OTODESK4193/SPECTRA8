@@ -12,8 +12,11 @@ FilterbankVocoder::FilterbankVocoder()
 void FilterbankVocoder::prepare(double sampleRate)
 {
     mSampleRate = sampleRate;
-    mCurBands = 0;              // 次のprocessで必ず再構築させる
-    rebuildLayout(kMaxBands);
+    // mCurBands = 0 のまま残し、最初の processSample / analyzeForMeter で
+    // 「実際に要求されたバンド数」を即時構築させる。
+    // ここで 48 を先に組んでしまうと、BANDS=24 のプリセットを読んだ瞬間に
+    // 48→24 のフェード切替が走って冒頭が 20ms 凹む。
+    mCurBands = 0;
     reset();
 }
 
@@ -57,6 +60,20 @@ void FilterbankVocoder::rebuildLayout(int bands) noexcept
         mBandQ[(size_t)i] = juce::jlimit(1.5f, 24.0f, mBandF0[(size_t)i] / juce::jmax(1.0f, bw));
     }
 
+    // バンド毎の検波リリース下限。
+    //  低域バンドほど「ゆっくり離す」ようにして、声の基音周期に合わせて
+    //  エンベロープが上下する = 振幅変調(ビビり音)になるのを防ぐ。
+    //   f0=100Hz → 約42ms / 500Hz → 約14ms / 3kHz → 約2.4ms / 7kHz → 約1.0ms
+    //  (下限なので、CHARACTER をさらに下げればもっと長くできる)
+    for (int i = 0; i < bands; ++i)
+    {
+        const float fRef = juce::jmax(60.0f, 0.35f * mBandF0[(size_t)i]);
+        const float relFloorSec = 2.5f / fRef;   // 想定周期の2.5倍
+        mRelCoefFloor[(size_t)i] =
+            1.0f - std::exp(-1.0f / (relFloorSec * (float)kInternalSampleRate));
+    }
+    mCharCached = -1.0f;   // CHARACTER 依存係数も次回強制再計算
+
     // レイアウトが変わったのでフィルタ状態をリセット (残留状態による不整合防止)
     reset();
 }
@@ -75,6 +92,12 @@ void FilterbankVocoder::reset()
 
         mEnvValues[(size_t)i] = 0.0f;
     }
+
+    // BANDS フェードとEQゲイン平滑も初期状態へ
+    mPendingBands = -1;
+    mFadeDir = 0;
+    mFadeCounter = 0;
+    mGainSmPrimed = false;
 }
 
 void FilterbankVocoder::processSample(float modulator, float carrierL, float carrierR,
@@ -85,8 +108,49 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
                                       const std::array<std::atomic<float>, kMaxBands>& bandGains,
                                       std::array<std::atomic<float>, kMaxBands>& bandLevelsForUi) noexcept
 {
-    const int activeBands = juce::jlimit(8, kMaxBands, bandCount);
-    rebuildLayout(activeBands);   // バンド数変更時のみ全域を再スパン
+    // ---- BANDS 切替のフェード処理 ----
+    //  レイアウト再構築はフィルタ状態のリセットを伴うので、必ず出力が
+    //  無音になっている瞬間に行う (フェードアウト → 再構築 → フェードイン)。
+    const int wantBands = juce::jlimit(8, kMaxBands, bandCount);
+    float fadeGain = 1.0f;
+
+    if (mCurBands == 0)
+    {
+        rebuildLayout(wantBands);       // 初回は即時構築
+    }
+    else if (mFadeDir == 0 && wantBands != mCurBands)
+    {
+        mPendingBands = wantBands;      // 切替を予約してフェードアウト開始
+        mFadeDir = -1;
+        mFadeCounter = kBandFadeLen;
+    }
+
+    if (mFadeDir == -1)
+    {
+        fadeGain = (float)mFadeCounter / (float)kBandFadeLen;
+        if (--mFadeCounter <= 0)
+        {
+            rebuildLayout(juce::jlimit(8, kMaxBands, mPendingBands));
+            mPendingBands = -1;
+            mFadeDir = 1;
+            mFadeCounter = 0;
+            fadeGain = 0.0f;
+        }
+    }
+    else if (mFadeDir == 1)
+    {
+        fadeGain = (float)mFadeCounter / (float)kBandFadeLen;
+        if (++mFadeCounter >= kBandFadeLen)
+        {
+            mFadeDir = 0;
+            mFadeCounter = 0;
+            fadeGain = 1.0f;
+        }
+    }
+
+    // フェード中は「今のレイアウト」で処理を続ける (再構築は無音の瞬間のみ)
+    const int activeBands = juce::jmax(8, mCurBands);
+    updateDetectorCoeffs(character);
 
     // フォルマント・シフト倍率
     const float shiftFactor = std::pow(2.0f, formantShift / 12.0f);
@@ -156,8 +220,14 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
 
         const float carrierOutR = y_bp_R2 * invQ2; // 中心利得0dBに正規化
 
-        // 変調 (EQゲイン適用)
-        const float gain = bandGains[(size_t)i].load();
+        // 変調 (EQゲイン適用)。
+        //  BANDS EQ のゲインは atomic から毎サンプル生読みしていたため、
+        //  EQ をドラッグ中はジッパーノイズになっていた。τ≈10ms で平滑する。
+        const float gainTarget = bandGains[(size_t)i].load();
+        float& gs = mGainSm[(size_t)i];
+        gs = mGainSmPrimed ? (gs + kGainSmCoef * (gainTarget - gs)) : gainTarget;
+        const float gain = gs;
+
         const float modulatedL = carrierOutL * mEnvValues[(size_t)i] * gain;
         const float modulatedR = carrierOutR * mEnvValues[(size_t)i] * gain;
 
@@ -179,12 +249,15 @@ void FilterbankVocoder::processSample(float modulator, float carrierL, float car
         sumR += modulatedR * panR;
     }
 
-    // 出力メイクアップ。分析・合成の中心利得0dB正規化後に、
-    // 旧実装と同一の最終音量へ揃える較正値(§音量ユニティ化)。
-    // バンド数補償: バンドが少ないほど隣接オーバーラップの加算利得が減るため、
-    // sqrt(48/bands) で概ね一定の出力レベルに揃える (48バンド時=1.0で従来同一)。
-    const float bandComp = std::sqrt((float)kMaxBands / (float)activeBands);
-    const float mk = kBpfMakeup * bandComp;
+    // 出力メイクアップ。
+    //  旧実装には bandComp = sqrt(48/bands) というバンド数補償が入っていたが、
+    //  数値シミュレーション(Docs/sim/fb3.py)で実測すると、素の合成レベルは
+    //  バンド数を変えても ±2dB 以内でほぼ一定だった。
+    //  つまり補償は不要で、8バンド時に +7.8dB を根拠なく足していただけであり、
+    //  BANDS を下げると出力が +16dBFS まで暴走する原因になっていた。補償は撤廃する。
+    const float mk = kBpfMakeup * fadeGain;   // fadeGain: BANDS 切替時のみ 1.0 未満
     outL = sumL * mk;
     outR = sumR * mk;
+
+    mGainSmPrimed = true;   // 次サンプルからEQゲイン平滑を有効化
 }

@@ -75,6 +75,9 @@ ModPanel::ModPanel(juce::AudioProcessorValueTreeState& state)
     }
     mLfoTabBtn.onClick = [this] { setSourceTab(0); };
     mEnvTabBtn.onClick = [this] { setSourceTab(1); };
+    mLfoTabBtn.setTooltip("LFO - show the three free-running or tempo-synced oscillators.");
+    mEnvTabBtn.setTooltip("ENV - show the two envelopes. They are triggered by MIDI notes "
+                          "and can be set to loop.");
 
     // --- LFO ×3 ---
     for (int i = 0; i < ModMatrix::kNumLfos; ++i)
@@ -90,6 +93,16 @@ ModPanel::ModPanel(juce::AudioProcessorValueTreeState& state)
         setupCombo(L.syncRateBox, ModMatrix::getSyncRateNames(), prefix + "rateSync");
         setupKnob(L.rateKnob, prefix + "rate");
         setupToggle(L.syncBtn, "SYNC", SpectraColors::accentMod, prefix + "sync");
+
+        const juce::String n = juce::String(i + 1);
+        L.waveBox.setTooltip("LFO " + n + " WAVE - Sine and Triangle are smooth, Saw and Square "
+                             "step abruptly, S&H jumps to a new random value each cycle, "
+                             "Chaos layers two out-of-tune sines for a drifting, never-repeating shape.");
+        L.rateKnob.setTooltip("LFO " + n + " RATE - free-running speed in Hz. "
+                              "Ignored while SYNC is lit.");
+        L.syncRateBox.setTooltip("LFO " + n + " SYNC RATE - note division locked to the host tempo. "
+                                 "Only used while SYNC is lit.");
+        L.syncBtn->setTooltip("SYNC - lock LFO " + n + " to the host tempo instead of a free Hz rate.");
     }
 
     // --- ENV ×2 ---
@@ -108,6 +121,15 @@ ModPanel::ModPanel(juce::AudioProcessorValueTreeState& state)
         setupKnob(E.s, prefix + "sustain");
         setupKnob(E.r, prefix + "release");
         setupToggle(E.loopBtn, "LOOP", SpectraColors::accentMod, prefix + "loop");
+
+        const juce::String n = juce::String(i + 1);
+        E.a.setTooltip("ENV " + n + " ATTACK - time to rise to full after a note is pressed.");
+        E.d.setTooltip("ENV " + n + " DECAY - time to fall from full down to the sustain level. "
+                       "With LOOP on this is the fall time of the repeating cycle.");
+        E.s.setTooltip("ENV " + n + " SUSTAIN - level held while a key stays pressed.");
+        E.r.setTooltip("ENV " + n + " RELEASE - time to fall back to zero after the key is let go.");
+        E.loopBtn->setTooltip("LOOP - ENV " + n + " repeats attack and decay continuously, "
+                              "turning it into a tempo-free extra LFO with its own shape.");
     }
 
     // --- スロット ×6 ---
@@ -125,6 +147,16 @@ ModPanel::ModPanel(juce::AudioProcessorValueTreeState& state)
         setupCombo(S.srcBox, ModMatrix::getSourceNames(), prefix + "src");
         setupCombo(S.dstBox, ModMatrix::getDestNames(), prefix + "dst");
         setupToggle(S.uniBtn, "UNI", SpectraColors::accentMod, prefix + "uni");
+
+        const juce::String n = juce::String(i + 1);
+        S.srcBox.setTooltip("SLOT " + n + " SOURCE - what does the modulating. LFO and ENV come "
+                            "from this tab; Velocity, Note, Mod Wheel and Random come from MIDI.");
+        S.dstBox.setTooltip("SLOT " + n + " DESTINATION - which knob gets modulated. The affected "
+                            "range is drawn as a pink band around that knob.");
+        S.uniBtn->setTooltip("UNI - unipolar. The source only pushes the knob in one direction "
+                             "(0 to +1) instead of swinging both ways (-1 to +1).");
+        S.amtKnob.setTooltip("SLOT " + n + " AMOUNT - depth and direction of the modulation. "
+                             "Negative values invert the source.");
 
         // AMTは横スライダー (行が細いのでロータリーだと潰れる)
         S.amtKnob.setSliderStyle(juce::Slider::LinearHorizontal);

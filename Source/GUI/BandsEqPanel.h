@@ -11,7 +11,10 @@
 
 class AnalyzerDSP;
 
-class BandsEqPanel : public juce::Component
+// SettableTooltipClient を継承しておくと、下部ステータス行のヘルプ表示
+// (PluginEditor::timerCallback) がこのパネルの説明文を拾える。
+class BandsEqPanel : public juce::Component,
+                     public juce::SettableTooltipClient
 {
 public:
     static constexpr int kMaxBands = 48;

@@ -820,6 +820,14 @@ public:
         mGate.prepare(sr);
         mChorus.prepare(sr);
         mReverb.prepare(sr);
+
+        // Amount / Type 切替の平滑係数。
+        //  Amount はブロック毎の階段だとジッパーノイズになるので τ=15ms、
+        //  Type 切替は一度 Amount を 0 まで落としてから差し替えるので τ=8ms。
+        const double s = (sr > 1000.0) ? sr : 48000.0;
+        mAmtCoef  = (float)(1.0 - std::exp(-1.0 / (0.015 * s)));
+        mSwapCoef = (float)(1.0 - std::exp(-1.0 / (0.008 * s)));
+        reset();
     }
 
     void reset()
@@ -829,36 +837,111 @@ public:
         mGate.reset();
         mChorus.reset();
         mReverb.reset();
+        for (auto& s : mSlotRt)
+            s = {};
     }
 
-    // ブロック先頭で1回だけ呼ぶ
-    void syncParameters(const Params& p) noexcept
+    // ブロック先頭で1回だけ呼ぶ。
+    //  smoothCoef: 連続値パラメータの1極平滑係数。呼び出し側がブロック長から
+    //  coef = 1 - exp(-blockSec/0.03) として渡す。1.0 で平滑なし。
+    //  DECAY や SIZE のような連続パラメータはブロック毎の階段だと段差が聞こえるため、
+    //  ここでいったん均してから各FXへ渡す (バッファ1024smpなら21msの段差が消える)。
+    void syncParameters(const Params& p, float smoothCoef = 1.0f) noexcept
     {
-        mParams = p;
-        mResonator.setParams(p.resMode, p.resRootHz, p.resChord, p.resFreeMs,
-                             p.resSpread, p.resDecay, p.resDamp,
-                             p.resShimmer, p.resInharm,
-                             p.midiHz.data(), p.numMidiHz);
-        mDrive.setParams(p.drvShape, p.drvDrive, p.drvLow, p.drvMid, p.drvHigh);
-        mGate.setParams(p.gateRate, p.gatePattern, p.gateDepth, p.gateVowel, p.gateSmooth,
-                        p.gateShape, p.bpm);
+        const float c = juce::jlimit(0.0f, 1.0f, smoothCoef);
+        auto sm = [c](float& cur, float tgt) { cur += c * (tgt - cur); };
+
+        if (!mParamsPrimed)
+        {
+            mParams = p;
+            mParamsPrimed = true;
+        }
+        else
+        {
+            // 整数・離散値はそのまま反映 (平滑すると中間値が生まれて破綻する)
+            mParams.slot     = p.slot;
+            mParams.resMode  = p.resMode;
+            mParams.resChord = p.resChord;
+            mParams.drvShape = p.drvShape;
+            mParams.gateRate = p.gateRate;
+            mParams.gatePattern = p.gatePattern;
+            mParams.midiHz   = p.midiHz;
+            mParams.numMidiHz = p.numMidiHz;
+            mParams.bpm      = p.bpm;
+
+            // 連続値は1極で追従させる
+            sm(mParams.resShimmer, p.resShimmer);  sm(mParams.resInharm, p.resInharm);
+            sm(mParams.resRootHz,  p.resRootHz);   sm(mParams.resFreeMs, p.resFreeMs);
+            sm(mParams.resSpread,  p.resSpread);   sm(mParams.resDecay,  p.resDecay);
+            sm(mParams.resDamp,    p.resDamp);
+            sm(mParams.drvDrive,   p.drvDrive);    sm(mParams.drvLow,    p.drvLow);
+            sm(mParams.drvMid,     p.drvMid);      sm(mParams.drvHigh,   p.drvHigh);
+            sm(mParams.gateDepth,  p.gateDepth);   sm(mParams.gateVowel, p.gateVowel);
+            sm(mParams.gateSmooth, p.gateSmooth);  sm(mParams.gateShape, p.gateShape);
+            sm(mParams.choRate,    p.choRate);     sm(mParams.choDepth,  p.choDepth);
+            sm(mParams.choWidth,   p.choWidth);
+            sm(mParams.revSize,    p.revSize);     sm(mParams.revDamp,   p.revDamp);
+            sm(mParams.revPredelay,p.revPredelay); sm(mParams.revWidth,  p.revWidth);
+            sm(mParams.revLowCut,  p.revLowCut);   sm(mParams.revMod,    p.revMod);
+        }
+
+        // 以降は平滑済みの mParams を各FXへ渡す (p ではないことに注意)
+        const Params& q = mParams;
+        mResonator.setParams(q.resMode, q.resRootHz, q.resChord, q.resFreeMs,
+                             q.resSpread, q.resDecay, q.resDamp,
+                             q.resShimmer, q.resInharm,
+                             q.midiHz.data(), q.numMidiHz);
+        mDrive.setParams(q.drvShape, q.drvDrive, q.drvLow, q.drvMid, q.drvHigh);
+        mGate.setParams(q.gateRate, q.gatePattern, q.gateDepth, q.gateVowel, q.gateSmooth,
+                        q.gateShape, q.bpm);
         // Mixは各slotのAmountで管理するのでFX内部のMixは常に1.0
-        mChorus.setParams(p.choRate, p.choDepth, p.choWidth, 1.0f);
-        mReverb.setParams(p.revSize, p.revDamp, 1.0f,
-                          p.revPredelay, p.revWidth, p.revLowCut, p.revMod);
+        mChorus.setParams(q.choRate, q.choDepth, q.choWidth, 1.0f);
+        mReverb.setParams(q.revSize, q.revDamp, 1.0f,
+                          q.revPredelay, q.revWidth, q.revLowCut, q.revMod);
     }
 
     // スロット順に直列適用。各スロットのAmountがそのFXのDry/Wet。
+    //
+    //  【改修 2026-08-01】
+    //   1. Amount=0 でも FX 本体は動かし続ける (出力ミックスだけ 0 にする)。
+    //      旧実装は丸ごと skip していたため、リバーブやレゾネーターの状態が凍結し、
+    //      Amount を戻した瞬間に古い残響が復活してポップしていた。
+    //   2. Amount をサンプル単位で平滑 (τ=15ms)。ブロック毎の階段を無くす。
+    //   3. Type を変えるときは、いったん Amount を 0 まで落としてから差し替える
+    //      (τ=8ms)。旧実装は瞬時に切り替わり必ずプツッと鳴っていた。
     void processSample(float& l, float& r) noexcept
     {
         for (int s = 0; s < kNumSlots; ++s)
         {
             const auto& sp = mParams.slot[(size_t)s];
-            if (sp.type == None || sp.amount <= 0.0001f)
+            auto& rt = mSlotRt[(size_t)s];
+
+            // --- Type 切替: 一度ミックスを 0 へ落としてから差し替える ---
+            if (sp.type != rt.curType)
+            {
+                rt.swapping = true;
+                rt.mix += mSwapCoef * (0.0f - rt.mix);
+                if (rt.mix < 0.001f)
+                {
+                    rt.mix = 0.0f;
+                    rt.curType = sp.type;
+                    rt.swapping = false;
+                    resetSlotEffect(sp.type);   // 新しいFXは綺麗な状態から始める
+                }
+            }
+            else if (!rt.swapping)
+            {
+                const float target = (rt.curType == None)
+                                       ? 0.0f : juce::jlimit(0.0f, 1.0f, sp.amount);
+                rt.mix += mAmtCoef * (target - rt.mix);
+            }
+
+            if (rt.curType == None)
                 continue;
 
+            // Amount=0 でも本体は常に走らせる (残響の尾を保つため)
             float wl = l, wr = r;
-            switch (sp.type)
+            switch (rt.curType)
             {
             case Resonator: mResonator.process(wl, wr); break;
             case Drive:     mDrive.process(wl, wr);     break;
@@ -868,22 +951,53 @@ public:
             default: continue;
             }
 
-            const float a = juce::jlimit(0.0f, 1.0f, sp.amount);
-            l = l * (1.0f - a) + wl * a;
-            r = r * (1.0f - a) + wr * a;
+            const float a = rt.mix;
+            if (a > 0.0f)
+            {
+                l = l * (1.0f - a) + wl * a;
+                r = r * (1.0f - a) + wr * a;
+            }
         }
     }
 
-    // GUI/デバッグ用: 現在どれかのスロットが有効か
+    // 現在どれかのスロットが処理を必要としているか。
+    //  Amount=0 でも状態を進め続けたいので、Type が入っていれば true を返す。
     bool isActive() const noexcept
     {
-        for (const auto& s : mParams.slot)
-            if (s.type != None && s.amount > 0.0001f)
+        for (int s = 0; s < kNumSlots; ++s)
+            if (mParams.slot[(size_t)s].type != None || mSlotRt[(size_t)s].curType != None
+                || mSlotRt[(size_t)s].mix > 0.0f)
                 return true;
         return false;
     }
 
 private:
+    // スロット差し替え時に、そのFXの内部状態だけを初期化する
+    void resetSlotEffect(int type) noexcept
+    {
+        switch (type)
+        {
+        case Resonator: mResonator.reset(); break;
+        case Drive:     mDrive.reset();     break;
+        case Gate:      mGate.reset();      break;
+        case Chorus:    mChorus.reset();    break;
+        case Reverb:    mReverb.reset();    break;
+        default: break;
+        }
+    }
+
+    // スロット毎のランタイム状態 (平滑済みミックスと現在有効なFX種別)
+    struct SlotRt
+    {
+        int   curType  = None;
+        float mix      = 0.0f;
+        bool  swapping = false;
+    };
+    std::array<SlotRt, kNumSlots> mSlotRt {};
+    float mAmtCoef  = 0.002f;
+    float mSwapCoef = 0.004f;
+    bool  mParamsPrimed = false;   // 初回は平滑せず即値で取り込む
+
     Params mParams;
     SpectralResonator mResonator;
     MultibandDrive mDrive;

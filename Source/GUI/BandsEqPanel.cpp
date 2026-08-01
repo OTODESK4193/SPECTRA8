@@ -39,6 +39,15 @@ BandsEqPanel::BandsEqPanel(juce::AudioProcessorValueTreeState& state,
         showResetConfirm(false);
     };
     mBtnResetNo.onClick = [this] { showResetConfirm(false); };
+
+    mBtnResetYes.setTooltip("RESET ALL - set every band back to 0 dB.");
+    mBtnResetNo.setTooltip("CANCEL - keep the current band gains.");
+
+    // グラフ本体の説明 (パネル全体に付けておけば、バー上のどこでも表示される)
+    setTooltip("BANDS EQ - drag a bar to boost or cut that vocoder band. The moving bars show "
+               "the live level of each band and the curve behind them is the spectrum of the "
+               "plugin output. The number of bars follows the BANDS knob. "
+               "Double-click a bar to return it to 0 dB.");
 }
 
 BandsEqPanel::~BandsEqPanel()

@@ -33,9 +33,18 @@ public:
     // 合成後に 1/(1-αz^-1) で戻す。こもりが減り子音の明瞭度が向上する。
     static constexpr float kPreemph = 0.9375f;
 
-    // 励起メイクアップ。旧値2.0(+6dB)は実測+6.76dB(Ableton)で、ユニティ(0dB)へ揃える較正。
-    //  2.0 × 10^(-6.76/20) ≒ 0.918 とし出力を約0dBへ。最終段は既存BrickLimiterが保護。
-    static constexpr float kMakeupGain = 0.918f;
+    // 励起メイクアップ。
+    //  旧値 0.918 は G = sqrt(E_P) 方式に対する較正値だった。
+    //  励起ゲインを「レベル整合方式」に変更した結果、G が約 +11.0dB 大きくなるため
+    //  (Docs/sim/lpc2.py で3種の入力すべて -11.0dB 前後と確認)、
+    //  0.918 × 10^(-11.0/20) ≒ 0.259 として従来と同じ音量に揃える。
+    static constexpr float kMakeupGain = 0.259f;
+
+    // 出力DCブロッカーのカットオフ。
+    //  デエンファシス 1/(1-0.9375z⁻¹) は DC 利得が 16倍(+24dB)あるため、
+    //  キャリア(特にカスタムWavetable)に僅かなDCオフセットがあると
+    //  それが16倍されて低域が膨らみ、ラティスを飽和させることがある。
+    static constexpr float kDcBlockHz = 20.0f;
 
     void prepare(double hostSampleRate);
     void reset();
@@ -121,6 +130,12 @@ private:
 
     float mDeempL = 0.0f;    // デエンファシス状態 (L)
     float mDeempR = 0.0f;    // デエンファシス状態 (R)
+
+    // DCブロッカー (1次ハイパス) の状態。y[n] = x[n] - x[n-1] + R·y[n-1]
+    float mDcX1L = 0.0f, mDcY1L = 0.0f;
+    float mDcX1R = 0.0f, mDcY1R = 0.0f;
+    // R = exp(-2π·fc/fs)。16kHz・20Hz なので約 0.99215
+    static constexpr float kDcR = 0.992156f;
 
     float mExcNorm = 1.0f;   // 1/sqrt(Σw²)（窓タイプ依存）
     float mGAttCoef = 0.0f;  // att 5ms @ コントロールレート

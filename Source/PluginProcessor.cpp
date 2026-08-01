@@ -135,6 +135,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("resonance", 1), "Resonance",
         juce::NormalisableRange<float>(0.3f, 3.0f, 0.0f, 0.5f), 1.0f));
 
+    // Filterbank の帯域交互パンニング幅。
+    //  旧実装は 1.0 固定で、高域は偶数バンドが完全L・奇数バンドが完全Rへ振り切っており、
+    //  L/R がほぼ無相関(実測 +0.017)になってモノ互換性が失われていた
+    //  (モノ化するとピークが -4dB 落ち音色も変わる)。既定を 0.6 にしてノブ化する。
+    //  0.0 = 完全センター(モノ) / 1.0 = 旧来の振り切り。
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("stereoWidth", 1), "Stereo Width", 0.0f, 1.0f, 0.6f));
+
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("tracking", 1), "Tracking", 0.0f, 100.0f, 0.0f)); // レポート留意点5
 
@@ -435,15 +443,114 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     return layout;
 }
 
+// ---- パラメータポインタのキャッシュ ------------------------------------
+//  ここで一度だけ juce::String を組み立てて生ポインタを引いておく。
+//  以降オーディオスレッドは配列参照だけで済み、文字列確保もハッシュ検索も起きない。
+void SPECTRA8AudioProcessor::cacheParamPointers()
+{
+    for (int d = 0; d < (int)ModMatrix::NumDsts; ++d)
+    {
+        const char* id = ModMatrix::destParamId(d);
+        mDestPtrs[(size_t)d] = (id != nullptr && id[0] != '\0')
+                                 ? apvts.getRawParameterValue(id) : nullptr;
+    }
+
+    for (int i = 0; i < ModMatrix::kNumSlots; ++i)
+    {
+        const juce::String p = "slot" + juce::String(i);
+        auto& s = mSlotPtrs[(size_t)i];
+        s.src = apvts.getRawParameterValue(p + "src");
+        s.dst = apvts.getRawParameterValue(p + "dst");
+        s.amt = apvts.getRawParameterValue(p + "amt");
+        s.uni = apvts.getRawParameterValue(p + "uni");
+    }
+
+    for (int i = 0; i < ModMatrix::kNumLfos; ++i)
+    {
+        const juce::String p = "lfo" + juce::String(i);
+        auto& l = mLfoPtrs[(size_t)i];
+        l.rate     = apvts.getRawParameterValue(p + "rate");
+        l.sync     = apvts.getRawParameterValue(p + "sync");
+        l.rateSync = apvts.getRawParameterValue(p + "rateSync");
+        l.wave     = apvts.getRawParameterValue(p + "wave");
+    }
+
+    for (int i = 0; i < ModMatrix::kNumEnvs; ++i)
+    {
+        const juce::String p = "env" + juce::String(i);
+        auto& e = mEnvPtrs[(size_t)i];
+        e.attack  = apvts.getRawParameterValue(p + "attack");
+        e.decay   = apvts.getRawParameterValue(p + "decay");
+        e.sustain = apvts.getRawParameterValue(p + "sustain");
+        e.release = apvts.getRawParameterValue(p + "release");
+        e.loop    = apvts.getRawParameterValue(p + "loop");
+    }
+
+    for (int i = 0; i < FxChain::kNumSlots; ++i)
+    {
+        const juce::String p = "fx" + juce::String(i + 1);
+        auto& f = mFxPtrs[(size_t)i];
+        f.type   = apvts.getRawParameterValue(p + "Type");
+        f.amount = apvts.getRawParameterValue(p + "Amount");
+    }
+}
+
+// APVTS の現在値を ModMatrix::Params へ充填する (RTセーフ: 配列参照のみ)
+void SPECTRA8AudioProcessor::loadModParams(double bpm) noexcept
+{
+    mModParams.bpm = bpm;
+
+    for (int i = 0; i < ModMatrix::kNumSlots; ++i)
+    {
+        const auto& s = mSlotPtrs[(size_t)i];
+        auto& d = mModParams.slot[(size_t)i];
+        if (s.src == nullptr) continue;
+        d.src = (int)s.src->load();
+        d.dst = (int)s.dst->load();
+        d.amt = s.amt->load();
+        d.uni = (s.uni->load() >= 0.5f);
+    }
+
+    for (int i = 0; i < ModMatrix::kNumLfos; ++i)
+    {
+        const auto& l = mLfoPtrs[(size_t)i];
+        auto& d = mModParams.lfo[(size_t)i];
+        if (l.rate == nullptr) continue;
+        d.rateHz   = l.rate->load();
+        d.sync     = (l.sync->load() >= 0.5f);
+        d.rateSync = (int)l.rateSync->load();
+        d.wave     = (int)l.wave->load();
+    }
+
+    for (int i = 0; i < ModMatrix::kNumEnvs; ++i)
+    {
+        const auto& e = mEnvPtrs[(size_t)i];
+        auto& d = mModParams.env[(size_t)i];
+        if (e.attack == nullptr) continue;
+        d.attack  = e.attack->load();
+        d.decay   = e.decay->load();
+        d.sustain = e.sustain->load();
+        d.release = e.release->load();
+        d.loop    = (e.loop->load() >= 0.5f);
+    }
+}
+
 void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     mStoredSampleRate = sampleRate;
+
+    cacheParamPointers();
 
     mFilterbankVocoder.prepare(sampleRate);
     mLpcVocoder.prepare(sampleRate);
     mPostEq.prepare(LpcVocoder::kInternalSampleRate);   // ポストEQは16kHz内部レートで動作
     mExcitationEngine.prepare(sampleRate);
-    mModMatrix.prepare(sampleRate);
+    // 重要: ModMatrix::processBlock(32, ...) は 16kHz ループの中から呼ばれる
+    // (= 制御ティックは 16000/32 = 500回/秒)。ここにホストレートを渡すと
+    // LFO の位相進みが freq*32/hostSR となり、実レートが 16000/hostSR 倍
+    // (48kHz で 1/3) に落ちる。テンポ同期も ENV の A/D/R も同じ倍率でズレるため、
+    // 必ず内部レート(16kHz)を渡すこと。
+    mModMatrix.prepare(LpcVocoder::kInternalSampleRate);
     // 重要: PitchTracker へは 16kHz ダウンサンプル後のサンプル (processBlock の
     // 16kループ内 inSample) を供給しているため、prepare も 16kHz を渡す。
     // ホストレートを渡すと内部でさらに 1/3 デシメーションされ、検出ピッチが
@@ -473,6 +580,8 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
         std::pow(10.0f, apvts.getRawParameterValue("outputLevel")->load() / 20.0f));
     mFmtShiftSm = apvts.getRawParameterValue("formantShift")->load();
     mFmtStretchSm = apvts.getRawParameterValue("formantStretch")->load();
+    mParamSmPrimed = false;   // 全宛先スムーザを次サンプルで即値初期化させる
+    mIdleModAccum = 0.0;
     {
         const double lpcLatencySec = (double)LpcVocoder::kLatency16k / LpcVocoder::kInternalSampleRate;
         const int vm = (int)apvts.getRawParameterValue("vocoderMode")->load();
@@ -559,9 +668,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     float coeff = (inputAvgAbs > mInputEnvelope.load()) ? 0.05f : 0.005f;
     mInputEnvelope.store(mInputEnvelope.load() * (1.0f - coeff) + inputAvgAbs * coeff);
 
+    // CHARACTER は 16kHz ループ内で毎サンプル smoothedParam() から取り直す。
+    // (FMT SHIFT / STRETCH も同様に mFmtShiftSm / mFmtStretchSm へ直接入る)
     float effectiveCharacter = apvts.getRawParameterValue("character")->load();
-    float effectiveFormantShift = apvts.getRawParameterValue("formantShift")->load();
-    float effectiveFormantStretch = apvts.getRawParameterValue("formantStretch")->load();
 
     // 3. ダウンサンプリング処理 (16kHzへ)
     int num16kSamples = 0;
@@ -643,7 +752,14 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     }
 
     // ポストEQ(LPC出力用)の係数をブロック毎に更新。BANDS EQの帯域ゲインを反映する。
-    mPostEq.updateCoeffs((int)apvts.getRawParameterValue("bandCount")->load(), mBandGains);
+    //  帯域ゲインはブロック毎に階段状に変わるため、τ=20ms の1極平滑を掛けて
+    //  EQドラッグ中のジッパーノイズを防ぐ。係数はブロック長から算出する。
+    {
+        const double blockSec = (double)numSamples / juce::jmax(1.0, mStoredSampleRate);
+        const float eqSmCoef = (float)(1.0 - std::exp(-blockSec / 0.020));
+        mPostEq.updateCoeffs((int)apvts.getRawParameterValue("bandCount")->load(),
+                             mBandGains, eqSmCoef);
+    }
 
     for (int s = 0; s < num16kSamples; ++s)
     {
@@ -651,6 +767,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
         // ピッチ検出器にサンプル供給
         mPitchTracker.pushSample(inSample);
+
+        // 全変調宛先の実効値を1サンプルぶん平滑して進める (2ms階段の除去)。
+        // 以降このサンプルでは smoothedParam() を使い、moddedParam() の生値は使わない。
+        advanceParamSmoothers();
 
         // コントロールレート同期 (32サンプルごと)
         if (mControlRateCounter >= 32 || mControlRateCounter == 0)
@@ -669,42 +789,13 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             }
 
             // APVTSからパラメータ値をモジュレーションマトリクス用構造体にロード
-            mModParams.bpm = bpm;
-            for (int i = 0; i < ModMatrix::kNumSlots; ++i)
-            {
-                const juce::String prefix = "slot" + juce::String(i);
-                mModParams.slot[(size_t)i].src = (int)(apvts.getRawParameterValue(prefix + "src")->load());
-                mModParams.slot[(size_t)i].dst = (int)(apvts.getRawParameterValue(prefix + "dst")->load());
-                mModParams.slot[(size_t)i].amt = apvts.getRawParameterValue(prefix + "amt")->load();
-                mModParams.slot[(size_t)i].uni = (apvts.getRawParameterValue(prefix + "uni")->load() >= 0.5f);
-            }
-            for (int i = 0; i < ModMatrix::kNumLfos; ++i)
-            {
-                const juce::String prefix = "lfo" + juce::String(i);
-                mModParams.lfo[(size_t)i].rateHz = apvts.getRawParameterValue(prefix + "rate")->load();
-                mModParams.lfo[(size_t)i].sync = (apvts.getRawParameterValue(prefix + "sync")->load() >= 0.5f);
-                mModParams.lfo[(size_t)i].rateSync = (int)(apvts.getRawParameterValue(prefix + "rateSync")->load());
-                mModParams.lfo[(size_t)i].wave = (int)(apvts.getRawParameterValue(prefix + "wave")->load());
-            }
-            for (int i = 0; i < ModMatrix::kNumEnvs; ++i)
-            {
-                const juce::String prefix = "env" + juce::String(i);
-                mModParams.env[(size_t)i].attack = apvts.getRawParameterValue(prefix + "attack")->load();
-                mModParams.env[(size_t)i].decay = apvts.getRawParameterValue(prefix + "decay")->load();
-                mModParams.env[(size_t)i].sustain = apvts.getRawParameterValue(prefix + "sustain")->load();
-                mModParams.env[(size_t)i].release = apvts.getRawParameterValue(prefix + "release")->load();
-                mModParams.env[(size_t)i].loop = (apvts.getRawParameterValue(prefix + "loop")->load() >= 0.5f);
-            }
-
+            // (ポインタキャッシュ経由。文字列生成もハッシュ検索も起きない)
+            loadModParams(bpm);
             mModMatrix.processBlock(32, mModParams);
 
-            // 変調適用済みの実効値。moddedParam() は宛先IDだけで
+            // 変調適用済み＋平滑済みの実効値。宛先IDだけで
             // パラメータID・スケール・掛かり方が決まる (PluginProcessor.h 参照)。
-            auto modded = [this](int dst) { return moddedParam(dst); };
-
-            effectiveCharacter = juce::jlimit(0.0f, 1.0f, modded(ModMatrix::DstCharacter));
-            effectiveFormantShift = juce::jlimit(-24.0f, 24.0f, modded(ModMatrix::DstFormantShift));
-            effectiveFormantStretch = juce::jlimit(0.5f, 2.0f, modded(ModMatrix::DstFormantStretch));
+            auto modded = [this](int dst) { return smoothedParam(dst); };
 
             const float wtPos = juce::jlimit(0.0f, 1.0f, modded(ModMatrix::DstWtPos));
             const float pulseWidth = juce::jlimit(5.0f, 95.0f, modded(ModMatrix::DstPulseWidth)) * 0.01f;
@@ -779,8 +870,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         const float pitchHz = std::exp2(mPitchLogSmooth);
 
         // Tracking パラメータの適用 (Autoモードでも0%のときは基準ピッチに固定しうねりを防止)
-        float basePitch = juce::jlimit(50.0f, 500.0f, moddedParam(ModMatrix::DstBasePitch));
-        float tracking = juce::jlimit(0.0f, 100.0f, moddedParam(ModMatrix::DstTracking)) * 0.01f;
+        float basePitch = juce::jlimit(50.0f, 500.0f, smoothedParam(ModMatrix::DstBasePitch));
+        float tracking = juce::jlimit(0.0f, 100.0f, smoothedParam(ModMatrix::DstTracking)) * 0.01f;
         float activePitch = basePitch + (pitchHz - basePitch) * tracking;
 
         // 安全対策: activePitch が異常値のときは basePitch に戻す
@@ -792,8 +883,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         // M.PITCH(移調) → PITCH Q(Key/Scale吸着) を ScaleSnap で一括適用。
         //  移調を吸着より前に行うため、PITCH Q=100%ならM.PITCHをLFOで振ると
         //  そのKey/Scale上を音が渡り歩く。ヒステリシス付きでワブルも出ない。
-        const float qAmt = juce::jlimit(0.0f, 100.0f, moddedParam(ModMatrix::DstPitchQuantize)) * 0.01f;
-        const float mPitchSt = juce::jlimit(-24.0f, 24.0f, moddedParam(ModMatrix::DstMasterPitch));
+        const float qAmt = juce::jlimit(0.0f, 100.0f, smoothedParam(ModMatrix::DstPitchQuantize)) * 0.01f;
+        const float mPitchSt = juce::jlimit(-24.0f, 24.0f, smoothedParam(ModMatrix::DstMasterPitch));
         const int pqKey   = juce::jlimit(0, 11, (int)apvts.getRawParameterValue("pitchQKey")->load());
         const int pqScale = juce::jlimit(0, ScaleSnap::kNumScales - 1,
                                          (int)apvts.getRawParameterValue("pitchQScale")->load());
@@ -807,11 +898,12 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         if (qAmt <= 0.001f)
             mQuantNoteHeld = -1; // PITCH Q無効時は保持解除
 
-        // FMT SHIFT/STRETCH の一次平滑 (τ≈5ms@16k)。制御ブロック毎(2ms)の階段状変化に
-        // よるフィルタ係数ジャンプ/ジッパーノイズを防ぐ。
-        constexpr float kFmtSmCoef = 0.0124f;   // 1-exp(-1/(0.005*16000))
-        mFmtShiftSm   += kFmtSmCoef * (effectiveFormantShift   - mFmtShiftSm);
-        mFmtStretchSm += kFmtSmCoef * (effectiveFormantStretch - mFmtStretchSm);
+        // FMT SHIFT/STRETCH と CHARACTER は advanceParamSmoothers() で
+        // 既にサンプル単位の1極平滑(τ≈5ms)を通っているので、そのまま受け取る。
+        // (旧実装はここで二重に平滑していた)
+        mFmtShiftSm   = juce::jlimit(-24.0f, 24.0f, smoothedParam(ModMatrix::DstFormantShift));
+        mFmtStretchSm = juce::jlimit(0.5f, 2.0f, smoothedParam(ModMatrix::DstFormantStretch));
+        effectiveCharacter = juce::jlimit(0.0f, 1.0f, smoothedParam(ModMatrix::DstCharacter));
 
         // MIDIモードでは activePitch(=Autoの追従ピッチ) は使われずノート番号で発音するため、
         // M.PITCH / PITCH Q を別途エンジン側へ渡してボイス毎に適用させる。
@@ -823,14 +915,15 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         float wetR = 0.0f;
 
         const int bandCount = (int)apvts.getRawParameterValue("bandCount")->load();
-        const float resonance = juce::jlimit(0.3f, 3.0f, moddedParam(ModMatrix::DstResonance));
+        const float resonance = juce::jlimit(0.3f, 3.0f, smoothedParam(ModMatrix::DstResonance));
+        const float stereoWidth = juce::jlimit(0.0f, 1.0f, smoothedParam(ModMatrix::DstStereoWidth));
 
         auto renderFilterbank = [&](float& l, float& r)
         {
             mFilterbankVocoder.processSample(inSample, carrierL, carrierR, l, r,
                                              bandCount, effectiveCharacter, resonance,
                                              mFmtShiftSm, mFmtStretchSm,
-                                             1.0f, mBandGains, mBandLevelsForUi);
+                                             stereoWidth, mBandGains, mBandLevelsForUi);
         };
         // character(0..1) → 帯域拡張γ(0.97=ぼやけ 〜 0.998=シャープ) へマッピング (M3)
         const float lpcGamma = 0.970f + 0.028f * juce::jlimit(0.0f, 1.0f, effectiveCharacter);
@@ -876,11 +969,37 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         m16kWetR[(size_t)s] = wetR;
     }
 
+    // 4b. 入力が繋がっていない / ブロックが極小で16kサンプルが生成されなかったときも
+    //     LFO・ENV を止めない。上のループの中でしか ModMatrix を回していないため、
+    //     MIDIモードでサイドチェイン入力を繋がずに使うと変調が完全に固まっていた。
+    //     経過時間を16kHz換算して、足りないぶんの制御ティックをここで進める。
+    if (num16kSamples <= 0 && numSamples > 0 && mStoredSampleRate > 0.0)
+    {
+        mIdleModAccum += (double)numSamples * LpcVocoder::kInternalSampleRate / mStoredSampleRate;
+        int guard = 0;
+        while (mIdleModAccum >= 32.0 && guard++ < 64)   // 暴走防止の上限
+        {
+            mIdleModAccum -= 32.0;
+            double bpm = 120.0;
+            if (auto* pH = getPlayHead())
+                if (auto info = pH->getPosition())
+                    if (info->getBpm().hasValue())
+                        bpm = *(info->getBpm());
+            loadModParams(bpm);
+            mModMatrix.processBlock(32, mModParams);
+        }
+        if (guard >= 64) mIdleModAccum = 0.0;
+    }
+    else
+    {
+        mIdleModAccum = 0.0;
+    }
+
     // 5. アップサンプリング (ブレンドは FX 通過後の 5.9 で行う)
     //    MIX/OUT LEVEL は20msランプでサンプル毎に平滑 (ジッパーノイズ対策)
-    mMixSm.setTargetValue(juce::jlimit(0.0f, 100.0f, moddedParam(ModMatrix::DstMix)) * 0.01f);
+    mMixSm.setTargetValue(juce::jlimit(0.0f, 100.0f, smoothedParam(ModMatrix::DstMix)) * 0.01f);
     mOutGainSm.setTargetValue(
-        std::pow(10.0f, juce::jlimit(-60.0f, 12.0f, moddedParam(ModMatrix::DstOutLevel)) / 20.0f));
+        std::pow(10.0f, juce::jlimit(-60.0f, 12.0f, smoothedParam(ModMatrix::DstOutLevel)) / 20.0f));
 
     // ゲートゲインの算出 (リニア入力エンベロープに基づくソフトゲート)
     float envVal = mInputEnvelope.load();
@@ -901,7 +1020,12 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     //  そのため、ここではまだブレンドせずウェットのみをバッファへ書き、
     //  原音は mDryL/mDryR へ退避しておく。FX通過後の最終段でブレンドする。
     //  (旧実装はブレンド後にFXを掛けていたため、MIX=0でもFXが原音に掛かっていた)
+    // num16kSamples が 0 のときに補間へ入ると idx1 = num16kSamples-1 = -1 となり、
+    // (size_t)(-1) で巨大インデックスになって範囲外アクセス→クラッシュする。
+    // ホストブロックが hostSR/16000 サンプル(48kHzで3)より小さいと実際に 0 になり得るため
+    // (サンプル精度オートメーションでブロックを刻むホスト等)、条件に必ず含める。
     const bool didProcess = (numInputs > 0 && mStoredSampleRate > 0.0
+                             && num16kSamples > 0
                              && (int)mDryL.size() >= numSamples);
     if (didProcess)
     {
@@ -913,10 +1037,12 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mDryL[(size_t)i] = writeL[i];
             mDryR[(size_t)i] = stereoIn ? writeR[i] : writeL[i];
 
-            // 線形補間アップサンプリング
-            int idx0 = (int)mUpsampleTimeAccum;
-            int idx1 = std::min(num16kSamples - 1, idx0 + 1);
-            float frac = (float)(mUpsampleTimeAccum - idx0);
+            // 線形補間アップサンプリング。
+            // 読み出し位置は必ず [0, num16kSamples-1] に収める (範囲外アクセス防止)。
+            int idx0 = juce::jlimit(0, num16kSamples - 1, (int)mUpsampleTimeAccum);
+            int idx1 = juce::jlimit(0, num16kSamples - 1, idx0 + 1);
+            float frac = (float)(mUpsampleTimeAccum - (double)idx0);
+            frac = juce::jlimit(0.0f, 1.0f, frac);
 
             writeL[i] = (m16kWetL[(size_t)idx0] * (1.0f - frac) + m16kWetL[(size_t)idx1] * frac) * gateGain;
             writeR[i] = (m16kWetR[(size_t)idx0] * (1.0f - frac) + m16kWetR[(size_t)idx1] * frac) * gateGain;
@@ -924,6 +1050,16 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mUpsampleTimeAccum += step;
         }
         mUpsampleTimeAccum -= (double)num16kSamples;
+        // 端数が溜まって暴走しないよう常識的な範囲へ丸める
+        if (!std::isfinite(mUpsampleTimeAccum) || mUpsampleTimeAccum < 0.0
+            || mUpsampleTimeAccum > 2.0)
+            mUpsampleTimeAccum = 0.0;
+    }
+    else
+    {
+        // 今ブロックはボコーダーを通していない → 位相アキュムレータを初期化して
+        // 次のブロックで古い端数から読み始めないようにする
+        mUpsampleTimeAccum = 0.0;
     }
 
     // 5.5 FXチェーン — ウェット(ボコーダー出力)に対してのみ適用する。
@@ -935,9 +1071,10 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         FxChain::Params fp;
         for (int s = 0; s < FxChain::kNumSlots; ++s)
         {
-            const juce::String pre = "fx" + juce::String(s + 1);
-            fp.slot[(size_t)s].type   = (int)apvts.getRawParameterValue(pre + "Type")->load();
-            fp.slot[(size_t)s].amount = apvts.getRawParameterValue(pre + "Amount")->load();
+            const auto& f = mFxPtrs[(size_t)s];
+            if (f.type == nullptr) continue;
+            fp.slot[(size_t)s].type   = (int)f.type->load();
+            fp.slot[(size_t)s].amount = f.amount->load();
         }
         fp.resMode     = (int)apvts.getRawParameterValue("resMode")->load();
         // ROOTはMIDIノート番号なのでHzへ変換
@@ -987,7 +1124,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 if (info->getBpm().hasValue())
                     fp.bpm = *(info->getBpm());
 
-        mFxChain.syncParameters(fp);
+        // FXの連続パラメータはブロック毎の階段になるので τ=30ms で均す
+        {
+            const double blockSec = (double)numSamples / juce::jmax(1.0, mStoredSampleRate);
+            mFxChain.syncParameters(fp, (float)(1.0 - std::exp(-blockSec / 0.030)));
+        }
 
         if (mFxChain.isActive())
             for (int i = 0; i < numSamples; ++i)
@@ -1013,12 +1154,42 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         }
     }
 
-    // 6. 最終段リミッター
-    const bool limiter = (static_cast<int>(apvts.getRawParameterValue("limiterEnable")->load()) == 1);
-    if (limiter)
+    // 5.95 NaN / Inf の水際チェック。
+    //  LPCのラティスやResonatorのフィードバックで一度でも非有限値が生まれると、
+    //  そのまま状態変数に居座り「リセットするまで永久に無音 or 轟音」になる。
+    //  ブロック末尾で1回だけ検査し、見つかったら全DSPの状態を捨てて復帰する。
+    //  (検査はブロックあたり numSamples×2 回の比較のみで、実質ゼロコスト)
     {
-        // 天井は内部固定 -0.1 dBFS (BrickLimiter::kCeiling)。突発ピークも天井へ抑える。
-        mLimiter.process(writeL, writeR, numSamples);
+        bool bad = false;
+        for (int i = 0; i < numSamples && !bad; ++i)
+            bad = !std::isfinite(writeL[i]) || !std::isfinite(writeR[i]);
+
+        if (bad)
+        {
+            buffer.clear();
+            mFilterbankVocoder.reset();
+            mLpcVocoder.reset();
+            mExcitationEngine.reset();
+            mFxChain.reset();
+            mLimiter.reset();
+            mModMatrix.reset();
+            mPostEq.reset();
+            mMixSm.setCurrentAndTargetValue(mMixSm.getTargetValue());
+            mOutGainSm.setCurrentAndTargetValue(mOutGainSm.getTargetValue());
+            mFmtShiftSm   = apvts.getRawParameterValue("formantShift")->load();
+            mFmtStretchSm = apvts.getRawParameterValue("formantStretch")->load();
+            mPitchLogSmooth = -1.0f;
+            mInputEnvelope.store(0.0f);
+            return;   // このブロックは無音で返す
+        }
+    }
+
+    // 6. 最終段リミッター。
+    //    天井は内部固定 -0.1 dBFS (BrickLimiter::kCeiling)。突発ピークも天井へ抑える。
+    //    ON/OFF は 20ms クロスフェードで切り替える (旧実装は瞬時分岐でクリックが出ていた)。
+    {
+        const bool limiter = (static_cast<int>(apvts.getRawParameterValue("limiterEnable")->load()) == 1);
+        mLimiter.processBlended(writeL, writeR, numSamples, limiter);
     }
 
     // 7. アナライザーへ最終出力を投入 (表示専用・ロックフリー)。

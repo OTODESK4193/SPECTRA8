@@ -49,6 +49,7 @@ private:
     ValueKnob mKnobNoise;       // 移設 (NOISE MIX)
     ValueKnob mKnobBands;       // FilterBank専用
     ValueKnob mKnobResonance;   // FilterBank専用 (BPF Bankバンド幅スケール)
+    ValueKnob mKnobWidth;       // FilterBank専用 (帯域交互パンニング幅)
     // 下段ノブエリア（ADSR + MIX + OUT）
     ValueKnob mKnobAttack;
     ValueKnob mKnobDecay;
@@ -89,6 +90,7 @@ private:
     juce::Label mLblNoise { {}, "NOISE MIX" };
     juce::Label mLblBands { {}, "BANDS" };
     juce::Label mLblResonance { {}, "RESONANCE" };
+    juce::Label mLblWidth { {}, "WIDTH" };
     juce::Label mLblAttack { {}, "ATTACK" };
     juce::Label mLblDecay { {}, "DECAY" };
     juce::Label mLblSustain { {}, "SUSTAIN" };
@@ -109,6 +111,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentNoise;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentBands;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentResonance;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentWidth;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentAttack;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentDecay;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentSustain;

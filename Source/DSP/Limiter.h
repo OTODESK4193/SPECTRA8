@@ -23,10 +23,45 @@ public:
         const double sr = juce::jmax(8000.0, sampleRate);
         // リリース 120ms(1極). アタックは瞬間(係数不要)。
         relCoef = (float)(1.0 - std::exp(-1.0 / (0.120 * sr)));
+        kMixCoef = (float)(1.0 - std::exp(-1.0 / (0.020 * sr)));   // ON/OFF 20ms
         gain = 1.0f;
+        bypassMix = -1.0f;
     }
 
-    void reset() { gain = 1.0f; }
+    void reset() { gain = 1.0f; bypassMix = -1.0f; }
+
+    // ON/OFF をクロスフェードしながら処理する。
+    //  enabled を直接分岐すると、リミッターが効いている最中に OFF にした瞬間
+    //  ゲインが 1.0 へ跳んで「ボッ」と鳴っていた。20ms でリミット後/前を混ぜる。
+    void processBlended(float* left, float* right, int numSamples, bool enabled) noexcept
+    {
+        const float target = enabled ? 1.0f : 0.0f;
+        if (bypassMix < 0.0f)
+            bypassMix = target;                      // 初回は即時反映
+
+        // 完全に片側へ落ち着いていて目標も同じなら、余計な処理をしない
+        if (bypassMix == target && (target == 0.0f))
+            return;                                  // OFF で安定 = 素通し
+
+        for (int n = 0; n < numSamples; ++n)
+        {
+            const float dryL = left[n], dryR = right[n];
+
+            const float peak = juce::jmax(std::abs(dryL), std::abs(dryR));
+            const float gNeeded = (peak > kCeiling) ? (kCeiling / peak) : 1.0f;
+            if (gNeeded < gain) gain = gNeeded;
+            else                gain += relCoef * (gNeeded - gain);
+
+            const float wetL = juce::jlimit(-kCeiling, kCeiling, dryL * gain);
+            const float wetR = juce::jlimit(-kCeiling, kCeiling, dryR * gain);
+
+            bypassMix += kMixCoef * (target - bypassMix);
+            left[n]  = dryL * (1.0f - bypassMix) + wetL * bypassMix;
+            right[n] = dryR * (1.0f - bypassMix) + wetR * bypassMix;
+        }
+        if (std::abs(bypassMix - target) < 1.0e-4f)
+            bypassMix = target;
+    }
 
     // ceiling 引数は互換のため残すが、既定は内部天井 -0.1dBFS。
     void process(float* left, float* right, int numSamples, float ceiling = kCeiling)
@@ -54,4 +89,7 @@ public:
 private:
     float relCoef = 0.0f;
     float gain = 1.0f;
+    // ON/OFF クロスフェード用 (0=素通し / 1=リミット後)。-1 = 未初期化
+    float bypassMix = -1.0f;
+    float kMixCoef = 0.0f;   // 20ms 相当。prepare で算出
 };

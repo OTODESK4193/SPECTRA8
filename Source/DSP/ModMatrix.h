@@ -54,6 +54,7 @@ public:
         //   AudioParameterChoice がインデックス保存のため既存セッションの
         //   スロット設定が別の宛先にズレる。
         DstMasterPitch,
+        DstStereoWidth,   // Filterbank の帯域交互パンニング幅 (0=モノ 〜 1=最大)
         NumDsts
     };
 
@@ -79,7 +80,7 @@ public:
                  "WT Position", "Pulse Width", "Porta", "Detune",
                  "Bend", "Bend Sym", "Sync", "Sync Ph",
                  "Vocode", "Vowel",
-                 "Master Pitch" };
+                 "Master Pitch", "Width" };
     }
     static juce::StringArray getWaveNames()
     {
@@ -123,6 +124,7 @@ public:
         case DstVocAmt:         return "vocAmt";
         case DstVocShift:       return "vocShift";
         case DstMasterPitch:    return "masterPitch";
+        case DstStereoWidth:    return "stereoWidth";
         default:                return "";
         }
     }
@@ -164,6 +166,7 @@ public:
         // Master Pitch: ±24半音。PitchQ=100%ならスケールにスナップされるので、
         // LFOを当てると該当Key/Scale上を音が移動する。
         case DstMasterPitch:    return 24.0f;
+        case DstStereoWidth:    return 1.0f;    // 0..1
         default:                return 0.0f;
         }
     }
@@ -281,12 +284,30 @@ public:
             const double inc = freq * (double)numSamples / sampleRate;
             st.phase += inc;
             st.phase2 += inc * 1.41421356; // Chaos用
-            while (st.phase >= 1.0)
+
+            // 【重要】ラップ回数に上限を設ける。
+            //  freq や inc が NaN/Inf になると `while (phase >= 1.0)` が永久に回り、
+            //  オーディオスレッドが固まってDAWごとフリーズする。
+            //  非有限になったら位相を捨てて再スタートする (Wavetable版 Lfo.h と同じ考え方)。
+            if (!std::isfinite(st.phase) || !std::isfinite(st.phase2))
             {
-                st.phase -= 1.0;
-                st.shValue = rng.nextFloat() * 2.0f - 1.0f; // S&H更新
+                st.phase = 0.0;
+                st.phase2 = 0.0;
             }
-            while (st.phase2 >= 1.0) st.phase2 -= 1.0;
+            else
+            {
+                int wraps = 0;
+                while (st.phase >= 1.0 && wraps < 8)
+                {
+                    st.phase -= 1.0;
+                    st.shValue = rng.nextFloat() * 2.0f - 1.0f; // S&H更新
+                    ++wraps;
+                }
+                if (st.phase >= 1.0)                 // 1ブロックで8周以上 = 異常な高レート
+                    st.phase -= std::floor(st.phase);
+                if (st.phase2 >= 1.0)
+                    st.phase2 -= std::floor(st.phase2);
+            }
         }
 
         // --- ENV (ADSR / ブロックレート、Loop時はA-D循環) ---
@@ -306,6 +327,13 @@ public:
                 st.stage = EnvState::Release;
                 st.releaseStart = juce::jmax(0.0001f, st.value);
             }
+
+            // LOOP がONなら、ノートを弾いていなくても自走させる。
+            //  旧実装は Idle のまま止まっていたため、Autoモード(MIDIを送らない使い方)では
+            //  LOOP を点けても ENV がまったく動かなかった。
+            //  LOOP は「4つ目のLFO」として使えるべきなので、Idle から自動で立ち上げる。
+            if (ep.loop && st.stage == EnvState::Idle)
+                st.stage = EnvState::Attack;
 
             switch (st.stage)
             {
@@ -373,10 +401,14 @@ public:
         }
     }
 
-    // 合成済み変調値 (概ね -1..+1)
+    // 合成済み変調値 (概ね -1..+1)。
+    //  複数スロットが同じ宛先を指すと単純加算されるため、上限を設けておく。
+    //  特に KindExpOct の宛先は pow(2, modVal*scale) なので、非有限値が1つ紛れ込むと
+    //  そのまま NaN が全DSPへ伝播する。ここで水際を作る。
     float get(int dst) const noexcept
     {
-        return destAccum[(size_t)juce::jlimit(0, (int)NumDsts - 1, dst)];
+        const float v = destAccum[(size_t)juce::jlimit(0, (int)NumDsts - 1, dst)];
+        return std::isfinite(v) ? juce::jlimit(-4.0f, 4.0f, v) : 0.0f;
     }
 
     // GUIアーク用: 行き先が取りうる最小/最大オフセット (mod単位)

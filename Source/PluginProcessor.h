@@ -53,19 +53,17 @@ public:
     bool mIsInitialized = false;
     juce::AudioProcessorValueTreeState apvts;
 
+    // 下部ステータス行の既定表示。
+    //  ノブ/コンボにマウスを乗せている間は、エディター側がここを
+    //  そのコントロールの英語説明文で上書きする (PluginEditor::timerCallback)。
+    //  ※ InLvl 表示は廃止 (2026-08-01)。説明文の表示スペースに充てる。
     juce::String getDebugMessage() const
     {
-        juce::String msg = "Status: ";
-        const float inEnv = mInputEnvelope.load();
-        if (inEnv < 0.0001f)
-            msg += "Idle | ";
-        else
-            msg += "InLvl: " + juce::String(inEnv * 100.0f, 1) + "% | ";
-
-        int vMode = static_cast<int>(apvts.getRawParameterValue("vocoderMode")->load());
-        msg += "[" + juce::String(vMode == 0 ? "Filterbank" : "LPC") + "]";
-
-        return msg;
+        const int vMode = static_cast<int>(apvts.getRawParameterValue("vocoderMode")->load());
+        const int voicing = static_cast<int>(apvts.getRawParameterValue("mode")->load());
+        return juce::String(vMode == 0 ? "Filterbank" : "LPC")
+             + " / " + juce::String(voicing == 0 ? "Auto" : "MIDI")
+             + "   -   hover a control for help";
     }
 
     // Band EQ API (UIとの橋渡し)
@@ -104,14 +102,70 @@ public:
     // 宛先IDを渡すだけで「変調適用済みの実パラメータ値」が返る。
     //  パラメータID・スケール・掛かり方(線形/オクターブ)はすべてModMatrix側の
     //  定義に従うため、DSPとGUI表示でスケールがズレる余地が無い。
+    //  【RT安全性】getRawParameterValue() は文字列キーのハッシュ検索なので、
+    //  オーディオスレッドから毎回呼ぶと重い(制御ティック毎に約20回=1万回/秒)。
+    //  prepareToPlay で宛先IDごとにポインタを引いてキャッシュしておく。
     float moddedParam(int dst) const noexcept
     {
-        const float base = apvts.getRawParameterValue(ModMatrix::destParamId(dst))->load();
-        return ModMatrix::applyMod(dst, base, mModMatrix.get(dst));
+        const int d = juce::jlimit(0, (int)ModMatrix::NumDsts - 1, dst);
+        auto* p = mDestPtrs[(size_t)d];
+        if (p == nullptr)
+            return 0.0f;
+        return ModMatrix::applyMod(d, p->load(), mModMatrix.get(d));
     }
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+    // ---- パラメータポインタのキャッシュ (オーディオスレッドからの文字列検索を排除) ----
+    //  旧実装は制御ティック毎に "slot0src" のような juce::String を組み立てており、
+    //  毎秒 5,500 回のヒープ確保がオーディオスレッドで走っていた (RT安全性違反)。
+    void cacheParamPointers();
+    // APVTS から ModMatrix::Params を充填する (制御ティック毎 / アイドル時の両方から呼ぶ)
+    void loadModParams(double bpm) noexcept;
+
+    struct SlotPtrs { std::atomic<float>* src = nullptr; std::atomic<float>* dst = nullptr;
+                      std::atomic<float>* amt = nullptr; std::atomic<float>* uni = nullptr; };
+    struct LfoPtrs  { std::atomic<float>* rate = nullptr; std::atomic<float>* sync = nullptr;
+                      std::atomic<float>* rateSync = nullptr; std::atomic<float>* wave = nullptr; };
+    struct EnvPtrs  { std::atomic<float>* attack = nullptr; std::atomic<float>* decay = nullptr;
+                      std::atomic<float>* sustain = nullptr; std::atomic<float>* release = nullptr;
+                      std::atomic<float>* loop = nullptr; };
+    struct FxSlotPtrs { std::atomic<float>* type = nullptr; std::atomic<float>* amount = nullptr; };
+
+    // ---- 全変調宛先の1極平滑 (ジッパーノイズ対策) ----------------------
+    //  制御ティックは2ms毎なので、平滑しないと RESONANCE / CHARACTER / M.PITCH /
+    //  NOISE COLOR などは 2ms 刻みの階段状に動き、フィルタ係数やオシレータ周波数が
+    //  跳んで「ジリジリ」「プチプチ」が乗る。16kHzループの毎サンプルで進める。
+    //  τ≈5ms (係数 = 1-exp(-1/(0.005*16000)))。宛先28個 × 16kHz = 448k演算/秒で軽い。
+    static constexpr float kParamSmCoef = 0.0124f;
+    std::array<float, ModMatrix::NumDsts> mParamSm {};
+    bool mParamSmPrimed = false;   // 初回は平滑せず即値で埋める
+
+    void advanceParamSmoothers() noexcept
+    {
+        if (!mParamSmPrimed)
+        {
+            for (int d = 0; d < (int)ModMatrix::NumDsts; ++d)
+                mParamSm[(size_t)d] = moddedParam(d);
+            mParamSmPrimed = true;
+            return;
+        }
+        for (int d = 1; d < (int)ModMatrix::NumDsts; ++d)   // 0 = DstNone
+            mParamSm[(size_t)d] += kParamSmCoef * (moddedParam(d) - mParamSm[(size_t)d]);
+    }
+
+    // 平滑済みの実効パラメータ値
+    float smoothedParam(int dst) const noexcept
+    {
+        return mParamSm[(size_t)juce::jlimit(0, (int)ModMatrix::NumDsts - 1, dst)];
+    }
+
+    std::array<std::atomic<float>*, ModMatrix::NumDsts> mDestPtrs {};
+    std::array<SlotPtrs, ModMatrix::kNumSlots> mSlotPtrs {};
+    std::array<LfoPtrs,  ModMatrix::kNumLfos>  mLfoPtrs {};
+    std::array<EnvPtrs,  ModMatrix::kNumEnvs>  mEnvPtrs {};
+    std::array<FxSlotPtrs, FxChain::kNumSlots> mFxPtrs {};
 
     // 押鍵リストの維持 (低い順・重複なし・最大8音)
     void addHeldNote(int note) noexcept
@@ -187,6 +241,9 @@ private:
     std::vector<float> m16kWetR;
 
     int mControlRateCounter = 0;
+    // 入力が無い/ブロックが極小で16kサンプルが生成されないときに、
+    // それでもLFO/ENVを進めるための16kHz換算の経過サンプル数アキュムレータ。
+    double mIdleModAccum = 0.0;
     alignas(8) std::atomic<float> mInputEnvelope { 0.0f };
     int mPrevMode = -1;
     float mLastVoicedPitch = 130.0f;

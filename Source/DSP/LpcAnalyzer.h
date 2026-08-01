@@ -52,10 +52,16 @@ public:
         return mWinEnergy[(size_t)std::min(2, std::max(0, type))];
     }
 
+    // 直前フレームの自己相関 r[0]（窓掛け後・白色雑音補正およびラグ窓の適用前）。
+    //  r0 / Σw² がそのフレームの平均二乗値になるので、
+    //  「合成出力レベルを入力レベルに一致させる」ゲイン算出に使う (LpcVocoder参照)。
+    double getLastFrameR0() const noexcept { return mLastR0; }
+
 private:
     std::array<std::array<float, kWindowSize>, 3> mWindows {};
     std::array<float, 3> mWinEnergy {};
     std::array<double, kMaxOrder + 1> mLagWindow {};
     std::array<double, kWindowSize> mScratch {};
     int mWindowType = 0;
+    double mLastR0 = 0.0;   // 直前フレームの r[0] (補正前)
 };

@@ -44,8 +44,9 @@ private:
     FxPanel mFxPanel;
     BandsEqPanel mBandsEqPanel;
 
-    // HUD (デバッグ・ステータス表示用)
+    // 下部ステータス行。通常はモード表示、マウスオーバー中はそのコントロールの英語説明。
     juce::Label mDebugLabel;
+    bool mShowingHelp = false;   // 文字色切替のための現在状態
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessorEditor)
 };

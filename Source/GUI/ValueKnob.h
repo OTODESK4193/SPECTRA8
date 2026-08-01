@@ -38,17 +38,31 @@ private:
         editor->setWantsKeyboardFocus(true);
 
         auto* edPtr = editor.get();
-        auto& box = juce::CallOutBox::launchAsynchronously(std::move(editor),
-                                                           getScreenBounds(), nullptr);
+        auto& boxRef = juce::CallOutBox::launchAsynchronously(std::move(editor),
+                                                              getScreenBounds(), nullptr);
 
-        edPtr->onReturnKey = [this, edPtr, &box]
+        // 【重要】CallOutBox は dismiss() で自分自身を delete する。
+        //  生ポインタ(旧実装の &box キャプチャ)のままだと、
+        //   onReturnKey → dismiss() で解放 → 瀕死のエディタから onFocusLost が発火
+        //   → 解放済みメモリへ dismiss()  という use-after-free になり、
+        //  Enter 確定時に確率的にクラッシュしていた。
+        //  SafePointer で保持し、生きているときだけ dismiss する。
+        juce::Component::SafePointer<juce::CallOutBox> box(&boxRef);
+
+        auto closeBox = [box]
+        {
+            if (auto* b = box.getComponent())
+                b->dismiss();
+        };
+
+        edPtr->onReturnKey = [this, edPtr, closeBox]
         {
             const double v = edPtr->getText().getDoubleValue();
             setValue(v, juce::sendNotificationSync); // Sliderが自動でレンジにクランプ
-            box.dismiss();
+            closeBox();
         };
-        edPtr->onEscapeKey = [&box] { box.dismiss(); };
-        edPtr->onFocusLost = [&box] { box.dismiss(); };
+        edPtr->onEscapeKey = closeBox;
+        edPtr->onFocusLost = closeBox;
 
         juce::MessageManager::callAsync([safe = juce::Component::SafePointer<juce::TextEditor>(edPtr)]
         {

@@ -80,6 +80,7 @@ void LpcVocoder::reset()
     mKInc.fill(0.0f);
     mGTarget = mGSmooth = mGCur = mGInc = 0.0f;
     mDeempL = mDeempR = 0.0f;
+    mDcX1L = mDcY1L = mDcX1R = mDcY1R = 0.0f;
     mWritePos = 0;
     mFilled = 0;
     mHopCounter = 0;
@@ -283,7 +284,31 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                 mFrame[(size_t)n] -= kPreemph * mFrame[(size_t)(n - 1)];
 
             const float g = mAnalyzer.analyzeFrame(mFrame.data(), order, mKTarget.data(), (double)gamma);
-            mGTarget = g * mExcNorm;   // 励起レベル正規化（per-sample残差RMS相当へ）
+
+            // ---- 励起ゲイン: 「合成出力レベル = 入力レベル」で決める ----
+            //  旧実装は G = sqrt(E_P)（残差RMS）をそのまま使っていたが、
+            //  次数を上げるほど E_P は小さくなる一方で 1/A(z) の利得は大きくなり、
+            //  両者が相殺しないため LPC ORDER を変えるだけで音量が最大 8.6dB 動いていた
+            //  (Docs/sim/lpc2.py で実測。8→16 で +6〜+8.6dB)。
+            //
+            //  合成出力のレベルは G²×wE (wE = 励起重み付きフィルタエネルギー) に比例する。
+            //  そこで、そのフレームの平均二乗値 r0/Σw² に一致するよう
+            //      G = sqrt( (r0/Σw²) / wE )
+            //  と置く。定義から次数に依存せず、入力のダイナミクスもそのまま保たれる
+            //  (シミュレーションで Order 間の差 0.00dB / 入力-20dB → 出力-20dB を確認)。
+            if (g <= 0.0f)
+            {
+                mGTarget = 0.0f;   // 無音フレーム
+            }
+            else
+            {
+                const double winE = (double)mAnalyzer.getWindowEnergy(mWindowType);
+                const double r0   = mAnalyzer.getLastFrameR0();
+                const double wE   = weightedEnergyFromK(&mKTarget[0], order);
+                mGTarget = (wE > 1e-18 && winE > 1e-12 && r0 > 0.0)
+                             ? (float)std::sqrt((r0 / winE) / wE)
+                             : 0.0f;
+            }
 
             // M4改2: FMT STRETCH（スペクトル包絡リサンプル方式）。
             //  現在のLPC包絡 P(w)=1/|A(w)|² を周波数グリッドで評価し、
@@ -479,6 +504,16 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
     const float yR = mLatticeR.processSample(g * carrierR, mKCur.data(), order);
     mDeempL = yL + kPreemph * mDeempL;
     mDeempR = yR + kPreemph * mDeempR;
-    outL = mDeempL;
-    outR = mDeempR;
+
+    // 6. DCブロッカー (fc=20Hz)。
+    //    デエンファシスはDCで16倍(+24dB)効くため、キャリア側の僅かなDCオフセットが
+    //    そのまま増幅されて低域が膨らみ、ラティスを飽和させることがある。
+    //    可聴域外の20Hz以下だけを落とすので音色への影響は無い。
+    const float dcOutL = mDeempL - mDcX1L + kDcR * mDcY1L;
+    mDcX1L = mDeempL; mDcY1L = dcOutL;
+    const float dcOutR = mDeempR - mDcX1R + kDcR * mDcY1R;
+    mDcX1R = mDeempR; mDcY1R = dcOutR;
+
+    outL = dcOutL;
+    outR = dcOutR;
 }

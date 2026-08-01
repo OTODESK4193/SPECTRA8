@@ -53,7 +53,18 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
     // ウィンドウサイズ設定 (Granular準拠のワイド表示)
     setSize(780, 380);
 
-    startTimer(100); // 10HzでHUD更新
+    // タブボタンにも説明を付ける
+    mTabVocoderBtn.setTooltip("VOCODER - core vocoder settings: engine type, voicing mode, "
+                              "formants, band count and output level.");
+    mTabExcitationBtn.setTooltip("EXCITATION - the carrier oscillator that the voice is imprinted on: "
+                                 "waveform, wavetable, detune and waveshaping.");
+    mTabModBtn.setTooltip("MOD MATRIX - route 3 LFOs, 2 envelopes and MIDI sources to any knob.");
+    mTabFxBtn.setTooltip("FX - five serial effect slots applied after the vocoder. "
+                         "Drag the slots to reorder them.");
+    mTabBandsEqBtn.setTooltip("BANDS EQ - per-band gain for the vocoder bands, with a live spectrum "
+                              "of the plugin output behind it.");
+
+    startTimer(100); // 10Hzでステータス行/ヘルプ表示を更新
 }
 
 SPECTRA8AudioProcessorEditor::~SPECTRA8AudioProcessorEditor()
@@ -114,9 +125,44 @@ void SPECTRA8AudioProcessorEditor::resized()
     mBandsEqPanel.setBounds(r);
 }
 
+// 下部ステータス行の更新。
+//  マウスの下にあるコンポーネントを辿って TooltipClient (Slider / ComboBox / Button は
+//  すべてこれを実装している) を探し、setTooltip() で登録した英語説明文を表示する。
+//  何も指していないときはプラグインの状態表示に戻す。
+//  この方式なら各パネル側は setTooltip("...") を呼ぶだけで済み、
+//  ポップアップが隣のノブを隠すこともない。
 void SPECTRA8AudioProcessorEditor::timerCallback()
 {
-    mDebugLabel.setText(audioProcessor.getDebugMessage(), juce::dontSendNotification);
+    juce::String help;
+
+    auto& mouse = juce::Desktop::getInstance().getMainMouseSource();
+    if (auto* under = mouse.getComponentUnderMouse())
+    {
+        // 自分のエディター内のコンポーネントだけを対象にする
+        if (under == this || isParentOf(under))
+        {
+            for (auto* c = under; c != nullptr && c != this; c = c->getParentComponent())
+            {
+                if (auto* tc = dynamic_cast<juce::TooltipClient*>(c))
+                {
+                    help = tc->getTooltip();
+                    if (help.isNotEmpty())
+                        break;
+                }
+            }
+        }
+    }
+
+    const bool showingHelp = help.isNotEmpty();
+    if (showingHelp != mShowingHelp)
+    {
+        mShowingHelp = showingHelp;
+        mDebugLabel.setColour(juce::Label::textColourId,
+                              showingHelp ? SpectraColors::text : SpectraColors::textDim);
+    }
+
+    mDebugLabel.setText(showingHelp ? help : audioProcessor.getDebugMessage(),
+                        juce::dontSendNotification);
 }
 
 void SPECTRA8AudioProcessorEditor::selectTab(int tabIndex)

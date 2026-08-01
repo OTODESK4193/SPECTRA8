@@ -33,6 +33,9 @@ FxSlotCard::FxSlotCard(SPECTRA8AudioProcessor& processor, int slotIndex,
     typeBox.setColour(juce::ComboBox::arrowColourId, SpectraColors::textDim);
     typeBox.setJustificationType(juce::Justification::centred);
     typeBox.addItemList(FxChain::getTypeNames(), 1);
+    typeBox.setTooltip("SLOT " + juce::String(slot + 1)
+                       + " TYPE - which effect sits in this slot. Slots run left to right; "
+                         "drag a card onto another to change the order.");
     addAndMakeVisible(typeBox);
     typeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         proc.apvts, pre + "Type", typeBox);
@@ -51,6 +54,10 @@ FxSlotCard::FxSlotCard(SPECTRA8AudioProcessor& processor, int slotIndex,
     amountKnob.setColour(juce::Slider::textBoxTextColourId, SpectraColors::textDim);
     amountKnob.setColour(juce::Slider::rotarySliderFillColourId, SpectraColors::accentFx);
     amountKnob.setColour(juce::Slider::rotarySliderOutlineColourId, SpectraColors::knobTrack);
+    amountKnob.setTooltip("SLOT " + juce::String(slot + 1)
+                          + " AMOUNT - dry/wet balance for this effect only. "
+                            "At 0 the effect is bypassed but keeps running, so its tail does "
+                            "not cut off when you bring it back.");
     amountKnob.setLookAndFeel(&lookAndFeel);
     addAndMakeVisible(amountKnob);
     amountAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
@@ -221,7 +228,8 @@ void FxPanel::rebuildDetails()
     detailComboLabels.clear();
 
     // dec = 小数桁数。既定のままだと "5.0000..." のように桁があふれて省略表示になる。
-    struct Def { const char* id; const char* label; int dec; };
+    // tip = 下部ステータス行に出す英語の説明文。
+    struct Def { const char* id; const char* label; int dec; const char* tip; };
     std::vector<Def> knobDefs;
     std::vector<Def> comboDefs;
     juce::String title;
@@ -230,39 +238,100 @@ void FxPanel::rebuildDetails()
     {
     case FxChain::Resonator:
         title = "SPECTRAL RESONATOR";
-        comboDefs = { { "resMode", "MODE", 0 }, { "resChord", "CHORD", 0 } };
+        comboDefs = { { "resMode", "MODE", 0,
+                        "MODE - Chord tunes the resonators to the ROOT and CHORD below, "
+                        "Free spaces them by TIME regardless of key, MIDI tunes them to the "
+                        "notes you hold on the keyboard." },
+                      { "resChord", "CHORD", 0,
+                        "CHORD - which chord the resonators are tuned to in Chord mode." } };
         // ROOTはMIDIノート番号パラメータ。表示はパラメータ側の音名書式 (例 "A2")。
-        knobDefs  = { { "resRoot", "ROOT", 0 }, { "resFreeMs", "TIME ms", 1 },
-                      { "resDecay", "DECAY", 2 }, { "resDamp", "DAMP", 2 },
-                      { "resSpread", "SPREAD", 2 },
-                      { "resShimmer", "SHIMMER", 2 }, { "resInharm", "INHARM", 2 } };
+        knobDefs  = { { "resRoot", "ROOT", 0,
+                        "ROOT - base note of the resonator bank, shown as a note name." },
+                      { "resFreeMs", "TIME ms", 1,
+                        "TIME - delay length in Free mode. Short times ring at a pitch, "
+                        "long times turn into discrete echoes." },
+                      { "resDecay", "DECAY", 2,
+                        "DECAY - how long the resonance rings out, in seconds. "
+                        "Kept constant across pitches." },
+                      { "resDamp", "DAMP", 2,
+                        "DAMP - rolls off the highs as the resonance decays, "
+                        "so the tail gets darker and softer." },
+                      { "resSpread", "SPREAD", 2,
+                        "SPREAD - stereo spread of the resonator voices." },
+                      { "resShimmer", "SHIMMER", 2,
+                        "SHIMMER - feeds an octave-up copy back in, giving an ethereal "
+                        "rising sheen." },
+                      { "resInharm", "INHARM", 2,
+                        "INHARM - detunes the partials away from a perfect harmonic series "
+                        "for a bell-like, metallic character." } };
         break;
 
     case FxChain::Drive:
         title = "MULTIBAND DRIVE";
-        comboDefs = { { "drvShape", "SHAPE", 0 } };
-        knobDefs  = { { "drvDrive", "DRIVE", 1 }, { "drvLow", "LOW", 2 },
-                      { "drvMid", "MID", 2 }, { "drvHigh", "HIGH", 2 } };
+        comboDefs = { { "drvShape", "SHAPE", 0,
+                        "SHAPE - the distortion curve. Each one has a different harmonic "
+                        "flavour, from soft warmth to hard digital edge." } };
+        knobDefs  = { { "drvDrive", "DRIVE", 1,
+                        "DRIVE - how hard the signal is pushed into the distortion." },
+                      { "drvLow", "LOW", 2,
+                        "LOW - how much of the low band gets driven. Keep this down to "
+                        "protect the bottom end from mud." },
+                      { "drvMid", "MID", 2,
+                        "MID - drive amount for the midrange, where most vocal presence sits." },
+                      { "drvHigh", "HIGH", 2,
+                        "HIGH - drive amount for the top end. Adds air and bite, but too much "
+                        "gets harsh." } };
         break;
 
     case FxChain::Gate:
         title = "FORMANT GATE";
-        comboDefs = { { "gateRate", "RATE", 0 }, { "gatePattern", "PATTERN", 0 } };
-        knobDefs  = { { "gateDepth", "DEPTH", 2 }, { "gateShape", "SHAPE", 2 },
-                      { "gateVowel", "VOWEL", 2 }, { "gateSmooth", "SMOOTH", 2 } };
+        comboDefs = { { "gateRate", "RATE", 0,
+                        "RATE - step length, locked to the host tempo." },
+                      { "gatePattern", "PATTERN", 0,
+                        "PATTERN - the on/off rhythm the gate plays." } };
+        knobDefs  = { { "gateDepth", "DEPTH", 2,
+                        "DEPTH - how far the gate closes. At 1.0 the off steps are silent." },
+                      { "gateShape", "SHAPE", 2,
+                        "SHAPE - 0 holds each step flat, higher values give a sharp decay at "
+                        "the start of every step so it plays like a stutter." },
+                      { "gateVowel", "VOWEL", 2,
+                        "VOWEL - vowel filter that moves with the gate, turning the rhythm "
+                        "into a talking pattern." },
+                      { "gateSmooth", "SMOOTH", 2,
+                        "SMOOTH - rounds the gate edges. Low is clicky and percussive, "
+                        "high fades gently between steps." } };
         break;
 
     case FxChain::Chorus:
         title = "ENSEMBLE CHORUS";
-        knobDefs = { { "choRate", "RATE Hz", 2 }, { "choDepth", "DEPTH ms", 1 },
-                     { "choWidth", "WIDTH", 2 } };
+        knobDefs = { { "choRate", "RATE Hz", 2,
+                       "RATE - speed of the chorus movement." },
+                     { "choDepth", "DEPTH ms", 1,
+                       "DEPTH - how far the delay time sweeps. More depth means more "
+                       "pitch wobble and thickness." },
+                     { "choWidth", "WIDTH", 2,
+                       "WIDTH - stereo spread of the chorus voices." } };
         break;
 
     case FxChain::Reverb:
         title = "REVERB";
-        knobDefs = { { "revSize", "SIZE", 2 }, { "revDamp", "DAMP", 2 },
-                     { "revPredelay", "PRE-DLY ms", 0 }, { "revWidth", "WIDTH", 2 },
-                     { "revLowCut", "LOW CUT Hz", 0 }, { "revMod", "MOD", 2 } };
+        knobDefs = { { "revSize", "SIZE", 2,
+                       "SIZE - how large the simulated space is, and therefore how long "
+                       "the tail lasts." },
+                     { "revDamp", "DAMP", 2,
+                       "DAMP - how quickly the highs disappear from the tail. "
+                       "High values sound like a soft, carpeted room." },
+                     { "revPredelay", "PRE-DLY ms", 0,
+                       "PRE-DELAY - gap before the reverb starts. Keeps the dry voice clear "
+                       "in front of the tail." },
+                     { "revWidth", "WIDTH", 2,
+                       "WIDTH - stereo spread of the reverb tail." },
+                     { "revLowCut", "LOW CUT Hz", 0,
+                       "LOW CUT - removes low frequencies from the tail so the reverb "
+                       "does not muddy the bass." },
+                     { "revMod", "MOD", 2,
+                       "MOD - slow movement inside the tail. Stops the reverb sounding "
+                       "static and metallic." } };
         break;
 
     default:
@@ -280,6 +349,7 @@ void FxPanel::rebuildDetails()
         c->setColour(juce::ComboBox::outlineColourId, SpectraColors::panelLine);
         c->setColour(juce::ComboBox::arrowColourId, SpectraColors::textDim);
         c->setJustificationType(juce::Justification::centred);
+        c->setTooltip(d.tip);
         if (auto* cp = dynamic_cast<juce::AudioParameterChoice*>(proc.apvts.getParameter(d.id)))
             c->addItemList(cp->choices, 1);
         addAndMakeVisible(*c);
@@ -307,6 +377,7 @@ void FxPanel::rebuildDetails()
         k->setColour(juce::Slider::textBoxTextColourId, SpectraColors::textDim);
         k->setColour(juce::Slider::rotarySliderFillColourId, SpectraColors::accentFx);
         k->setColour(juce::Slider::rotarySliderOutlineColourId, SpectraColors::knobTrack);
+        k->setTooltip(d.tip);
         k->setLookAndFeel(&lookAndFeel);
         addAndMakeVisible(*k);
         detailKnobAttach.push_back(

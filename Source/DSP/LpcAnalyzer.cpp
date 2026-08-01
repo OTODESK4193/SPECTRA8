@@ -57,9 +57,15 @@ float LpcAnalyzer::analyzeFrame(const float* x, int order, float* kOut, double g
         r[j] = acc;
     }
 
+    // レベル整合ゲイン算出用に、補正を掛ける前の r[0] を保存しておく
+    mLastR0 = r[0];
+
     // 無音フレーム: k全0 (透過化), G=0（§5.2-6）
     if (r[0] < kSilenceThresh)
+    {
+        mLastR0 = 0.0;
         return 0.0f;
+    }
 
     // 3. 数値衛生: 白色雑音補正 + ラグ窓
     r[0] = r[0] * 1.0001 + 1e-9;
