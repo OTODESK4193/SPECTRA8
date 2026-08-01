@@ -46,18 +46,28 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
     //  複数行を読ませるので中央揃えではなく左揃えにする。
     mDebugLabel.setColour(juce::Label::backgroundColourId, SpectraColors::panel);
     mDebugLabel.setColour(juce::Label::textColourId, SpectraColors::textDim);
-    mDebugLabel.setFont(juce::Font(juce::FontOptions(11.5f)));
+    mDebugLabel.setFont(juce::Font(juce::FontOptions(13.0f)));
     mDebugLabel.setJustificationType(juce::Justification::topLeft);
-    mDebugLabel.setBorderSize(juce::BorderSize<int>(4, 10, 3, 10));
+    mDebugLabel.setBorderSize(juce::BorderSize<int>(5, 12, 4, 12));
     mDebugLabel.setMinimumHorizontalScale(1.0f);   // 縮小せず必ず折り返す
     addAndMakeVisible(mDebugLabel);
+
+    // ポップアップ表示中用のオーバーレイ (右側のパネル領域に出す)
+    mMenuHelpOverlay.setColour(juce::Label::backgroundColourId, SpectraColors::panel.brighter(0.06f));
+    mMenuHelpOverlay.setColour(juce::Label::textColourId, SpectraColors::text);
+    mMenuHelpOverlay.setColour(juce::Label::outlineColourId, SpectraColors::mint.withAlpha(0.55f));
+    mMenuHelpOverlay.setFont(juce::Font(juce::FontOptions(13.0f)));
+    mMenuHelpOverlay.setJustificationType(juce::Justification::topLeft);
+    mMenuHelpOverlay.setBorderSize(juce::BorderSize<int>(8, 12, 8, 12));
+    mMenuHelpOverlay.setMinimumHorizontalScale(1.0f);
+    addChildComponent(mMenuHelpOverlay);   // 既定では非表示
 
     // 初期タブの選択
     mTabVocoderBtn.setToggleState(true, juce::sendNotification);
 
     // ウィンドウサイズ設定 (Granular準拠のワイド表示)
     //  インフォバーを3行(20→52px)にしたぶん、縦を 380 → 412 へ広げてパネル面積を保つ。
-    setSize(780, 412);
+    setSize(780, 417);
 
     // タブボタンにも説明を付ける
     mTabVocoderBtn.setTooltip("VOCODER - core vocoder settings: engine type, voicing mode, "
@@ -120,9 +130,17 @@ void SPECTRA8AudioProcessorEditor::resized()
     mTabBandsEqBtn.setBounds(tabX + tabW * 4, tabY, tabW, tabH);
 
     // 2. インフォバー（下部・3行）のレイアウト
-    //    11.5px フォント × 3行 + 上下の余白 = 52px
-    auto hudArea = r.removeFromBottom(52);
+    //    13px フォント × 3行 + 上下の余白 = 57px
+    auto hudArea = r.removeFromBottom(57);
     mDebugLabel.setBounds(hudArea);
+
+    // ポップアップ用オーバーレイ: コンボ列(左端)を避けて、パネルの右寄りに置く。
+    // ポップアップは必ず左側に出るので、これなら重ならない。
+    {
+        auto ov = r.reduced(12);
+        ov.removeFromLeft(juce::jmin(190, ov.getWidth() / 3));   // 左のコンボ列ぶんを避ける
+        mMenuHelpOverlay.setBounds(ov.removeFromBottom(juce::jmin(96, ov.getHeight())));
+    }
 
     // 3. メインパネル（中央）のレイアウト
     mVocoderPanel.setBounds(r);
@@ -141,12 +159,29 @@ void SPECTRA8AudioProcessorEditor::resized()
 void SPECTRA8AudioProcessorEditor::timerCallback()
 {
     juce::String help;
+    bool fromMenu = false;
 
     // 1) コンボのポップアップが開いていて、項目にマウスが乗っているならそれを最優先。
     //    (ポップアップは別ウィンドウなので getComponentUnderMouse では辿れない)
     if (auto* owner = MenuHelpBus::owner())
+    {
         if (owner == this || isParentOf(owner))
+        {
             help = MenuHelpBus::text();
+            fromMenu = help.isNotEmpty();
+        }
+    }
+
+    // ポップアップ表示中は、下部バーが隠れるので右側のオーバーレイに出す
+    if (fromMenu != mOverlayVisible)
+    {
+        mOverlayVisible = fromMenu;
+        mMenuHelpOverlay.setVisible(fromMenu);
+        if (fromMenu)
+            mMenuHelpOverlay.toFront(false);
+    }
+    if (fromMenu)
+        mMenuHelpOverlay.setText(help, juce::dontSendNotification);
 
     // 2) それ以外は、マウス下のコンポーネントを親方向へ辿って説明文を探す
     if (help.isEmpty())

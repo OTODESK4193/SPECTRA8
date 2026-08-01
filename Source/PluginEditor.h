@@ -49,5 +49,12 @@ private:
     juce::Label mDebugLabel;
     bool mShowingHelp = false;   // 文字色切替のための現在状態
 
+    // コンボのポップアップが開いている間だけ出す説明オーバーレイ。
+    //  コンボは左端の細い列に並んでいるので、ポップアップは必ず左側に出る。
+    //  下部のインフォバーはポップアップに隠れてしまうため、
+    //  重ならない「右側のパネル領域」に同じ説明を大きく表示する。
+    juce::Label mMenuHelpOverlay;
+    bool mOverlayVisible = false;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessorEditor)
 };
