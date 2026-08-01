@@ -599,6 +599,15 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     mControlRateCounter = 0;
     mInputEnvelope.store(0.0f);
 
+    // 入力ゲートの係数 (すべてホストレート・サンプル単位)
+    mEnvAttCoef     = (float)(1.0 - std::exp(-1.0 / (0.020 * sampleRate)));   // 20ms
+    mEnvRelCoef     = (float)(1.0 - std::exp(-1.0 / (0.300 * sampleRate)));   // 300ms
+    mGateOpenCoef   = (float)(1.0 - std::exp(-1.0 / (0.015 * sampleRate)));   // 15ms
+    mGateCloseCoef  = (float)(1.0 - std::exp(-1.0 / (0.150 * sampleRate)));   // 150ms
+    mInEnvSm  = 0.0f;
+    mGateSm   = 0.0f;
+    mGateOpen = false;
+
     // バッファ確保
     int maxSafeSize = std::max(samplesPerBlock * 3, 4096);
     mDownsampledBuffer.assign((size_t)maxSafeSize, 0.0f);
@@ -660,19 +669,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     mModMatrix.handleMidi(midiMessages); // モジュレーションマトリクス用
     midiMessages.clear();
 
-    // 2. 入力音声の包絡線（エンベロープ）算出
-    float inputAvgAbs = 0.0f;
-    if (numInputs > 0)
-    {
-        const float* readPtr = buffer.getReadPointer(0);
-        float sumAbs = 0.0f;
-        for (int i = 0; i < numSamples; ++i)
-            sumAbs += std::abs(readPtr[i]);
-        inputAvgAbs = sumAbs / (float)numSamples;
-    }
-    // 指数平滑化
-    float coeff = (inputAvgAbs > mInputEnvelope.load()) ? 0.05f : 0.005f;
-    mInputEnvelope.store(mInputEnvelope.load() * (1.0f - coeff) + inputAvgAbs * coeff);
+    // 2. 入力レベルの追従はアップサンプルループ内でサンプル単位に行うようになったため、
+    //    ここでのブロック単位の平均・平滑は廃止した (ジリジリの原因だった)。
+    //    mInputEnvelope は表示用にサンプル単位の値をそのまま公開する。
 
     // CHARACTER は 16kHz ループ内で毎サンプル smoothedParam() から取り直す。
     // (FMT SHIFT / STRETCH も同様に mFmtShiftSm / mFmtStretchSm へ直接入る)
@@ -1015,17 +1014,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     mOutGainSm.setTargetValue(
         std::pow(10.0f, juce::jlimit(-60.0f, 12.0f, smoothedParam(ModMatrix::DstOutLevel)) / 20.0f));
 
-    // ゲートゲインの算出 (リニア入力エンベロープに基づくソフトゲート)
-    float envVal = mInputEnvelope.load();
-    float threshold = 0.005f; // ナレーション等の合間の極小ノイズを遮断するしきい値
-    float gateGain = 1.0f;
-    if (!isMidiMode)
-    {
-        if (envVal < threshold)
-            gateGain = 0.0f;
-        else if (envVal < threshold + 0.005f)
-            gateGain = (envVal - threshold) / 0.005f; // 0.005〜0.01の間で滑らかにフェード
-    }
+    // ゲートのしきい値。ナレーション等の合間の極小ノイズを遮断する。
+    //  ゲインの算出は「ブロック毎」ではなく下のアップサンプルループ内で
+    //  サンプル毎に行う (ブロック階段による振幅変調＝ジリジリ を防ぐため)。
 
     float* writeL = buffer.getWritePointer(0);
     float* writeR = (numInputs > 1) ? buffer.getWritePointer(1) : writeL;
@@ -1048,8 +1039,39 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         for (int i = 0; i < numSamples; ++i)
         {
             // 原音の退避 (writeR が writeL を指す場合があるので先に読む)
-            mDryL[(size_t)i] = writeL[i];
-            mDryR[(size_t)i] = stereoIn ? writeR[i] : writeL[i];
+            const float dryIn = writeL[i];
+            mDryL[(size_t)i] = dryIn;
+            mDryR[(size_t)i] = stereoIn ? writeR[i] : dryIn;
+
+            // --- 入力ゲート: エンベロープもゲインもサンプル単位で更新する ---
+            //  旧実装はどちらもブロックに1回だったため、入力がソフトゲートの
+            //  傾斜部にあるとゲインがブロック毎に跳び、ウェットがバッファレートで
+            //  振幅変調されてキャリア倍音の両脇にサイドバンドが立っていた。
+            {
+                const float a = std::abs(dryIn);
+                mInEnvSm += (a > mInEnvSm ? mEnvAttCoef : mEnvRelCoef) * (a - mInEnvSm);
+
+                float gTarget = 1.0f;
+                if (!isMidiMode)
+                {
+                    // ヒステリシス: 開/閉で別のしきい値を使う。
+                    //  傾斜(ソフトニー)でゲインを連続的に動かすと、入力が
+                    //  しきい値付近にあるとき数秒周期のポンピングになるため、
+                    //  ON/OFF の2値にしてランプで繋ぐ。
+                    //  通常の演奏レベル(-40dBFS以上)では常に開いたまま動かない。
+                    if (mGateOpen) { if (mInEnvSm < kGateCloseTh) mGateOpen = false; }
+                    else           { if (mInEnvSm > kGateOpenTh)  mGateOpen = true;  }
+                    gTarget = mGateOpen ? 1.0f : 0.0f;
+                }
+                else
+                {
+                    mGateOpen = true;
+                }
+                // 開くのは速く(15ms)、閉じるのは緩やかに(150ms)＝余韻を切らない
+                const float cf = (gTarget > mGateSm) ? mGateOpenCoef : mGateCloseCoef;
+                mGateSm += cf * (gTarget - mGateSm);
+            }
+            const float gateGain = mGateSm;
 
             // 線形補間アップサンプリング。
             //
@@ -1073,6 +1095,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
             mUpsampleTimeAccum += step;
         }
+        mInputEnvelope.store(mInEnvSm);   // 表示用
         mUpsampleTimeAccum -= (double)num16kSamples;
         // ここで範囲を丸めてはいけない (上のコメント参照)。
         // 壊れた値(NaN/Inf や桁あふれ)のときだけリセットする。
@@ -1219,6 +1242,9 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mFmtStretchSm = apvts.getRawParameterValue("formantStretch")->load();
             mPitchLogSmooth = -1.0f;
             mInputEnvelope.store(0.0f);
+            mInEnvSm  = 0.0f;
+            mGateSm   = 0.0f;
+            mGateOpen = false;
             return;   // このブロックは無音で返す
         }
     }
