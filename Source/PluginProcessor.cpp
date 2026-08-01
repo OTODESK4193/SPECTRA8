@@ -826,12 +826,18 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             const float voicedNow = mPitchTracker.isVoiced() ? 1.0f : 0.0f;
             mVoicedSmooth += 0.25f * (voicedNow - mVoicedSmooth);
             float noise; // ExcitationEngine::syncParameters が受け取る 0..1 のmix
-            if (mCurVocoderMode == 1) // LPCモード: -1=除去 / 0=自動V/UV / +1=全ノイズ
+            if (mCurVocoderMode == 1) // LPCモード: -1=自動V/UV切 / 0=自動V/UV / +1=全ノイズ
             {
-                const float autoMix = 1.0f - mVoicedSmooth;            // 無声=1.0, 有声=0.0
-                noise = (noiseSigned >= 0.0f)
-                          ? autoMix + noiseSigned * (1.0f - autoMix)   // 0→auto, +1→1.0
-                          : autoMix * (1.0f + noiseSigned);            // 0→auto, -1→0.0
+                // 【修正F 2026-08-02】自動V/UVは LpcVocoder 側へ移設した。
+                //  理由: ここのノイズは NOISE COLOR の BPF (既定1kHz) を通った有色雑音で、
+                //  歯擦音の 5-8kHz を鳴らせない。さらに ExcitationEngine の出力は
+                //  LpcVocoder 側で白色化(プリエンファシス)されるため二重に色が付く。
+                //  LpcVocoder は白色化後に真の白色雑音を混ぜるので U/V 切替が正しく働く。
+                //  ここには NOISE± の「手動で足す有色ノイズ」ぶんだけを渡す。
+                //  NOISE± の負側は「自動V/UVの深さを下げる」指定として LpcVocoder へ送る
+                //  (-100% で自動切替オフ = 常にキャリア励起のレトロなブザー声)。
+                noise = juce::jmax(0.0f, noiseSigned);
+                mLpcVocoder.setUnvoicedAuto(noiseSigned < 0.0f ? (1.0f + noiseSigned) : 1.0f);
             }
             else // Filterbankモード: 従来通り(負値は0)
             {
@@ -947,9 +953,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         const float lpcGamma = 0.970f + 0.028f * juce::jlimit(0.0f, 1.0f, effectiveCharacter);
         auto renderLpc = [&](float& l, float& r)
         {
-            // FMT SHIFT(リサンプル比) / FMT STRETCH(LSP領域の間隔伸縮)をLPCへ渡す
+            // FMT SHIFT(リサンプル比) / FMT STRETCH(LSP領域の間隔伸縮)をLPCへ渡す。
+            // 【修正F】有声らしさの連続値を渡し、無声(歯擦音・息)では白色雑音励起へ切り替える。
             mLpcVocoder.processSample(inSample, carrierL, carrierR, l, r, lpcOrder, lpcFreeze,
-                                      lpcGamma, mFmtShiftSm, mFmtStretchSm);
+                                      lpcGamma, mFmtShiftSm, mFmtStretchSm,
+                                      mPitchTracker.getVoicedAmount());
             // BANDS EQ をポストEQとしてLPC出力へ適用 (クロスフェード時もLPC側のみに掛かる)
             mPostEq.process(l, r);
 

@@ -45,6 +45,7 @@ public:
         clarity = 0.0f;
         voiced = false;
         unvoicedHfRatio = 0.0f;
+        voicedAmount = 0.0f;
         wasVoicedPrev = false;
         rawHist[0] = rawHist[1] = rawHist[2] = 130.0f;
     }
@@ -85,6 +86,12 @@ public:
     bool  isVoiced() const noexcept { return voiced; }
     float getClarity() const noexcept { return clarity; }
     float getUnvoicedHfRatio() const noexcept { return unvoicedHfRatio; }
+
+    // 有声らしさの連続値 (0=完全に無声/雑音的, 1=完全に有声)。
+    //  isVoiced() が使う voicedScore (clarity - 0.5·zcr - 0.4·hf比) を、
+    //  同関数のシュミットトリガー閾値 0.40/0.55 を跨ぐ帯 0.35〜0.60 で 0→1 に正規化したもの。
+    //  LPCの有声/無声自動励起切替 (LpcVocoder::processSample の voicing 引数) に使う。
+    float getVoicedAmount() const noexcept { return voicedAmount; }
 
 private:
     void computeLowpass(double fc)
@@ -130,6 +137,7 @@ private:
 
         if (rms < 1e-4f)  // 無音
         {
+            voicedAmount *= 0.5f;   // 無音では徐々に無声側へ
             setVoiced(false);
             if (!voiced) wasVoicedPrev = false;
             return;
@@ -190,6 +198,7 @@ private:
 
         if (bestTau <= 0)
         {
+            voicedAmount = 0.0f;    // 周期ピーク無し = 明確に無声(雑音)
             setVoiced(false);
             if (!voiced) wasVoicedPrev = false;
             return;
@@ -215,6 +224,9 @@ private:
         // --- 多角的V/UV判定 + シュミットトリガー ---
         //   有声: clarity高 & ZCR低 & 高域比低
         const float voicedScore = clarity - 0.5f * zcr - 0.4f * unvoicedHfRatio;
+        // シュミットトリガー閾値(0.40/0.55)を跨ぐ帯で 0→1 に正規化した連続版。
+        // 無声励起の自動切替はこの連続値でクロスフェードするのでパチつかない。
+        voicedAmount = juce::jlimit(0.0f, 1.0f, (voicedScore - 0.35f) / 0.25f);
         const bool wantVoiced = voiced ? (voicedScore > 0.40f)   // 維持しきい値（低）
                                        : (voicedScore > 0.55f);  // 開始しきい値（高）
         setVoiced(wantVoiced && hz >= kMinHz && hz <= kMaxHz);
@@ -308,6 +320,7 @@ private:
     float smoothedHz = 130.0f;
     float clarity = 0.0f;
     float unvoicedHfRatio = 0.0f;
+    float voicedAmount = 0.0f;   // 有声らしさの連続値 (getVoicedAmount)
     bool voiced = false;
     int voicedHold = 0;
 

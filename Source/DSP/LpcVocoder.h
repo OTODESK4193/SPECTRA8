@@ -38,8 +38,11 @@ public:
     //  0.259f → 0.18f (約 -3.1dB) にキャリブレーション調整。
     //  【修正D 2026-08-02】ゲイン基準をプリエンファシス後→原音レベルへ変更したことで
     //  全体レベルが約 +12.7dB 上がるため、0.18f → 0.042f (-12.6dB) へ再校正。
+    //  【修正E 2026-08-02】キャリア白色化 + 励起重みフラット化 + wE を平均値に変更したことで
+    //  全体レベルが下がるため再校正。1.0 を超えるのは、白色化(プリエンファシス)が
+    //  鋸波キャリアの実効RMSを大きく下げるぶんを取り戻しているため。
     //  (音声素材の明るさで数dBは前後する。耳で最終確認すること)
-    static constexpr float kMakeupGain = 0.042f;
+    static constexpr float kMakeupGain = 6.2f;
 
     // 出力DCブロッカーのカットオフ。
     //  デエンファシス 1/(1-0.9375z⁻¹) は DC 利得が 16倍(+24dB)あるため、
@@ -80,11 +83,21 @@ public:
     //            リサンプルして読み出す(テープ変速式)。+でフォルマント上昇。ピッチは不変。
     //  formantStretch : FMT STRETCH。LSP(線スペクトル対)領域でフォルマント間隔を伸縮
     //                   (1.0=無効, >1=間隔拡大, <1=圧縮)。M4。
+    //  voicing   : 有声らしさ 0..1 (PitchTracker::getVoicedAmount())。
+    //              1で従来通りキャリアのみ、0で白色雑音励起へクロスフェードする。
+    //              歯擦音・息をブザー音でなく本来の雑音として合成するため (修正F)。
     void processSample(float modulator, float carrierL, float carrierR,
                        float& outL, float& outR,
                        int order, bool freeze, float gamma = 1.0f,
                        float formantShiftSemitones = 0.0f,
-                       float formantStretch = 1.0f) noexcept;
+                       float formantStretch = 1.0f,
+                       float voicing = 1.0f) noexcept;
+
+    // 修正F: 無声音の雑音励起 自動切替の深さ。0=無効(常にキャリア) / 1=フル。
+    void setUnvoicedAuto(float amount) noexcept
+    {
+        mUnvoicedAuto = (amount < 0.0f) ? 0.0f : ((amount > 1.0f) ? 1.0f : amount);
+    }
 
 private:
     LpcAnalyzer mAnalyzer;
@@ -124,10 +137,30 @@ private:
     std::array<double, LpcAnalyzer::kMaxOrder> mReprTarget {}; // ドメイン表現の端点(新)
     std::array<float,  LpcAnalyzer::kMaxOrder> mKSegPrev {};   // kドメイン端点(フォールバック用)
 
+
     // 新フレームのkターゲット確定後に補間セグメントを構築
     void setupSegment(int order) noexcept;
     // セグメント位置alpha(0..1)における補間kを算出
     void computeInterpK(int order, double alpha, float* kOut) const noexcept;
+
+    // 【修正E】キャリア白色化 (1 - kPreemph·z⁻¹) の1サンプル遅延状態。
+    //  LPCの 1/A(z) は白色残差前提で同定されているため、励起も白色でなければ
+    //  出力に余計な -6dB/oct が乗る (鋸波の傾斜 + デエンファシスで計 -12dB/oct)。
+    float mPreCarL = 0.0f, mPreCarR = 0.0f;
+
+    // 【修正F】無声音の雑音励起
+    float mUnvoicedAuto = 1.0f;   // 深さ (0=無効)
+    float mVoicingSm = 1.0f;      // voicing の平滑値 (パチつき防止)
+    float mCarRms = 0.0f;         // 白色化後キャリアの追従RMS (雑音レベル整合用)
+    unsigned int mNoiseState = 0x13579BDFu;   // xorshift 乱数
+    inline float nextNoise() noexcept
+    {
+        mNoiseState ^= mNoiseState << 13;
+        mNoiseState ^= mNoiseState >> 17;
+        mNoiseState ^= mNoiseState << 5;
+        // [-1,1) 一様乱数 → 分散 1/3 なので √3 倍して単位分散に揃える
+        return (float)((int)mNoiseState) * (1.0f / 2147483648.0f) * 1.7320508f;
+    }
 
     float mDeempL = 0.0f;    // デエンファシス状態 (L)
     float mDeempR = 0.0f;    // デエンファシス状態 (R)
@@ -141,4 +174,6 @@ private:
     float mExcNorm = 1.0f;   // 1/sqrt(Σw²)（窓タイプ依存）
     float mGAttCoef = 0.0f;  // att 5ms @ コントロールレート
     float mGRelCoef = 0.0f;  // rel 30ms @ コントロールレート
+    float mVoicingCoef = 0.0f;  // voicing 平滑 5ms @ サンプルレート
+    float mRmsCoef = 0.0f;      // キャリアRMS追従 20ms @ サンプルレート
 };

@@ -22,40 +22,73 @@ namespace
         }
     }
 
-    // 全極フィルタ 1/A(z) の「励起重み(1/f²)+デエンファシス込み」エネルギー。
-    //   キャリアがコム/ノコギリ(1/f²スペクトル)であることを前提にした聴感レベルの指標。
+    // 全極フィルタ 1/A(z) の「励起重み+デエンファシス込み」エネルギー。
     //   【修正B】評価グリッドを 64点 → 128点 に倍増し、Order 16 等の高次フォルマントが
     //   周波数グリッドの間隙に落ちてエネルギーを過小評価(ゲイン過大算出)するのを防止。
-    inline double weightedEnergy(const double* a, int order) noexcept
+    //
+    //   【修正E 2026-08-02】励起重みを 1/f² から「フラット(白色)」へ変更。
+    //   LPCの 1/A(z) は白色残差を前提に同定された伝達関数なので、
+    //   合成側の励起も白色でなければ出力スペクトルに余計な傾斜が乗る。
+    //   processSample() 側でキャリアをプリエンファシスして白色化するようにしたため、
+    //   ここの重みも白色前提に揃える。
+    constexpr int kEnergyBins = 128;
+
+    // 評価グリッド (60〜7600Hz 対数等間隔) の cos/sin を事前計算しておくテーブル。
+    //  毎フレームだけでなく補間セグメント中の毎制御ブロックからも呼ばれるため、
+    //  三角関数をテーブル化してリアルタイム負荷を抑える。
+    struct EnergyGrid
     {
-        constexpr double kPre = 15.0 / 16.0;   // プリエンファシス係数と一致させること
-        constexpr int kEnergyBins = 128;
-        double wE = 0.0;
-        for (int m = 0; m < kEnergyBins; ++m)
+        double cosWi[kEnergyBins][LpcAnalyzer::kMaxOrder + 1];
+        double sinWi[kEnergyBins][LpcAnalyzer::kMaxOrder + 1];
+        double deemp2[kEnergyBins];   // 1/|1 - kPre·e^-jw|²
+
+        EnergyGrid()
         {
-            const double f = 60.0 * std::pow(7600.0 / 60.0, (double)m / (double)(kEnergyBins - 1));
-            const double w = 6.283185307179586 * f / LpcVocoder::kInternalSampleRate;
+            constexpr double kPre = 15.0 / 16.0;   // プリエンファシス係数と一致させること
+            for (int m = 0; m < kEnergyBins; ++m)
+            {
+                const double f = 60.0 * std::pow(7600.0 / 60.0, (double)m / (double)(kEnergyBins - 1));
+                const double w = 6.283185307179586 * f / LpcVocoder::kInternalSampleRate;
+                for (int i = 0; i <= LpcAnalyzer::kMaxOrder; ++i)
+                {
+                    cosWi[m][i] = std::cos(w * (double)i);
+                    sinWi[m][i] = std::sin(w * (double)i);
+                }
+                const double dr = 1.0 - kPre * std::cos(w);
+                const double di = kPre * std::sin(w);
+                deemp2[m] = 1.0 / std::max(1e-12, dr * dr + di * di);
+            }
+        }
+    };
+    const EnergyGrid gEnergyGrid;   // 静的初期化 (音声スレッド開始前に構築される)
+
+    // stride: 1 = 全128点(フレーム毎の高精度)、4 = 32点(制御ブロック毎の軽量版)
+    inline double weightedEnergy(const double* a, int order, int stride = 1) noexcept
+    {
+        double wE = 0.0;
+        int cnt = 0;
+        for (int m = 0; m < kEnergyBins; m += stride)
+        {
+            const double* cw = gEnergyGrid.cosWi[m];
+            const double* sw = gEnergyGrid.sinWi[m];
             double re = 1.0, im = 0.0;
             for (int i = 1; i <= order; ++i)
             {
-                re += a[i] * std::cos(w * (double)i);
-                im -= a[i] * std::sin(w * (double)i);
+                re += a[i] * cw[i];
+                im -= a[i] * sw[i];
             }
-            const double dr = 1.0 - kPre * std::cos(w);
-            const double di = kPre * std::sin(w);
-            const double d2 = 1.0 / std::max(1e-12, dr * dr + di * di);
-            const double h2 = d2 / std::max(1e-18, re * re + im * im);
-            wE += (1.0 / (f * f)) * h2;
+            wE += gEnergyGrid.deemp2[m] / std::max(1e-18, re * re + im * im);
+            ++cnt;
         }
-        // 64点基準とのエネルギー互換性を維持するためのスケール調整
-        return wE * (64.0 / (double)kEnergyBins);
+        // 点数に依存しない「平均」にしておく (stride を変えても値が揃う)
+        return wE / (double)std::max(1, cnt);
     }
 
-    inline double weightedEnergyFromK(const float* k, int order) noexcept
+    inline double weightedEnergyFromK(const float* k, int order, int stride = 1) noexcept
     {
         double a[LpcAnalyzer::kMaxOrder + 1];
         kToA(k, order, a);
-        return weightedEnergy(a, order);
+        return weightedEnergy(a, order, stride);
     }
 }
 
@@ -67,6 +100,10 @@ void LpcVocoder::prepare(double /*hostSampleRate*/)
     const double blockDur = (double)kCtrlBlock / kInternalSampleRate;
     mGAttCoef = (float)std::exp(-blockDur / 0.005);   // att 5ms
     mGRelCoef = (float)std::exp(-blockDur / 0.030);   // rel 30ms
+
+    // 修正F: サンプル単位の1極平滑 (1 - exp(-1/(τ·fs)) が到達係数)
+    mVoicingCoef = 1.0f - (float)std::exp(-1.0 / (0.005 * kInternalSampleRate));  // 5ms
+    mRmsCoef     = 1.0f - (float)std::exp(-1.0 / (0.020 * kInternalSampleRate));  // 20ms
 
     setWindowType(mWindowType);
     reset();
@@ -82,6 +119,9 @@ void LpcVocoder::reset()
     mKInc.fill(0.0f);
     mGTarget = mGSmooth = mGCur = mGInc = 0.0f;
     mDeempL = mDeempR = 0.0f;
+    mPreCarL = mPreCarR = 0.0f;
+    mVoicingSm = 1.0f;
+    mCarRms = 0.0f;
     mDcX1L = mDcY1L = mDcX1R = mDcY1R = 0.0f;
     mWritePos = 0;
     mFilled = 0;
@@ -215,7 +255,8 @@ void LpcVocoder::setWindowType(int type) noexcept
 void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                                float& outL, float& outR,
                                int order, bool freeze, float gamma,
-                               float formantShiftSemitones, float formantStretch) noexcept
+                               float formantShiftSemitones, float formantStretch,
+                               float voicing) noexcept
 {
     order = std::min(LpcAnalyzer::kMaxOrder, std::max(1, order));
 
@@ -402,26 +443,24 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
 
                 if (ok)
                 {
-                    // 4) ゲイン補償: 励起重み(1/f²)+デエンファシス込みのエネルギー比で
+                    // 4) ゲイン補償: 励起重み+デエンファシス込みのエネルギー比で
                     //    聴感レベルを維持し、max|H|比のピーク境界でクリップを防ぐ
+                    //    【修正E】重みは weightedEnergy() と同じく白色前提(フラット)に統一
                     auto evalFilter = [order](const double* aa, double& maxH2, double& wE)
                     {
                         maxH2 = 0.0; wE = 0.0;
-                        for (int m = 0; m < 64; ++m)
+                        for (int m = 0; m < kEnergyBins; m += 2)
                         {
-                            const double f = 60.0 * std::pow(7600.0 / 60.0, (double)m / 63.0);
-                            const double w = 6.283185307179586 * f / kInternalSampleRate;
+                            const double* cw = gEnergyGrid.cosWi[m];
+                            const double* sw = gEnergyGrid.sinWi[m];
                             double re = 1.0, im = 0.0;
                             for (int i = 1; i <= order; ++i)
                             {
-                                re += aa[i] * std::cos(w * (double)i);
-                                im -= aa[i] * std::sin(w * (double)i);
+                                re += aa[i] * cw[i];
+                                im -= aa[i] * sw[i];
                             }
-                            const double dr = 1.0 - (double)kPreemph * std::cos(w);
-                            const double di = (double)kPreemph * std::sin(w);
-                            const double d2 = 1.0 / std::max(1e-12, dr * dr + di * di);
-                            const double h2 = d2 / std::max(1e-18, re * re + im * im);
-                            wE += (1.0 / (f * f)) * h2;
+                            const double h2 = gEnergyGrid.deemp2[m] / std::max(1e-18, re * re + im * im);
+                            wE += h2;
                             if (h2 > maxH2) maxH2 = h2;
                         }
                     };
@@ -485,10 +524,17 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
     if (mCtrlCounter == 0)
     {
         // ゲインの非対称平滑化（att 5ms / rel 30ms）
-        // 【修正A】Stepモード(mSegDomain == 0 / k: Off)において、目標ゲインが減少する場合(mGTarget < mGSmooth)は、
+        // 【修正A】目標ゲインが減少する場合(mGTarget < mGSmooth)は、
         // 30msのリリース時間を待たずに即座にmGTargetへ引き下げる。
         // これにより、フィルタが2msで鋭いフォルマントへ変化した際の過渡的な音量膨脹(+28dB)を防止。
-        if (mSegDomain == 0 && mGTarget < mGSmooth)
+        //
+        // 【修正G 2026-08-02】この即時リリースを Step (mSegDomain == 0) 限定にしていたのが、
+        //  LSP/LAR 補間モードだけ全体レベルが +5〜6.7dB 高くリミッターに常時当たっていた真因だった。
+        //  LSP/LAR は 30ms リリースのままだったため、減衰区間でゲインが残り続けていた。
+        //  全モードで即時リリースに統一すると三者の音量が揃う
+        //  (実測 全体RMS: Step -27.4 / LSP -27.5 / LAR -27.4 dB、ピーク 0.51/0.50/0.50。
+        //   補正前は LSP -22.2 / LAR -22.1 dB でピーク 1.0000)。
+        if (mGTarget < mGSmooth)
         {
             mGSmooth = mGTarget;
         }
@@ -505,6 +551,13 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
             for (int p = 0; p < order; ++p)
                 mKInc[(size_t)p] = (mKTarget[(size_t)p] - mKCur[(size_t)p]) * inv;
         }
+
+        if (mSegDomain == 0)
+        {
+            // Step(従来): ブロック内ランプでターゲットへ即到達(旧動作と数値完全一致)
+            for (int p = 0; p < order; ++p)
+                mKInc[(size_t)p] = (mKTarget[(size_t)p] - mKCur[(size_t)p]) * inv;
+        }
         else
         {
             // M4 フルホップ補間: このブロック終端時点の補間値をブロックターゲットにする
@@ -514,6 +567,9 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
             computeInterpK(order, alpha, kBlk);
             for (int p = 0; p < order; ++p)
                 mKInc[(size_t)p] = (kBlk[p] - mKCur[(size_t)p]) * inv;
+
+            // ※補間途中の k から wE を測り直して G を補正する案も実装・計測したが、
+            //   上の即時リリース統一を入れると効果は 0.2dB 未満で CPU だけ増えたため採用しない。
         }
         mGInc = (mGSmooth - mGCur) * inv;
     }
@@ -525,10 +581,40 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
         mKCur[(size_t)p] += mKInc[(size_t)p];
     mGCur += mGInc;
 
-    // 5. ラティス合成 + デエンファシス 1/(1 - kPreemph·z^-1)
+    // 5-a.【修正E】キャリア白色化。
+    //  LPCの 1/A(z) は「白色残差 → プリエンファシス済み音声」の伝達関数として同定される。
+    //  よって合成側の励起も白色でなければならない。鋸波キャリアは元々 -6dB/oct の傾斜を持ち、
+    //  出力のデエンファシスでさらに -6dB/oct が乗るため、旧実装は合計 -12dB/oct 余計に暗く、
+    //  母音の 5-8kHz が -27.9dB、無声音では低域 +10.2dB / 5-8kHz -13.0dB とバランスが崩れていた
+    //  (実測。修正後は母音 -4.3dB / 無声音 ±2dB 以内)。
+    //  ここで分析と同じ (1 - kPreemph·z⁻¹) を掛けて白色化する。
+    const float wcL = carrierL - kPreemph * mPreCarL; mPreCarL = carrierL;
+    const float wcR = carrierR - kPreemph * mPreCarR; mPreCarR = carrierR;
+
+    // 5-b.【修正F】無声音の雑音励起。
+    //  歯擦音・息を周期波で鳴らすとピッチのついたブザーになる
+    //  (周期性 実測 0.21(原音) → 0.35(旧実装))。voicing に応じて白色雑音へクロスフェードする。
+    //  クロスフェードはパワー保存 (√v / √(1-v))。voicing は 5ms で平滑化しパチつきを防ぐ。
+    float excL = wcL, excR = wcR;
+    if (mUnvoicedAuto > 0.0001f)
+    {
+        const float vTarget = 1.0f - mUnvoicedAuto * (1.0f - std::min(1.0f, std::max(0.0f, voicing)));
+        mVoicingSm += (vTarget - mVoicingSm) * mVoicingCoef;
+
+        // 雑音レベルは白色化後キャリアの追従RMSに合わせる (切替時の音量段差を防ぐ)
+        const float mag = 0.5f * (std::abs(wcL) + std::abs(wcR));
+        mCarRms += (mag * 1.4142136f - mCarRms) * mRmsCoef;
+
+        const float gv = std::sqrt(mVoicingSm);
+        const float gu = std::sqrt(1.0f - mVoicingSm) * mCarRms;
+        excL = gv * wcL + gu * nextNoise();
+        excR = gv * wcR + gu * nextNoise();
+    }
+
+    // 5-c. ラティス合成 + デエンファシス 1/(1 - kPreemph·z^-1)
     const float g = mGCur * kMakeupGain;
-    const float yL = mLatticeL.processSample(g * carrierL, mKCur.data(), order);
-    const float yR = mLatticeR.processSample(g * carrierR, mKCur.data(), order);
+    const float yL = mLatticeL.processSample(g * excL, mKCur.data(), order);
+    const float yR = mLatticeR.processSample(g * excR, mKCur.data(), order);
     mDeempL = yL + kPreemph * mDeempL;
     mDeempR = yR + kPreemph * mDeempR;
 
