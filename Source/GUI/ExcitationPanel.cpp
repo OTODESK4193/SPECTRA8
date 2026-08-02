@@ -226,6 +226,10 @@ void ExcitationPanel::timerCallback()
 
     for (const auto& e : map)
         ModRing::apply(*e.first, mm, e.second);
+
+    // 変調で動く波形を実時間で描く。setParams / setMorph / setCustomWave は
+    // いずれも変化検出付きなので、動いていないときは repaint が走らない。
+    refreshWaveformDisplay();
 }
 
 ExcitationPanel::~ExcitationPanel()
@@ -272,11 +276,28 @@ void ExcitationPanel::applyDetuneSnap()
         mKnobDetune.setValue(q, juce::sendNotificationSync);
 }
 
+// ノブの生値ではなく「変調後の実効値」を返す。
+//  DSP側と同じ ModMatrix::applyMod を通すので、表示と実際に鳴っている波形が必ず一致する
+//  (ModRing のライブ位置ドットと同じ仕組み)。
+float ExcitationPanel::moddedForDisplay(int dst, const juce::Slider& knob) const
+{
+    const auto& mm = processor.getModMatrix();
+    const auto range = knob.getNormalisableRange();
+    const float base = (float)knob.getValue();
+    const float v = ModMatrix::applyMod(dst, base, mm.get(dst));
+    return juce::jlimit((float)range.start, (float)range.end, v);
+}
+
 void ExcitationPanel::refreshWaveformDisplay()
 {
+    using M = ModMatrix;
+
     const int type = (int)apvts.getRawParameterValue("waveform")->load();
-    const float pw  = apvts.getRawParameterValue("pulseWidth")->load() * 0.01f;   // 5..95% → 0.05..0.95
-    const float wt  = apvts.getRawParameterValue("wavetablePosition")->load();     // 0..1
+    // 【2026-08-02】以前は getRawParameterValue (=ノブの生値) を読んでいたため、
+    //  LFO や ENV で WT POSITION / PULSE WIDTH / MORPH を動かしても表示が止まっていた。
+    //  変調後の実効値を使い、下の timerCallback から毎フレーム呼ぶことで波形が実時間で動く。
+    const float pw  = moddedForDisplay(M::DstPulseWidth, mKnobPulseWidth) * 0.01f; // 5..95% → 0.05..0.95
+    const float wt  = moddedForDisplay(M::DstWtPos,      mKnobWtPos);              // 0..1
 
     // カスタムWT使用中は実波形を表示へ反映
     if (type == 2 && processor.hasCustomWavetable())
@@ -284,22 +305,33 @@ void ExcitationPanel::refreshWaveformDisplay()
         float buf[256];
         processor.getExcitationEngine().getWavetable().getDisplayWave(wt, buf, 256);
         mWaveDisplay.setCustomWave(buf, 256);
-        mLblCustomName.setText("WT: " + juce::File(processor.getCustomWavetablePath()).getFileName(),
-                               juce::dontSendNotification);
+
+        // ファイル名は毎フレーム作り直すと juce::File + String の割り当てが載るのでキャッシュする
+        const juce::String path = processor.getCustomWavetablePath();
+        if (path != mLastWtPathForLabel)
+        {
+            mLastWtPathForLabel = path;
+            mLblCustomName.setText("WT: " + juce::File(path).getFileName(),
+                                   juce::dontSendNotification);
+        }
     }
     else
     {
         mWaveDisplay.setCustomWave(nullptr, 0);
-        mLblCustomName.setText("WT: Factory", juce::dontSendNotification);
+        if (mLastWtPathForLabel.isNotEmpty())
+        {
+            mLastWtPathForLabel.clear();
+            mLblCustomName.setText("WT: Factory", juce::dontSendNotification);
+        }
     }
 
     mWaveDisplay.setParams(type, pw, wt);
-    mWaveDisplay.setMorph(apvts.getRawParameterValue("bendAmt")->load(),
-                          apvts.getRawParameterValue("bendShift")->load(),
-                          apvts.getRawParameterValue("syncAmt")->load(),
-                          apvts.getRawParameterValue("syncShift")->load(),
-                          apvts.getRawParameterValue("vocAmt")->load(),
-                          apvts.getRawParameterValue("vocShift")->load());
+    mWaveDisplay.setMorph(moddedForDisplay(M::DstBendAmt,   mKnobBendAmt),
+                          moddedForDisplay(M::DstBendShift, mKnobBendShift),
+                          moddedForDisplay(M::DstSyncAmt,   mKnobSyncAmt),
+                          moddedForDisplay(M::DstSyncShift, mKnobSyncShift),
+                          moddedForDisplay(M::DstVocAmt,    mKnobVocAmt),
+                          moddedForDisplay(M::DstVocShift,  mKnobVocShift));
 }
 
 void ExcitationPanel::updateBrowseVisibility()

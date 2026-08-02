@@ -702,8 +702,11 @@ public:
 
             const float dL = combL[(size_t)i].read(mL);
             const float dR = combR[(size_t)i].read(mR);
-            combL[(size_t)i].write(inL + dampL[(size_t)i].lp(dL, mDamp) * mFeedback);
-            combR[(size_t)i].write(inR + dampR[(size_t)i].lp(dR, mDamp) * mFeedback);
+            // 帰還にソフトクリップを噛ませる (Resonator と同じ保険)。
+            // fb<1 なので発散はしないが、SIZE 最大では定常利得が 1/(1-0.98)≒50倍(+34dB)
+            // まで積み上がりうる。ここで頭打ちにしておく。
+            combL[(size_t)i].write(fxutil::softClip(inL + dampL[(size_t)i].lp(dL, mDamp) * mFeedback));
+            combR[(size_t)i].write(fxutil::softClip(inR + dampR[(size_t)i].lp(dR, mDamp) * mFeedback));
             wetL += dL;
             wetR += dR;
         }

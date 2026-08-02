@@ -159,8 +159,12 @@ private:
     static constexpr int kBufferMask = kBufferSize - 1;
     std::vector<float> mRing;
     std::vector<float> mLocal;
-    std::atomic<int> mWritePos { 0 };
-    int mReadPos = 0;
+    // 【2026-08-02 修正】符号付き int だと 2^31 サンプル (44.1kHz で約13.5時間) で
+    //  オーバーフローし、符号付き整数の折り返しは未定義動作。DAWを長時間開いたままに
+    //  すると解析表示が壊れる。unsigned なら折り返しが規格上定義され、差分
+    //  (currentWrite - mReadPos) も正しい値になる。
+    std::atomic<unsigned int> mWritePos { 0 };
+    unsigned int mReadPos = 0;
 
     double mSampleRate = 44100.0;
 

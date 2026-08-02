@@ -18,6 +18,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <algorithm>
 #include <cmath>
 #include <vector>
 #include "ColorPalette.h"
@@ -94,10 +95,20 @@ public:
     // カスタムWavetableの実波形 (n点) を表示に使う。nullptrで解除。
     void setCustomWave(const float* data, int n)
     {
+        // 毎フレーム呼ばれるので、実際に中身が変わったときだけ再描画する
         if (data != nullptr && n > 1)
+        {
+            if ((int)mCustom.size() == n
+                && std::equal(mCustom.begin(), mCustom.end(), data))
+                return;
             mCustom.assign(data, data + n);
+        }
         else
+        {
+            if (mCustom.empty())
+                return;
             mCustom.clear();
+        }
         repaint();
     }
 
@@ -346,6 +357,10 @@ private:
     juce::TextButton mBtnBrowse { "BROWSE" };
     juce::TextButton mBtnAddDir { "ADD DIR" };
     WaveformDisplay mWaveDisplay;
+
+    // 変調後の実効値 (表示用)。DSPと同じ ModMatrix::applyMod を通す。
+    float moddedForDisplay(int dst, const juce::Slider& knob) const;
+    juce::String mLastWtPathForLabel;   // ラベル再構築を避けるためのキャッシュ
 
     bool mBrowserOpen = false;
     juce::ListBox mCatList;

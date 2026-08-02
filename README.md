@@ -260,6 +260,22 @@ cmake --build build --config Release
 * **EDM vocal chop:** FX Gate with RATE 1/16, SHAPE 0.5, and VOWEL up around 0.6.
 
 
+## Disclaimer
+
+**Please read before use.**
+
+SPECTRA 8 is a vocoder with resonant filter banks, an all-pole LPC synthesis lattice, feedback-based effects (Resonator, Reverb, Chorus), and a modulation matrix that can drive any of them. Certain combinations of settings — high RESONANCE, low LPC ORDER with high CHARACTER, long Resonator DECAY, large Reverb SIZE, or modulation applied to those controls — can produce sudden, extremely loud output.
+
+* **Always keep a limiter in the signal path.** SPECTRA 8's output stage runs a brick-wall limiter with a fixed ceiling of −0.1 dBFS, and the **LIMIT** button defaults to on. Do not switch it off unless you have another limiter after it. Placing an additional limiter on your master bus is strongly recommended.
+* **Start at low monitoring levels**, especially when using headphones, when auditioning unfamiliar presets, or when experimenting with the modulation matrix.
+* **Take particular care with FREEZE and with the Resonator.** Freezing the vocal tract model while feeding it a sustained carrier, or driving the Resonator with a long DECAY, can build up energy over several seconds rather than instantly — the level may keep rising after you stop touching the controls.
+* **Protect your hearing and your equipment.** Sudden loud output can cause permanent hearing damage and can damage speakers, headphones, and other audio equipment.
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY — INCLUDING BUT NOT LIMITED TO HEARING DAMAGE, DAMAGE TO AUDIO EQUIPMENT, DATA LOSS, OR LOST WORK — WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+**You use this software entirely at your own risk.**
+
+
 ## License
 
 This project is licensed under the GNU Affero General Public License v3.0 (AGPLv3) — see [LICENSE](LICENSE) for details.

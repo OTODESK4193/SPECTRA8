@@ -64,8 +64,8 @@ void AnalyzerDSP::prepare(double newSampleRate)
         mBands[(size_t)i].reset();
     }
 
-    mWritePos.store(0, std::memory_order_relaxed);
-    mReadPos = 0;
+    mWritePos.store(0u, std::memory_order_relaxed);
+    mReadPos = 0u;
     std::fill(mRing.begin(), mRing.end(), 0.0f);
     mLocal.clear();
 }
@@ -75,10 +75,10 @@ void AnalyzerDSP::pushAudio(const float* data, int numSamples) noexcept
     if (data == nullptr || numSamples <= 0)
         return;
 
-    const int wp = mWritePos.load(std::memory_order_relaxed);
+    const unsigned int wp = mWritePos.load(std::memory_order_relaxed);
     for (int i = 0; i < numSamples; ++i)
-        mRing[(size_t)((wp + i) & kBufferMask)] = data[i];
-    mWritePos.store(wp + numSamples, std::memory_order_release);
+        mRing[(size_t)((wp + (unsigned int)i) & (unsigned int)kBufferMask)] = data[i];
+    mWritePos.store(wp + (unsigned int)numSamples, std::memory_order_release);
 }
 
 void AnalyzerDSP::run()
@@ -90,12 +90,12 @@ void AnalyzerDSP::run()
         if (threadShouldExit())
             break;
 
-        const int currentWrite = mWritePos.load(std::memory_order_acquire);
-        int available = currentWrite - mReadPos;
+        const unsigned int currentWrite = mWritePos.load(std::memory_order_acquire);
+        int available = (int)(currentWrite - mReadPos);   // unsigned差は折り返しても正しい
 
         if (available > kBufferSize)
         {
-            mReadPos = currentWrite - kBufferSize;   // オーバーフロー時は最新側へ飛ばす
+            mReadPos = currentWrite - (unsigned int)kBufferSize;   // オーバーフロー時は最新側へ飛ばす
             available = kBufferSize;
         }
 
@@ -103,7 +103,7 @@ void AnalyzerDSP::run()
         {
             mLocal.resize((size_t)available);
             for (int i = 0; i < available; ++i)
-                mLocal[(size_t)i] = mRing[(size_t)((mReadPos + i) & kBufferMask)];
+                mLocal[(size_t)i] = mRing[(size_t)((mReadPos + (unsigned int)i) & (unsigned int)kBufferMask)];
             mReadPos = currentWrite;
 
             processInternal(mLocal.data(), available);

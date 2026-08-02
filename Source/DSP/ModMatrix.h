@@ -18,6 +18,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <atomic>
 #include <array>
 #include <cmath>
 
@@ -292,9 +293,9 @@ public:
         randomSH = 0.5f;
         heldNotes = 0;
         gate = false;
-        destAccum.fill(0.0f);
-        rangeMin.fill(0.0f);
-        rangeMax.fill(0.0f);
+        clearArr(destAccum);
+        clearArr(rangeMin);
+        clearArr(rangeMax);
     }
 
     // 入力MIDIからソース値を更新
@@ -443,9 +444,9 @@ public:
         src[SrcRandom] = randomSH;
 
         // --- スロット合成 (Uni/Bipolar極性変換 + レンジ算出) ---
-        destAccum.fill(0.0f);
-        rangeMin.fill(0.0f);
-        rangeMax.fill(0.0f);
+        clearArr(destAccum);
+        clearArr(rangeMin);
+        clearArr(rangeMax);
         for (const auto& s : p.slot)
         {
             if (s.src <= 0 || s.src >= NumSrcs || s.dst <= 0 || s.dst >= NumDsts) continue;
@@ -456,14 +457,14 @@ public:
             float v = src[s.src];
             if (s.uni) { if (srcBip) v = (v + 1.0f) * 0.5f; }        // 出力 0..1
             else       { if (!srcBip) v = v * 2.0f - 1.0f; }         // 出力 -1..+1
-            destAccum[(size_t)s.dst] += v * s.amt;
+            addTo(destAccum, (size_t)s.dst, v * s.amt);
 
             // GUIアーク用: この行き先が取りうるオフセット範囲を集計
             const float lo = s.uni ? 0.0f : -1.0f;
             const float hi = 1.0f;
             const float c1 = lo * s.amt, c2 = hi * s.amt;
-            rangeMin[(size_t)s.dst] += juce::jmin(c1, c2);
-            rangeMax[(size_t)s.dst] += juce::jmax(c1, c2);
+            addTo(rangeMin, (size_t)s.dst, juce::jmin(c1, c2));
+            addTo(rangeMax, (size_t)s.dst, juce::jmax(c1, c2));
         }
     }
 
@@ -473,13 +474,13 @@ public:
     //  そのまま NaN が全DSPへ伝播する。ここで水際を作る。
     float get(int dst) const noexcept
     {
-        const float v = destAccum[(size_t)juce::jlimit(0, (int)NumDsts - 1, dst)];
+        const float v = destAccum[(size_t)juce::jlimit(0, (int)NumDsts - 1, dst)].load(std::memory_order_relaxed);
         return std::isfinite(v) ? juce::jlimit(-4.0f, 4.0f, v) : 0.0f;
     }
 
     // GUIアーク用: 行き先が取りうる最小/最大オフセット (mod単位)
-    float getRangeMin(int dst) const noexcept { return rangeMin[(size_t)juce::jlimit(0, (int)NumDsts - 1, dst)]; }
-    float getRangeMax(int dst) const noexcept { return rangeMax[(size_t)juce::jlimit(0, (int)NumDsts - 1, dst)]; }
+    float getRangeMin(int dst) const noexcept { return rangeMin[(size_t)juce::jlimit(0, (int)NumDsts - 1, dst)].load(std::memory_order_relaxed); }
+    float getRangeMax(int dst) const noexcept { return rangeMax[(size_t)juce::jlimit(0, (int)NumDsts - 1, dst)].load(std::memory_order_relaxed); }
 
     // ソースが本来バイポーラ(±1)か: LFOのみ
     static bool isBipolarSource(int s) noexcept { return s >= SrcLfo1 && s <= SrcLfo3; }
@@ -526,8 +527,22 @@ private:
     int   heldNotes = 0;
     bool  gate = false;
 
-    std::array<float, NumDsts> destAccum {};
-    std::array<float, NumDsts> rangeMin {};
-    std::array<float, NumDsts> rangeMax {};
+    // 【2026-08-02 修正】これらはオーディオスレッドが書き、GUIスレッドが
+    //  get() / getRangeMin() / getRangeMax() で読む。素の float だと形式上は
+    //  データ競合(未定義動作)になるため atomic + relaxed にする。
+    //  x86では生成コードは実質同じでコストは増えない。
+    std::array<std::atomic<float>, NumDsts> destAccum {};
+    std::array<std::atomic<float>, NumDsts> rangeMin {};
+    std::array<std::atomic<float>, NumDsts> rangeMax {};
+
+    // std::atomic は代入可能でないため fill/+= を明示ヘルパで置き換える
+    static void clearArr(std::array<std::atomic<float>, NumDsts>& a) noexcept
+    {
+        for (auto& x : a) x.store(0.0f, std::memory_order_relaxed);
+    }
+    static void addTo(std::array<std::atomic<float>, NumDsts>& a, size_t i, float v) noexcept
+    {
+        a[i].store(a[i].load(std::memory_order_relaxed) + v, std::memory_order_relaxed);
+    }
     juce::Random rng;
 };

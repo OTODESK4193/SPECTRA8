@@ -142,6 +142,17 @@ public:
         }
 
         const CustomSet* ptr = set.get();
+
+        // 【2026-08-02 修正】旧テーブルを無制限に貯めない。
+        //  1セットは 64フレーム×10ミップ×2049float ≒ 5.2MB あり、以前は
+        //  ロードのたびに永久保持していた。BROWSE や RANDOM で切り替えるだけで
+        //  100回で 500MB を超える。オーディオスレッドが保持しうる生ポインタは
+        //  「直前に store したもの」だけなので、数世代残せば十分安全。
+        //  (差し替え後に古い側を参照しているのは最大でも1オーディオブロックぶん)
+        constexpr size_t kKeepSets = 3;
+        while (mAllSets.size() >= kKeepSets)
+            mAllSets.erase(mAllSets.begin());
+
         mAllSets.push_back(std::move(set));
         mCustom.store(ptr, std::memory_order_release);
         return true;
