@@ -221,6 +221,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::NormalisableRange<float>(0.0f, 100.0f), 50.0f,
         Attr().withStringFromValueFunction(fmtPercent)));
 
+    // AIR TYPE: エアバンドの素材。
+    //  Noise   = 白色雑音 (息っぽく自然、L/R独立で広がる)
+    //  Carrier = ボコーダー出力の3-7kHzを整流して作った倍音 (ピッチ感のある高域、センター定位)
+    layout.add(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("airType", 1), "Air Type",
+        juce::StringArray{ "Air: Noise", "Air: Carrier" }, 0));
+
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("mix", 1), "Mix",
         juce::NormalisableRange<float>(0.0f, 100.0f), 100.0f,
@@ -1341,6 +1348,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         //  FX より前に足すので、リバーブやゲートはエア成分にも掛かる。
         //  MIX / OUT LEVEL / リミッターは後段なので通常どおり効く。
         {
+            mAirBand.setType((int)apvts.getRawParameterValue("airType")->load());
             const float airTarget = juce::jlimit(0.0f, 100.0f,
                                                  smoothedParam(ModMatrix::DstAir)) * 0.01f;
             if (mAirSm < 0.0f)
@@ -1350,9 +1358,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
                 // AIR量はブロック単位でしか更新できないので、ここでサンプル単位に均す
                 // (LFOで速く振ったときのジッパーノイズ対策)
                 mAirSm += mAirSmCoef * (airTarget - mAirSm);
-                // 原音はモノラル和で拾う (エアの定位は L/R 独立の乱数側で作る)
+                // 原音はモノラル和で拾う (NOISE時のエアの定位は L/R 独立の乱数側で作る)
                 const float dryMono = 0.5f * (mDryL[(size_t)i] + mDryR[(size_t)i]);
-                mAirBand.process(dryMono, writeL[i], writeR[i], mAirSm);
+                // CARRIER時の倍音生成元。加算前のウェットを先に読むこと。
+                const float wetMono = 0.5f * (writeL[i] + writeR[i]);
+                mAirBand.process(dryMono, wetMono, writeL[i], writeR[i], mAirSm);
             }
         }
     }

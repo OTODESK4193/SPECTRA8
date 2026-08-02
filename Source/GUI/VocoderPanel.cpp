@@ -151,6 +151,17 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
     setupCombo(mComboPitchQScale, ScaleSnap::getScaleNames(),
         "SCALE - scale that PITCH Q snaps to. Chromatic allows every semitone; "
         "narrower scales give a stronger, more obviously tuned effect.");
+
+    setupCombo(mComboAirType, { "Air: Noise", "Air: Carrier" },
+        "AIR TYPE - what the AIR band is made of. The vocoder itself cannot produce anything "
+        "above 8 kHz, so AIR rebuilds that region using the high-frequency envelope of your "
+        "voice. This chooses the material it is rebuilt from.",
+        { "NOISE - filtered white noise. Breathy and natural, the sound of real air and "
+          "sibilance. Left and right use independent noise so the top end opens up and "
+          "widens. This is the classic, safe choice.",
+          "CARRIER - harmonics generated from the vocoder output itself. The top end gets a "
+          "pitched, glassy edge instead of breath, and the character of your carrier "
+          "(wavetable, chord, detune) carries all the way up. Centred rather than wide." });
     setupCombo(mComboLpcOrder, { "Order 8", "Order 10", "Order 12", "Order 16" },
         "LPC ORDER - number of poles used to model the vocal tract. 8-10 is the classic "
         "speech-chip sound, 16 resolves more formants and is clearer but less retro.",
@@ -237,6 +248,7 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
     mAttachmentTrackResponse    = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "trackResponse", mComboTrackResponse);
     mAttachmentPitchQKey        = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "pitchQKey", mComboPitchQKey);
     mAttachmentPitchQScale      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "pitchQScale", mComboPitchQScale);
+    mAttachmentAirType          = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "airType", mComboAirType);
     mAttachmentLpcOrder         = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "lpcOrder", mComboLpcOrder);
     mAttachmentAnalysisWindow   = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "windowType", mComboAnalysisWindow);
     mAttachmentFrameRate        = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(apvts, "frameRate", mComboFrameRate);
@@ -373,6 +385,8 @@ void VocoderPanel::resized()
         placeCombo(mComboQuantBits);
         placeCombo(mComboLpcInterpolation);
     }
+    // AIR TYPE は両モード共通。左列の一番下に置く。
+    placeCombo(mComboAirType);
 
     // --- ノブエリア ---
     const int knobAreaX = cx + comboW + 14;

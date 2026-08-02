@@ -66,7 +66,8 @@ private:
     HelpComboBox mComboVoicingMode;
     HelpComboBox mComboTrackResponse;   // Tracking応答速度 (両モード共通)
     HelpComboBox mComboPitchQKey;       // PITCH Q キー (両モード共通)
-    HelpComboBox mComboPitchQScale;     // PITCH Q スケール (両モード共通)
+    HelpComboBox mComboPitchQScale;
+    HelpComboBox mComboAirType;     // AIR TYPE: エアバンドの素材 (両モード共通)
     HelpComboBox mComboLpcOrder;        // LPC専用
     HelpComboBox mComboAnalysisWindow;  // LPC専用
     HelpComboBox mComboFrameRate;       // LPC専用
@@ -121,6 +122,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentRelease;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentMix;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentAir;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> mAttachmentAirType;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentMasterPitch;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentOutLevel;
 
