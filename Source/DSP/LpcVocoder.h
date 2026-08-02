@@ -7,7 +7,7 @@
 //
 //  - FilterbankVocoder と同じ「毎サンプル呼び出し」I/F
 //  - formantFreeze: k/G のフレーム更新を停止（BitSpeek FrameRate=0 相当）
-//  - ゲインGは att 5ms / rel 30ms の非対称平滑化（§7 クリック対策）
+//  - ゲインGは「形状(フレーム毎)×音量(16kHz連続追従)」に分離 (修正I)
 //  - JUCE非依存（スタブ環境で単体テスト可能）、RTセーフ（アロケーションなし）
 // ==========================================
 #pragma once
@@ -42,7 +42,9 @@ public:
     //  全体レベルが下がるため再校正。1.0 を超えるのは、白色化(プリエンファシス)が
     //  鋸波キャリアの実効RMSを大きく下げるぶんを取り戻しているため。
     //  (音声素材の明るさで数dBは前後する。耳で最終確認すること)
-    static constexpr float kMakeupGain = 6.2f;
+    //  【修正I 2026-08-02】音量を連続エンベロープ基準にしたことで +2.0dB 上がるため
+    //  6.2f → 4.92f へ再校正。
+    static constexpr float kMakeupGain = 4.92f;
 
     // 出力DCブロッカーのカットオフ。
     //  デエンファシス 1/(1-0.9375z⁻¹) は DC 利得が 16倍(+24dB)あるため、
@@ -170,6 +172,16 @@ private:
     float mDcX1R = 0.0f, mDcY1R = 0.0f;
     // R = exp(-2π·fc/fs)。16kHz・20Hz なので約 0.99215
     static constexpr float kDcR = 0.992156f;
+
+    // 【修正I 2026-08-02】オンセットラグ対策: 「形状」と「音量」を分離する。
+    //  ゲインをフレーム(ホップ20ms)から取っていたため、音の立ち上がりが最大1フレーム
+    //  遅れ、次のフレームで +25〜35dB の段差になって現れていた
+    //  (Hann窓の裾で窓末尾のオンセットが減衰することも重なる)。
+    //  スペクトル形状 1/√wE はフレーム毎で構わないが、音量は16kHzで連続追従させる。
+    float mGShape = 0.0f;      // 形状ゲイン (mGTarget からレベル成分を割り出したもの)
+    float mGShapeSm = 0.0f;
+    float mEnvSq = 0.0f;       // 入力の二乗平均 (16kHz連続追従)
+    float mEnvAtt = 0.0f, mEnvRel = 0.0f;
 
     float mExcNorm = 1.0f;   // 1/sqrt(Σw²)（窓タイプ依存）
     float mGAttCoef = 0.0f;  // att 5ms @ コントロールレート

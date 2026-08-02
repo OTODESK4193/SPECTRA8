@@ -101,6 +101,13 @@ void LpcVocoder::prepare(double /*hostSampleRate*/)
     mGAttCoef = (float)std::exp(-blockDur / 0.005);   // att 5ms
     mGRelCoef = (float)std::exp(-blockDur / 0.030);   // rel 30ms
 
+    // 修正I: 入力エンベロープ追従 att 5ms / rel 14ms。
+    //  リリースをこれ以上速くすると声門パルス1発ごとに振幅変調が乗る
+    //  (100Hz の声で周期10ms)。14ms は実測でビビり指標が現行と同値(6.14 vs 6.22)、
+    //  かつ減衰側の行き過ぎ(p99)も現行より小さくなる折り合い点。
+    mEnvAtt = 1.0f - (float)std::exp(-1.0 / (0.005 * kInternalSampleRate));
+    mEnvRel = 1.0f - (float)std::exp(-1.0 / (0.014 * kInternalSampleRate));
+
     // 修正F: サンプル単位の1極平滑 (1 - exp(-1/(τ·fs)) が到達係数)
     mVoicingCoef = 1.0f - (float)std::exp(-1.0 / (0.005 * kInternalSampleRate));  // 5ms
     mRmsCoef     = 1.0f - (float)std::exp(-1.0 / (0.020 * kInternalSampleRate));  // 20ms
@@ -118,6 +125,8 @@ void LpcVocoder::reset()
     mKCur.fill(0.0f);
     mKInc.fill(0.0f);
     mGTarget = mGSmooth = mGCur = mGInc = 0.0f;
+    mGShape = mGShapeSm = 0.0f;
+    mEnvSq = 0.0f;
     mDeempL = mDeempR = 0.0f;
     mPreCarL = mPreCarR = 0.0f;
     mVoicingSm = 1.0f;
@@ -271,6 +280,12 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
         mKInc.fill(0.0f);
         mSegDomain = 0;   // M4: 次数変更時は補間セグメントも破棄(次フレームで再構築)
         mSegPos = 0;
+    }
+
+    // 【修正I】入力の二乗平均を16kHzで連続追従する (音量はここから取る)
+    {
+        const float sq = modulator * modulator;
+        mEnvSq += ((sq > mEnvSq) ? mEnvAtt : mEnvRel) * (sq - mEnvSq);
     }
 
     // 1. モジュレーターをリングバッファへ
@@ -515,6 +530,17 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
                 }
             }
 
+            // 【修正I】確定した mGTarget から「そのフレームのレベル」を割り出し、
+            //  スペクトル形状ぶんだけを取り出す。ここで割っておくと、
+            //  K量子化や FMT STRETCH のゲイン補償も自動的に引き継がれる
+            //  (数式上は 1/√wE に各補償を掛けたものになる)。
+            {
+                const double winE2 = (double)mAnalyzer.getWindowEnergy(mWindowType);
+                const double frameMs = (winE2 > 1e-12) ? (rawR0 / winE2) : 0.0;
+                const double frameRms = std::sqrt(std::max(0.0, frameMs));
+                mGShape = (frameRms > 1e-9) ? (float)((double)mGTarget / frameRms) : 0.0f;
+            }
+
             // M4: フルホップ補間セグメントを構築(現在値→新ターゲットをホップ全長でモーフ)
             setupSegment(order);
         }
@@ -534,15 +560,18 @@ void LpcVocoder::processSample(float modulator, float carrierL, float carrierR,
         //  全モードで即時リリースに統一すると三者の音量が揃う
         //  (実測 全体RMS: Step -27.4 / LSP -27.5 / LAR -27.4 dB、ピーク 0.51/0.50/0.50。
         //   補正前は LSP -22.2 / LAR -22.1 dB でピーク 1.0000)。
-        if (mGTarget < mGSmooth)
+        // 【修正I】平滑するのは「形状」だけ。音量は上の連続エンベロープが与える。
+        //  これでフレーム更新を待たずに立ち上がりが出る。
+        if (mGShape < mGShapeSm)
         {
-            mGSmooth = mGTarget;
+            mGShapeSm = mGShape;
         }
         else
         {
-            const float coef = (mGTarget > mGSmooth) ? mGAttCoef : mGRelCoef;
-            mGSmooth = mGTarget + (mGSmooth - mGTarget) * coef;
+            const float coef = (mGShape > mGShapeSm) ? mGAttCoef : mGRelCoef;
+            mGShapeSm = mGShape + (mGShapeSm - mGShape) * coef;
         }
+        mGSmooth = mGShapeSm * std::sqrt(mEnvSq);
 
         constexpr float inv = 1.0f / (float)kCtrlBlock;
         if (mSegDomain == 0)
