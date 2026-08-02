@@ -134,14 +134,19 @@ void BandsEqPanel::paint(juce::Graphics& g)
         for (int i = 0; i < kCurvePoints; ++i)
         {
             const float t = (float)i / (float)(kCurvePoints - 1);
-            const float db = juce::jlimit(-48.0f, 12.0f, mAnalyzer.getDbAtFreq(xToFreq(t)));
+            // 表示レンジ。
+            //  旧値 -48〜+12dB は「0dBFS を上端に置く」設計だったが、
+            //  ボコーダー出力を48バンドに分けた1本あたりのレベルは -30dBFS 前後なので、
+            //  実際には常にパネル下端 1/4 にへばりついた描画になっていた。
+            //  実測に合わせて窓を下へずらし、通常の音量でパネルの 7 割を使うようにする。
+            const float db = juce::jlimit(kAnaDbMin, kAnaDbMax, mAnalyzer.getDbAtFreq(xToFreq(t)));
 
             // 描画側でも軽く平滑化してフレーム間のちらつきを抑える
             float& sm = mCurveSmooth[(size_t)i];
             if (!mCurveInit) sm = db;
             else             sm += ((db > sm) ? 0.55f : 0.25f) * (db - sm);
 
-            const float pct = (sm - (-48.0f)) / (12.0f - (-48.0f));
+            const float pct = (sm - kAnaDbMin) / (kAnaDbMax - kAnaDbMin);
             const float y = botY - pct * (h - 20.0f);
             const float x = (float)r.getX() + t * w;
 
@@ -154,20 +159,26 @@ void BandsEqPanel::paint(juce::Graphics& g)
         fill.lineTo((float)r.getRight(), botY);
         fill.closeSubPath();
 
-        // 低域(紫)→中域(青)→高域(ミント)のグラデーション
-        juce::ColourGradient grad(SpectraColors::lilac.withAlpha(0.30f), (float)r.getX(), 0.0f,
-                                  SpectraColors::mint.withAlpha(0.30f), (float)r.getRight(), 0.0f,
-                                  false);
-        grad.addColour(0.45, SpectraColors::babyBlue.withAlpha(0.30f));
-        g.setGradientFill(grad);
+        // 低域→高域のグラデーション。
+        //  「今どのあたりの帯域を見ているか」を色だけで掴めるように、
+        //  紫(低) → 青 → シアン(中) → 緑 → 桃(高) と5段で振る。
+        //  塗りは濃いめ、線は不透明・太めにして背景から確実に浮かせる。
+        auto makeGrad = [&r](float a)
+        {
+            juce::ColourGradient gr(SpectraColors::lilac.withAlpha(a), (float)r.getX(), 0.0f,
+                                    SpectraColors::pink.withAlpha(a), (float)r.getRight(), 0.0f,
+                                    false);
+            gr.addColour(0.28, SpectraColors::babyBlue.withAlpha(a));
+            gr.addColour(0.52, SpectraColors::mint.withAlpha(a));
+            gr.addColour(0.78, SpectraColors::sage.withAlpha(a));
+            return gr;
+        };
+
+        g.setGradientFill(makeGrad(0.42f));   // 塗り
         g.fillPath(fill);
 
-        juce::ColourGradient gradLine(SpectraColors::lilac.withAlpha(0.85f), (float)r.getX(), 0.0f,
-                                      SpectraColors::mint.withAlpha(0.85f), (float)r.getRight(), 0.0f,
-                                      false);
-        gradLine.addColour(0.45, SpectraColors::babyBlue.withAlpha(0.85f));
-        g.setGradientFill(gradLine);
-        g.strokePath(line, juce::PathStrokeType(1.4f, juce::PathStrokeType::curved));
+        g.setGradientFill(makeGrad(1.0f));    // 輪郭線は不透明・太めで確実に浮かせる
+        g.strokePath(line, juce::PathStrokeType(1.9f, juce::PathStrokeType::curved));
 
         // ------------------------------------------------
         // 周波数目盛り (X軸)
@@ -258,14 +269,19 @@ void BandsEqPanel::paint(juce::Graphics& g)
     // 凡例 — どちらが操作対象なのかを明示する
     // ----------------------------------------------------
     {
-        const int ly = r.getBottom() - 13;
-        g.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
-        g.setColour(SpectraColors::accentBands);
-        g.drawText("EQ (drag to edit)", r.getRight() - 240, ly, 118, 12,
-                   juce::Justification::centredRight);
-        g.setColour(SpectraColors::babyBlue.withAlpha(0.65f));
-        g.drawText("ANALYZER (output)", r.getRight() - 118, ly, 112, 12,
-                   juce::Justification::centredRight);
+        // 下端は周波数目盛りに使うようになったので、凡例は上端へ移した。
+        // 全リセット確認バーも上端に出るので、そのときは凡例を伏せる。
+        if (!mConfirmVisible)
+        {
+            const int ly = r.getY() + 6;
+            g.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
+            g.setColour(SpectraColors::accentBands);
+            g.drawText("EQ (drag to edit)", r.getRight() - 240, ly, 118, 12,
+                       juce::Justification::centredRight);
+            g.setColour(SpectraColors::babyBlue.withAlpha(0.65f));
+            g.drawText("ANALYZER (output)", r.getRight() - 118, ly, 112, 12,
+                       juce::Justification::centredRight);
+        }
     }
 
     // 右クリック確認バーの背景 (ボタン類は子コンポーネント)

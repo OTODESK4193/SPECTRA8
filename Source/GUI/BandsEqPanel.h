@@ -55,6 +55,12 @@ private:
     const AnalyzerDSP& mAnalyzer;
 
     // アナライザー曲線の描画点 (描画スレッドのみが触る)
+    // スペクトラム表示の縦レンジ [dBFS]。
+    //  48バンドに分けた1本あたりのレベルは通常 -30dBFS 前後なので、
+    //  0dBFS を上端にすると常に最下部に張り付いてしまう。実測に合わせた窓。
+    static constexpr float kAnaDbMin = -84.0f;
+    static constexpr float kAnaDbMax = -12.0f;
+
     static constexpr int kCurvePoints = 240;
     std::array<float, kCurvePoints> mCurveSmooth {};
     bool mCurveInit = false;

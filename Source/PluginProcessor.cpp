@@ -218,7 +218,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     //  0% で完全にオフ (従来と同じ音)。100% で原音のエア帯域と同じレベル。
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("air", 1), "Air",
-        juce::NormalisableRange<float>(0.0f, 100.0f), 70.0f,
+        juce::NormalisableRange<float>(0.0f, 100.0f), 50.0f,
         Attr().withStringFromValueFunction(fmtPercent)));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
