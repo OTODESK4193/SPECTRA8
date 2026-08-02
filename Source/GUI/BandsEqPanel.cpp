@@ -168,6 +168,50 @@ void BandsEqPanel::paint(juce::Graphics& g)
         gradLine.addColour(0.45, SpectraColors::babyBlue.withAlpha(0.85f));
         g.setGradientFill(gradLine);
         g.strokePath(line, juce::PathStrokeType(1.4f, juce::PathStrokeType::curved));
+
+        // ------------------------------------------------
+        // 周波数目盛り (X軸)
+        //  X軸は EQ バンドと同じ mel 配置なので、対数目盛りとも等間隔目盛りとも
+        //  一致しない。目当ての周波数がどこかを目視で掴めるよう、代表的な
+        //  周波数に細い縦線とラベルを入れる。
+        //  ※ mel 逆変換ではなく順変換 (freq → t) を使う。
+        // ------------------------------------------------
+        auto freqToT = [&](float f)
+        {
+            const float mv = 2595.0f * std::log10(1.0f + f / 700.0f);
+            return (mv - mMin) / (mMax - mMin);
+        };
+
+        struct Tick { float hz; const char* label; };
+        static const Tick kTicks[] = {
+            { 100.0f,  "100" },  { 200.0f,  "200" },  { 500.0f,  "500" },
+            { 1000.0f, "1k"  },  { 2000.0f, "2k"  },  { 3000.0f, "3k"  },
+            { 5000.0f, "5k"  },  { 7000.0f, "7k"  },
+        };
+
+        const float labelY = (float)r.getBottom() - 13.0f;
+        g.setFont(9.0f);
+        for (const auto& t : kTicks)
+        {
+            const float tt = freqToT(t.hz);
+            if (tt < 0.005f || tt > 0.995f)
+                continue;
+            const float x = (float)r.getX() + tt * w;
+
+            // 目盛り線 (EQのバンド境界線より少し明るく、ただし主役を邪魔しない濃さ)
+            g.setColour(SpectraColors::textDim.withAlpha(0.22f));
+            g.drawVerticalLine((int)x, (float)r.getY() + 4.0f, labelY - 1.0f);
+
+            // ラベル (背景を少し敷いてスペクトラム上でも読めるようにする)
+            const juce::Rectangle<int> lb((int)x - 16, (int)labelY, 32, 12);
+            g.setColour(SpectraColors::panel.withAlpha(0.75f));
+            g.fillRoundedRectangle(lb.toFloat().reduced(1.0f, 0.0f), 2.0f);
+            g.setColour(SpectraColors::textDim.withAlpha(0.9f));
+            g.drawText(t.label, lb, juce::Justification::centred);
+        }
+        // 右端に単位を出しておく
+        g.setColour(SpectraColors::textDim.withAlpha(0.55f));
+        g.drawText("Hz", r.getRight() - 26, (int)labelY, 22, 12, juce::Justification::right);
     }
 
     // ----------------------------------------------------

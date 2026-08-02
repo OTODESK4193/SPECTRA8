@@ -214,6 +214,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("trackResponse", 1), "Track Response",
         juce::StringArray{ "Fast", "Natural", "Smooth" }, 1));
 
+    // AIR: 内部16kHz動作で失われる 8kHz 以上を、原音の高域包絡から合成し直す量。
+    //  0% で完全にオフ (従来と同じ音)。100% で原音のエア帯域と同じレベル。
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("air", 1), "Air",
+        juce::NormalisableRange<float>(0.0f, 100.0f), 70.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
+
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("mix", 1), "Mix",
         juce::NormalisableRange<float>(0.0f, 100.0f), 100.0f,
@@ -712,6 +719,9 @@ void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     // ホスト48kHz時に常に3倍になる (Tracking使用時に音程が3倍になるバグの原因)。
     mPitchTracker.prepare(LpcVocoder::kInternalSampleRate);
     mLimiter.prepare(sampleRate);
+    mAirBand.prepare(sampleRate);
+    mAirSm = -1.0f;
+    mAirSmCoef = 1.0f - (float)std::exp(-1.0 / (0.020 * juce::jmax(8000.0, sampleRate)));
     mFxChain.prepare(sampleRate);
     mAnalyzer.prepare(sampleRate);
     // 解析用モノラルバッファはここで確保しておく (processBlock内でのアロケーションを避ける)
@@ -1323,6 +1333,28 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             writeL[i] = l;
             writeR[i] = r;
         }
+
+        // --- AIR: 8kHz以上のエアバンドを合成して足す ---------------------
+        //  内部処理が 16kHz なのでボコーダー出力には 8kHz より上が一切無い。
+        //  原音の 7.5kHz 以上の「包絡だけ」を借りて帯域制限した白色雑音を鳴らし、
+        //  歯擦音の抜けと息の空気感を取り戻す (原音そのものは混ざらない)。
+        //  FX より前に足すので、リバーブやゲートはエア成分にも掛かる。
+        //  MIX / OUT LEVEL / リミッターは後段なので通常どおり効く。
+        {
+            const float airTarget = juce::jlimit(0.0f, 100.0f,
+                                                 smoothedParam(ModMatrix::DstAir)) * 0.01f;
+            if (mAirSm < 0.0f)
+                mAirSm = airTarget;   // 初回は即値
+            for (int i = 0; i < numSamples; ++i)
+            {
+                // AIR量はブロック単位でしか更新できないので、ここでサンプル単位に均す
+                // (LFOで速く振ったときのジッパーノイズ対策)
+                mAirSm += mAirSmCoef * (airTarget - mAirSm);
+                // 原音はモノラル和で拾う (エアの定位は L/R 独立の乱数側で作る)
+                const float dryMono = 0.5f * (mDryL[(size_t)i] + mDryR[(size_t)i]);
+                mAirBand.process(dryMono, writeL[i], writeR[i], mAirSm);
+            }
+        }
     }
     else
     {
@@ -1441,6 +1473,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             mExcitationEngine.reset();
             mFxChain.reset();
             mLimiter.reset();
+            mAirBand.reset();
+            mAirSm = -1.0f;
             mModMatrix.reset();
             mPostEq.reset();
             mAaIn.reset();

@@ -18,6 +18,7 @@
 #include "DSP/ModMatrix.h"
 #include "DSP/PitchTracker.h"
 #include "DSP/Limiter.h"
+#include "DSP/AirBand.h"
 #include "DSP/FxChain.h"
 #include "DSP/AnalyzerDSP.h"
 #include "DSP/ResampleFilter.h"
@@ -225,6 +226,9 @@ private:
     PostBandEq mPostEq;                   // フェーズ2 M3: LPC出力へBANDS EQをポスト適用
     ExcitationEngine mExcitationEngine;
     ModMatrix mModMatrix;
+    AirBand mAirBand;   // 8kHz以上のエアバンド合成 (内部16kHzで失われる帯域の補完)
+    float mAirSm = -1.0f;      // AIR量のサンプル単位平滑 (-1 = 未初期化)
+    float mAirSmCoef = 0.0f;   // τ=20ms 相当。prepareToPlay で算出
     FxChain mFxChain;                     // 後段FX (5スロット直列)
     AnalyzerDSP mAnalyzer;                // 表示専用 (バックグラウンドスレッド)
     std::vector<float> mAnalyzerMono;     // 解析へ渡すモノラル和 (事前確保・RT安全)

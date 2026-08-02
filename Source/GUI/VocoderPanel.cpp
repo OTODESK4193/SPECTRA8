@@ -86,6 +86,9 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
         "SUSTAIN - MIDI mode only. Level the carrier holds while a key stays pressed.");
     setupKnob(mKnobRelease, mLblRelease,
         "RELEASE - MIDI mode only. Time for the carrier to fade out after the key is let go.", "s");
+    setupKnob(mKnobAir, mLblAir,
+        "AIR - the vocoder runs at 16 kHz internally, so nothing above 8 kHz can come out of it. AIR takes the high-frequency envelope of your voice and rebuilds that band as filtered noise, bringing back the sparkle of S sounds and the sense of breath. 0% is the classic dark vocoder sound.");
+
     setupKnob(mKnobMix, mLblMix,
         "MIX - crossfade between the untouched input and the vocoded signal. "
         "The FX chain belongs to the wet side, so at 0% the input passes through completely clean.", "%");
@@ -224,6 +227,7 @@ VocoderPanel::VocoderPanel(SPECTRA8AudioProcessor& proc)
     mAttachmentSustain       = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "sustain", mKnobSustain);
     mAttachmentRelease       = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "release", mKnobRelease);
     mAttachmentMix           = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "mix", mKnobMix);
+    mAttachmentAir           = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "air", mKnobAir);
     mAttachmentMasterPitch   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "masterPitch", mKnobMasterPitch);
     mAttachmentOutLevel      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(apvts, "outputLevel", mKnobOutLevel);
 
@@ -257,7 +261,7 @@ VocoderPanel::~VocoderPanel()
                           &mKnobFmtStretch, &mKnobLofi, &mKnobBasePitch, &mKnobNoiseColor,
                           &mKnobNoise, &mKnobBands, &mKnobResonance, &mKnobWidth,
                           &mKnobAttack, &mKnobDecay,
-                          &mKnobSustain, &mKnobRelease, &mKnobMix, &mKnobMasterPitch,
+                          &mKnobSustain, &mKnobRelease, &mKnobAir, &mKnobMix, &mKnobMasterPitch,
                           &mKnobOutLevel })
         k->setLookAndFeel(nullptr);
 }
@@ -287,6 +291,7 @@ void VocoderPanel::timerCallback()
         { &mKnobSustain,       M::DstSustain },
         { &mKnobRelease,       M::DstRelease },
         { &mKnobMix,           M::DstMix },
+        { &mKnobAir,           M::DstAir },
         { &mKnobMasterPitch,   M::DstMasterPitch },
         { &mKnobOutLevel,      M::DstOutLevel },
     };
@@ -409,8 +414,8 @@ void VocoderPanel::resized()
 
     // 下段（1行）: ADSR + MIX + M.PITCH + OUT + ボタン列。
     // 下段エリア = 区切り線(divY) 〜 パネル下端。その中でノブ/ボタンを縦中央に配置する。
-    // 列数はノブ7 + ボタン1 = 8 (M.PITCH追加で7→8になった)
-    const int lcols = 8;
+    // 列数はノブ8 + ボタン1 = 9 (M.PITCH で7→8、AIR 追加で8→9になった)
+    const int lcols = 9;
     const int lcolW = knobAreaW / lcols;
     const int lowerTop = uy0 + 2 * urowH - 2;        // paint()の区切り線と一致
     const int lowerBottom = r.getBottom();
@@ -420,11 +425,11 @@ void VocoderPanel::resized()
     const int knobBlockH = knobSize + labelH;
     const int ly = lowerTop + (lowerAreaH - knobBlockH) / 2;
 
-    ValueKnob* lower[7]    = { &mKnobAttack, &mKnobDecay, &mKnobSustain, &mKnobRelease,
-                               &mKnobMix, &mKnobMasterPitch, &mKnobOutLevel };
-    juce::Label* lowerL[7] = { &mLblAttack, &mLblDecay, &mLblSustain, &mLblRelease,
-                               &mLblMix, &mLblMasterPitch, &mLblOutLevel };
-    for (int i = 0; i < 7; ++i)
+    ValueKnob* lower[8]    = { &mKnobAttack, &mKnobDecay, &mKnobSustain, &mKnobRelease,
+                               &mKnobAir, &mKnobMix, &mKnobMasterPitch, &mKnobOutLevel };
+    juce::Label* lowerL[8] = { &mLblAttack, &mLblDecay, &mLblSustain, &mLblRelease,
+                               &mLblAir, &mLblMix, &mLblMasterPitch, &mLblOutLevel };
+    for (int i = 0; i < 8; ++i)
     {
         const int kx = knobAreaX + i * lcolW + (lcolW - knobSize) / 2;
         lower[i]->setBounds(kx, ly, knobSize, knobSize);
@@ -437,7 +442,7 @@ void VocoderPanel::resized()
     const int btnGap = 8;
     const int stackH = btnH * 2 + btnGap;
     const int by = lowerTop + (lowerAreaH - stackH) / 2;
-    const int bx = knobAreaX + 7 * lcolW + 3;
+    const int bx = knobAreaX + 8 * lcolW + 3;
     mBtnLimiter.setBounds(bx, by, btnW, btnH);
     mBtnFormantFreeze.setBounds(bx, by + btnH + btnGap, btnW, btnH);
 }

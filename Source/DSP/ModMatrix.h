@@ -63,6 +63,7 @@ public:
         DstChorusRate, DstChorusDepth, DstChorusWidth, DstChorusMix,
         DstDelayTime, DstDelayFb, DstDelayTone, DstDelayMix,
         DstReverbSize, DstReverbDecay, DstReverbPre, DstReverbDamp, DstReverbMix,
+        DstAir,           // 高域エアバンド量 (2026-08-02 追加。必ず末尾)
         NumDsts
     };
 
@@ -95,7 +96,8 @@ public:
                  "Resonator Decay", "Resonator Shimmer", "Resonator Damp", "Resonator Inharm",
                  "Chorus Rate", "Chorus Depth", "Chorus Width", "Chorus Mix",
                  "Delay Time", "Delay Feedback", "Delay Tone", "Delay Mix",
-                 "Reverb Size", "Reverb Decay", "Reverb PreDelay", "Reverb Damp", "Reverb Mix" };
+                 "Reverb Size", "Reverb Decay", "Reverb PreDelay", "Reverb Damp", "Reverb Mix",
+                 "Air" };
     }
     static juce::StringArray getWaveNames()
     {
@@ -126,6 +128,7 @@ public:
         case DstDecay:          return "decay";
         case DstSustain:        return "sustain";
         case DstRelease:        return "release";
+        case DstAir:            return "air";
         case DstMix:            return "mix";
         case DstOutLevel:       return "outputLevel";
         case DstWtPos:          return "wavetablePosition";
@@ -188,6 +191,7 @@ public:
         case DstDecay:          return 3.0f;
         case DstSustain:        return 1.0f;    // 0..1
         case DstRelease:        return 3.0f;
+        case DstAir:            return 100.0f;  // ±100 %
         case DstMix:            return 100.0f;  // ±100 %
         case DstOutLevel:       return 24.0f;   // ±24 dB (dBは既に対数なので線形加算)
         // --- EXCITATION ---

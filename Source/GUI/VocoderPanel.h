@@ -58,6 +58,7 @@ private:
     ValueKnob mKnobRelease;
     ValueKnob mKnobMix;
     ValueKnob mKnobMasterPitch;   // MIXとOUTの間。PitchQ併用でスケールにスナップする移調
+    ValueKnob mKnobAir;
     ValueKnob mKnobOutLevel;
 
     // --- コンボ 8種 (左1列) ---
@@ -97,6 +98,7 @@ private:
     juce::Label mLblSustain { {}, "SUSTAIN" };
     juce::Label mLblRelease { {}, "RELEASE" };
     juce::Label mLblMix { {}, "MIX" };
+    juce::Label mLblAir { {}, "AIR" };
     juce::Label mLblMasterPitch { {}, "M.PITCH" };
     juce::Label mLblOutLevel { {}, "OUT LEVEL" };
 
@@ -118,6 +120,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentSustain;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentRelease;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentMix;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentAir;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentMasterPitch;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mAttachmentOutLevel;
 
