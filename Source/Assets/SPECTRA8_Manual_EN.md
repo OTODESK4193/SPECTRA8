@@ -105,17 +105,14 @@ Five slots in series ported directly from **COLORS**. **Drag any card** to chang
 
 Eight tuned comb resonators that ring in response to the input, featuring complete MIDI tracking.
 
-* **MODE**
-  * **Chord** — Fixed pitches from **ROOT** (a note name) and **CHORD** type.
-  * **MIDI** — Resonator pitches follow the notes you hold. Fewer than 8 notes are stacked into upper octaves. Releasing keys holds the last voicing without cutting out.
-  * **Free** — Delay time in milliseconds instead of a pitch. Metallic flanging and comb tones.
-* **SHIFT** — **Semitone transposition (±24 st)**. Can be modulated via the ModMatrix for arpeggios and pitch bends.
-* **SPREAD** — Stereo pan distribution across the 8 resonator lines (0–100%).
-* **OUT GAIN** — Output volume trim (-12 to +12 dB).
-* **DECAY** — How long the resonance rings, in seconds. Pitch-compensated for uniform decay from low to high pitches.
+* **SCALE FOLLOW** — **Key / Scale Auto-Follow Button**. When lit, held MIDI notes immediately snap (quantize) to the nearest allowed tones within the active Key and Scale (20 scales) chosen in the VOCODER tab. Prevents dissonant out-of-scale resonance during live play or complex sequences.
+* **SHIFT** — **Semitone transposition (0 to +24 st)**. Can be modulated via the ModMatrix for arpeggios and pitch shifts.
+* **DECAY** — **Resonance tail length (0.5 ms to 3.0 s)**. Pitch-compensated for uniform decay from low to high pitches.
 * **DAMP** — Rolls off the highs as it decays. Higher = darker, more muted tail.
-* **SHIMMER** — Adds octave-up and two-octave-up sparkle exclusively in parallel to the output without feedback instability.
-* **INHARM** — Detunes the upper partials the way a real bell does (`f_n /= √(1+B·n²)`). Adds beating and metallic chime.
+* **SHIMMER** — Schroeder allpass diffusion feedback adding an ethereal, reverb-like octave-up and shimmer tail.
+* **INHARM** — Detunes the upper partials (`f_n /= √(1+B·n²)`). Adds beating and metallic chime.
+* **SPREAD** — Stereo pan distribution across the 8 resonator lines (0–100%).
+* **OUT GAIN** — Output volume trim (-24 to +12 dB).
 
 ### Multiband Drive
 

@@ -65,6 +65,30 @@ namespace ScaleSnap
         return ((mask >> deg) & 1) != 0;
     }
 
+    // 整数MIDIノート番号を直接最近傍のスケール音へ吸着する (ヒステリシスなし、Resonator用)
+    inline int snapMidiNote(int note, int key, int scale) noexcept
+    {
+        const uint16_t mask = maskFor(scale);
+        const int k = juce::jlimit(0, 11, key);
+        if (isAllowed(note, k, mask))
+            return note;
+
+        int nearest = note;
+        int bestDist = 999;
+        for (int d = -12; d <= 12; ++d)
+        {
+            const int cand = note + d;
+            if (!isAllowed(cand, k, mask)) continue;
+            const int dist = std::abs(d);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                nearest = cand;
+            }
+        }
+        return nearest;
+    }
+
     // 周波数 → 連続MIDIノート値
     inline float hzToNote(float hz) noexcept
     {

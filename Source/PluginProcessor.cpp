@@ -486,6 +486,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::ParameterID("resOutGain", 1), "Resonator Out Gain",
         juce::NormalisableRange<float>(-24.0f, 12.0f), 0.0f,
         Attr().withStringFromValueFunction(fmtDb)));
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID("resScaleFollow", 1), "Resonator Scale Follow", false));
 
     // Multiband Drive
     layout.add(std::make_unique<juce::AudioParameterChoice>(
@@ -642,6 +644,8 @@ void SPECTRA8AudioProcessor::cacheParamPointers()
         f.type   = apvts.getRawParameterValue(p + "Type");
         f.amount = apvts.getRawParameterValue(p + "Amount");
     }
+
+    mParamResScaleFollow = apvts.getRawParameterValue("resScaleFollow");
 }
 
 // APVTS の現在値を ModMatrix::Params へ充填する (RTセーフ: 配列参照のみ)
@@ -1418,9 +1422,18 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         fp.revMod      = apvts.getRawParameterValue("revMod")->load();
 
         // Resonator MIDIモード用: 押鍵中のノートを周波数へ
+        const bool scaleFollow = (mParamResScaleFollow != nullptr && mParamResScaleFollow->load() >= 0.5f);
+        const int qKey = (int)apvts.getRawParameterValue("pitchQKey")->load();
+        const int qScale = (int)apvts.getRawParameterValue("pitchQScale")->load();
+
         fp.numMidiHz = juce::jmin(mNumHeldNotes, (int)fp.midiHz.size());
         for (int i = 0; i < fp.numMidiHz; ++i)
-            fp.midiHz[(size_t)i] = 440.0f * std::pow(2.0f, (mHeldNotes[(size_t)i] - 69) / 12.0f);
+        {
+            int note = mHeldNotes[(size_t)i];
+            if (scaleFollow)
+                note = ScaleSnap::snapMidiNote(note, qKey, qScale);
+            fp.midiHz[(size_t)i] = 440.0f * std::pow(2.0f, (note - 69) / 12.0f);
+        }
 
         // Gateのテンポ同期用BPM / PPQ / 再生状態
         fp.bpm = 120.0;

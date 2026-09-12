@@ -22,6 +22,7 @@
 #include "DSP/FxChain.h"
 #include "DSP/AnalyzerDSP.h"
 #include "DSP/ResampleFilter.h"
+#include "DSP/ScaleSnap.h"
 
 class SPECTRA8AudioProcessor : public juce::AudioProcessor 
 {
@@ -229,6 +230,7 @@ private:
     std::array<LfoPtrs,  ModMatrix::kNumLfos>  mLfoPtrs {};
     std::array<EnvPtrs,  ModMatrix::kNumEnvs>  mEnvPtrs {};
     std::array<FxSlotPtrs, FxChain::kNumSlots> mFxPtrs {};
+    std::atomic<float>* mParamResScaleFollow = nullptr;
     std::atomic<uint32_t> mAudioProcessCounter { 0 };
     uint32_t mLastAudioProcessCounter = 0;
 

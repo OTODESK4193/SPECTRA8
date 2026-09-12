@@ -21,6 +21,7 @@
 #include "HelpComboBox.h"
 #include "ArcDial.h"
 #include "ModRing.h"
+#include "GlowToggle.h"
 
 class SPECTRA8AudioProcessor;
 
@@ -110,8 +111,10 @@ private:
     std::vector<std::unique_ptr<juce::Label>>    detailKnobLabels;
     std::vector<std::unique_ptr<juce::ComboBox>> detailCombos;
     std::vector<std::unique_ptr<juce::Label>>    detailComboLabels;
+    std::vector<std::unique_ptr<GlowToggle>>     detailToggles;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>>   detailKnobAttach;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> detailComboAttach;
+    std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>>   detailToggleAttach;
 
     ArcDialLookAndFeel lookAndFeel;
 

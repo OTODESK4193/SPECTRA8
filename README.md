@@ -1,6 +1,6 @@
 # SPECTRA 8
 
-![Release](https://img.shields.io/badge/release-v1.0.0%20B004-blue)
+![Release](https://img.shields.io/badge/release-v1.0.0%20B005-blue)
 ![License](https://img.shields.io/badge/license-AGPLv3-green)
 ![JUCE](https://img.shields.io/badge/JUCE-8.0.x-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -159,7 +159,7 @@ Five slots in series, ported and expanded directly from **COLORS** with full MID
 
 | FX | Parameters |
 |---|---|
-| **Resonator** | MODE (Chord/Free/MIDI), CHORD, ROOT (C1–C7), SHIFT (-24–+24 st), DECAY (0.05–20 s), DAMP, SPREAD, OUT GAIN (-12–+12 dB), SHIMMER, INHARM |
+| **Resonator** | SCALE FOLLOW (auto-quantize to active Key/Scale), SHIFT (0–+24 st), DECAY (0.5ms–3.0s), DAMP, SHIMMER, INHARM, SPREAD, OUT GAIN (-24–+12 dB) |
 | **Drive** | SHAPE (Tanh/Fold/Crush), DRIVE (1–40×), LOW, MID, HIGH |
 | **Gate** | RATE (1/2–1/32, tempo-synced), PATTERN (50 types: Trance, Triplet, Polyrhythm, Stutter, Glitch, etc.), GATE DECAY (5–1000 ms), VOWEL, SMOOTH |
 | **Chorus** | RATE (0.02–8 Hz), DEPTH (0.1–12 ms), WIDTH |

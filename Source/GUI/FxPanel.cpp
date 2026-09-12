@@ -292,12 +292,14 @@ void FxPanel::rebuildDetails()
     // 破棄は Attachment → Component の順 (逆にするとダングリング参照になる)
     detailKnobAttach.clear();
     detailComboAttach.clear();
+    detailToggleAttach.clear();
     for (auto& k : detailKnobs)
         if (k) k->setLookAndFeel(nullptr);
     detailKnobs.clear();
     detailKnobLabels.clear();
     detailCombos.clear();
     detailComboLabels.clear();
+    detailToggles.clear();
 
     // dec = 小数桁数。既定のままだと "5.0000..." のように桁があふれて省略表示になる。
     // tip = 下部ステータス行に出す英語の説明文。
@@ -320,6 +322,15 @@ void FxPanel::rebuildDetails()
             { "resSpread",  "SPREAD",     0, "SPREAD - stereo voice panning spread." },
             { "resOutGain", "OUT GAIN",   1, "OUT GAIN - output level trim (-24dB to +12dB)." }
         };
+        {
+            auto btn = std::make_unique<GlowToggle>("SCALE FOLLOW", SpectraColors::accentFx);
+            btn->setTooltip("KEY/SCALE FOLLOW - Quantize input MIDI notes to active Key/Scale.");
+            addAndMakeVisible(*btn);
+            detailToggleAttach.push_back(
+                std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+                    proc.apvts, "resScaleFollow", *btn));
+            detailToggles.push_back(std::move(btn));
+        }
         break;
 
     case FxChain::Drive:
@@ -532,6 +543,15 @@ void FxPanel::resized()
 
     int x = r.getX() + 2;
     const int rowY = dy + 22;
+
+    // トグルボタン (Resonator SCALE FOLLOW 等)
+    for (size_t i = 0; i < detailToggles.size(); ++i)
+    {
+        const int tw = 110;
+        const int th = 24;
+        detailToggles[i]->setBounds(x, rowY + 10, tw, th);
+        x += tw + 14;
+    }
 
     // コンボは左から順に (Resonatorは2コンボ+7ノブが最大構成。幅はそこに合わせる)
     for (size_t i = 0; i < detailCombos.size(); ++i)
