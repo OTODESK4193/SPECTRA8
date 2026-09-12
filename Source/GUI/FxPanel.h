@@ -55,6 +55,9 @@ public:
     void itemDragExit(const SourceDetails&) override { dragOver = false; repaint(); }
     void itemDropped(const SourceDetails& details) override;
 
+    // APVTS パラメータから表示を強制同期
+    void updateFromProcessor();
+
 private:
     SPECTRA8AudioProcessor& proc;
     const int slot;                       // 0-based

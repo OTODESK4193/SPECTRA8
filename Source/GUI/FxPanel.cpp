@@ -174,6 +174,20 @@ void FxSlotCard::itemDropped(const SourceDetails& details)
         onSwap((int)details.description, slot);
 }
 
+void FxSlotCard::updateFromProcessor()
+{
+    auto* pType = proc.apvts.getRawParameterValue("fx" + juce::String(slot + 1) + "Type");
+    if (pType != nullptr)
+    {
+        const int expectedType = (int)pType->load();
+        const int expectedId = expectedType + 1; // 1-based ID (0: None -> 1)
+        if (typeBox.getSelectedId() != expectedId)
+        {
+            typeBox.setSelectedId(expectedId, juce::dontSendNotification);
+        }
+    }
+}
+
 // ==========================================
 // FxPanel
 // ==========================================
@@ -212,6 +226,11 @@ FxPanel::~FxPanel()
 
 void FxPanel::timerCallback()
 {
+    // 全スロットカードの ComboBox 表示と APVTS パラメータを常時完全同期
+    for (auto& c : cards)
+        if (c != nullptr)
+            c->updateFromProcessor();
+
     using M = ModMatrix;
     const auto& mm = proc.getModMatrix();
 
@@ -309,6 +328,11 @@ void FxPanel::swapSlots(int a, int b)
     }
 
     selectSlot(b);   // 移動先を選択状態に
+
+    // スワップ直後にも即座に全カードの表示を完全同期
+    for (auto& c : cards)
+        if (c != nullptr)
+            c->updateFromProcessor();
 }
 
 // ------------------------------------------
