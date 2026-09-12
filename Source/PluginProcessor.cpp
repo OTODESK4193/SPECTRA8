@@ -684,6 +684,24 @@ void SPECTRA8AudioProcessor::loadModParams(double bpm) noexcept
     }
 }
 
+void SPECTRA8AudioProcessor::updateModMatrixPreview(double deltaSec)
+{
+    const uint32_t currentCount = mAudioProcessCounter.load(std::memory_order_relaxed);
+    const bool isAudioRunning = (currentCount != mLastAudioProcessCounter);
+    mLastAudioProcessCounter = currentCount;
+
+    loadModParams(120.0);
+
+    if (isAudioRunning)
+    {
+        mModMatrix.updateStaticRanges(mModParams);
+    }
+    else
+    {
+        mModMatrix.processPreview(deltaSec, mModParams);
+    }
+}
+
 void SPECTRA8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     mStoredSampleRate = sampleRate;
@@ -793,6 +811,7 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     }
 
     juce::ScopedNoDenormals noDenormals;
+    mAudioProcessCounter.fetch_add(1, std::memory_order_relaxed);
     const int numSamples = buffer.getNumSamples();
     const int numInputs = getTotalNumInputChannels();
     

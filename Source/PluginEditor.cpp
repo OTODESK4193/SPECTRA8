@@ -122,7 +122,7 @@ void SPECTRA8AudioProcessorEditor::paintContent(juce::Graphics& g)
 
     g.setColour(SpectraColors::textDim);
     g.setFont(juce::FontOptions(10.0f));
-    g.drawText("v1.0.0 B001", 118, 2, 120, headerRect.getHeight(), juce::Justification::centredLeft);
+    g.drawText("v1.0.0 B002", 118, 2, 120, headerRect.getHeight(), juce::Justification::centredLeft);
 }
 
 void SPECTRA8AudioProcessorEditor::resized()
@@ -174,6 +174,9 @@ void SPECTRA8AudioProcessorEditor::layoutContent()
 // 下部ステータス行の更新。
 void SPECTRA8AudioProcessorEditor::timerCallback()
 {
+    // モジュレーションプレビュー (DAW停止時の自走LFOと静的レンジの即時更新)
+    audioProcessor.updateModMatrixPreview(1.0 / 30.0);
+
     // 左端余白に受信MIDIノートを表示 (FIFO最大8音)
     mMidiNotesLabel.setText(audioProcessor.getHeldNotesText(), juce::dontSendNotification);
 

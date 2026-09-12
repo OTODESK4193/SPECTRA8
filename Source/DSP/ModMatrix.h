@@ -148,7 +148,7 @@ public:
         case DstVocShift:       return "vocShift";
         case DstMasterPitch:    return "masterPitch";
         case DstStereoWidth:    return "stereoWidth";
-        case DstFxDrive:        return "drvAmt";
+        case DstFxDrive:        return "drvDrive";
         case DstGateRate:       return "gateRate";
         case DstGateDepth:      return "gateDepth";
         case DstGateVowel:      return "gateVowel";
@@ -168,7 +168,7 @@ public:
         case DstDelayMix:       return "dlyMix";
         case DstReverbSize:     return "revSize";
         case DstReverbDecay:    return "revDecay";
-        case DstReverbPre:      return "revPreDelay";
+        case DstReverbPre:      return "revPredelay";
         case DstReverbDamp:     return "revDamp";
         case DstReverbMix:      return "revMix";
         case DstGateDecay:      return "gateDecay";
@@ -460,10 +460,8 @@ public:
         src[SrcModWheel] = modWheel;
         src[SrcRandom] = randomSH;
 
-        // --- スロット合成 (Uni/Bipolar極性変換 + レンジ算出) ---
+        // --- スロット合成 (Uni/Bipolar極性変換) ---
         clearArr(destAccum);
-        clearArr(rangeMin);
-        clearArr(rangeMax);
         for (const auto& s : p.slot)
         {
             if (s.src <= 0 || s.src >= NumSrcs || s.dst <= 0 || s.dst >= NumDsts) continue;
@@ -475,14 +473,34 @@ public:
             if (s.uni) { if (srcBip) v = (v + 1.0f) * 0.5f; }        // 出力 0..1
             else       { if (!srcBip) v = v * 2.0f - 1.0f; }         // 出力 -1..+1
             addTo(destAccum, (size_t)s.dst, v * s.amt);
+        }
+        updateStaticRanges(p);
+    }
 
-            // GUIアーク用: この行き先が取りうるオフセット範囲を集計
+    // GUIアーク用: 現在のスロット設定から各行き先の静的オフセット範囲を集計
+    // DAW停止中であっても、パラメータ変更時に即座に反映できる。
+    void updateStaticRanges(const Params& p) noexcept
+    {
+        clearArr(rangeMin);
+        clearArr(rangeMax);
+        for (const auto& s : p.slot)
+        {
+            if (s.src <= 0 || s.src >= NumSrcs || s.dst <= 0 || s.dst >= NumDsts) continue;
+            if (std::abs(s.amt) < 0.0001f) continue;
+
             const float lo = s.uni ? 0.0f : -1.0f;
             const float hi = 1.0f;
             const float c1 = lo * s.amt, c2 = hi * s.amt;
             addTo(rangeMin, (size_t)s.dst, juce::jmin(c1, c2));
             addTo(rangeMax, (size_t)s.dst, juce::jmax(c1, c2));
         }
+    }
+
+    // DAW停止中用: GUIタイマー間隔(秒)で自走LFOを進め、ノブ上のライブ点(MOD値)とレンジをアニメーションさせる
+    void processPreview(double deltaSec, const Params& p) noexcept
+    {
+        const int samples = juce::jmax(1, (int)(deltaSec * sampleRate));
+        processBlock(samples, p);
     }
 
     // 合成済み変調値 (概ね -1..+1)。

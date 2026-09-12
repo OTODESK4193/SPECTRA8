@@ -109,6 +109,7 @@ public:
     // ---- モジュレーション ----
     // GUI(アークの変調レンジ帯表示)から参照する。
     const ModMatrix& getModMatrix() const noexcept { return mModMatrix; }
+    void updateModMatrixPreview(double deltaSec);
 
     // 宛先IDを渡すだけで「変調適用済みの実パラメータ値」が返る。
     //  パラメータID・スケール・掛かり方(線形/オクターブ)はすべてModMatrix側の
@@ -228,6 +229,8 @@ private:
     std::array<LfoPtrs,  ModMatrix::kNumLfos>  mLfoPtrs {};
     std::array<EnvPtrs,  ModMatrix::kNumEnvs>  mEnvPtrs {};
     std::array<FxSlotPtrs, FxChain::kNumSlots> mFxPtrs {};
+    std::atomic<uint32_t> mAudioProcessCounter { 0 };
+    uint32_t mLastAudioProcessCounter = 0;
 
     // モジュールインスタンス
     FilterbankVocoder mFilterbankVocoder;
