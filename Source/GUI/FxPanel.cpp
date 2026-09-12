@@ -240,48 +240,32 @@ void FxPanel::rebuildDetails()
 
     // dec = 小数桁数。既定のままだと "5.0000..." のように桁があふれて省略表示になる。
     // tip = 下部ステータス行に出す英語の説明文。
-    struct Def { const char* id; const char* label; int dec; const char* tip; };
-    std::vector<Def> knobDefs;
-    std::vector<Def> comboDefs;
+    struct KnobDef { const char* id; const char* label; int dec; const char* tip; };
+    struct ComboDef { const char* id; const char* label; const char* tip; bool isSubTree = false; };
+    std::vector<KnobDef> knobDefs;
+    std::vector<ComboDef> comboDefs;
     juce::String title;
 
     switch (getSlotType(selectedSlot))
     {
     case FxChain::Resonator:
-        title = "SPECTRAL RESONATOR";
-        comboDefs = { { "resMode", "MODE", 0,
-                        "MODE - Chord tunes the resonators to the ROOT and CHORD below, "
-                        "Free spaces them by TIME regardless of key, MIDI tunes them to the "
-                        "notes you hold on the keyboard." },
-                      { "resChord", "CHORD", 0,
-                        "CHORD - which chord the resonators are tuned to in Chord mode." } };
-        // ROOTはMIDIノート番号パラメータ。表示はパラメータ側の音名書式 (例 "A2")。
-        knobDefs  = { { "resRoot", "ROOT", 0,
-                        "ROOT - base note of the resonator bank, shown as a note name." },
-                      { "resFreeMs", "TIME ms", 1,
-                        "TIME - delay length in Free mode. Short times ring at a pitch, "
-                        "long times turn into discrete echoes." },
-                      { "resDecay", "DECAY", 2,
-                        "DECAY - how long the resonance rings out, in seconds. "
-                        "Kept constant across pitches." },
-                      { "resDamp", "DAMP", 2,
-                        "DAMP - rolls off the highs as the resonance decays, "
-                        "so the tail gets darker and softer." },
-                      { "resSpread", "SPREAD", 2,
-                        "SPREAD - stereo spread of the resonator voices." },
-                      { "resShimmer", "SHIMMER", 2,
-                        "SHIMMER - feeds an octave-up copy back in, giving an ethereal "
-                        "rising sheen." },
-                      { "resInharm", "INHARM", 2,
-                        "INHARM - detunes the partials away from a perfect harmonic series "
-                        "for a bell-like, metallic character." } };
+        title = "SPECTRAL RESONATOR (COLORBASS SNAP & SUSTAIN)";
+        knobDefs = {
+            { "resShift",   "SHIFT",      0, "SHIFT - pitch offset in semitones (0 to +24)." },
+            { "resDecay",   "DECAY",      2, "DECAY - resonance decay time (0.5ms to 3.0s)." },
+            { "resDamp",    "DAMP",       0, "DAMP - high frequency damping as resonance decays." },
+            { "resShimmer", "SHIMMER",    0, "SHIMMER - feedback through Schroeder allpass diffusion shimmer." },
+            { "resInharm",  "INHARMONIC", 0, "INHARM - inharmonic partial detuning for metallic timbre." },
+            { "resSpread",  "SPREAD",     0, "SPREAD - stereo voice panning spread." },
+            { "resOutGain", "OUT GAIN",   1, "OUT GAIN - output level trim (-24dB to +12dB)." }
+        };
         break;
 
     case FxChain::Drive:
         title = "MULTIBAND DRIVE";
-        comboDefs = { { "drvShape", "SHAPE", 0,
+        comboDefs = { { "drvShape", "SHAPE",
                         "SHAPE - the distortion curve. Each one has a different harmonic "
-                        "flavour, from soft warmth to hard digital edge." } };
+                        "flavour, from soft warmth to hard digital edge.", false } };
         knobDefs  = { { "drvDrive", "DRIVE", 1,
                         "DRIVE - how hard the signal is pushed into the distortion." },
                       { "drvLow", "LOW", 2,
@@ -295,22 +279,17 @@ void FxPanel::rebuildDetails()
         break;
 
     case FxChain::Gate:
-        title = "FORMANT GATE";
-        comboDefs = { { "gateRate", "RATE", 0,
-                        "RATE - step length, locked to the host tempo." },
-                      { "gatePattern", "PATTERN", 0,
-                        "PATTERN - the on/off rhythm the gate plays." } };
-        knobDefs  = { { "gateDepth", "DEPTH", 2,
-                        "DEPTH - how far the gate closes. At 1.0 the off steps are silent." },
-                      { "gateShape", "SHAPE", 2,
-                        "SHAPE - 0 holds each step flat, higher values give a sharp decay at "
-                        "the start of every step so it plays like a stutter." },
-                      { "gateVowel", "VOWEL", 2,
-                        "VOWEL - vowel filter that moves with the gate, turning the rhythm "
-                        "into a talking pattern." },
-                      { "gateSmooth", "SMOOTH", 2,
-                        "SMOOTH - rounds the gate edges. Low is clicky and percussive, "
-                        "high fades gently between steps." } };
+        title = "FORMANT RHYTHM GATE (50 PATTERNS)";
+        comboDefs = { { "gateRate", "RATE",
+                        "RATE - step length, locked to the host tempo.", false },
+                      { "gatePattern", "PATTERN",
+                        "PATTERN - rhythmic gating pattern (50 presets across 5 categories).", true } };
+        knobDefs  = { { "gateDepth", "DEPTH", 0,
+                        "DEPTH - how far the gate closes (0 to 100%)." },
+                      { "gateDecay", "DECAY", 0,
+                        "DECAY - per-step exponential decay slope." },
+                      { "gateVowel", "VOWEL", 0,
+                        "VOWEL - vowel formant filter modulation depth." } };
         break;
 
     case FxChain::Chorus:
@@ -354,15 +333,48 @@ void FxPanel::rebuildDetails()
 
     for (const auto& d : comboDefs)
     {
-        auto c = std::make_unique<HelpComboBox>();
+        std::unique_ptr<juce::ComboBox> c;
+        if (d.isSubTree)
+        {
+            c = std::make_unique<juce::ComboBox>();
+            const auto patternNames = FormantGate::getPatternNames();
+            auto* root = c->getRootMenu();
+            root->clear();
+
+            juce::PopupMenu subStraight;
+            for (int i = 0; i < 10; ++i) subStraight.addItem(i + 1, patternNames[i]);
+            root->addSubMenu("Straight (10)", subStraight);
+
+            juce::PopupMenu subTriplet;
+            for (int i = 10; i < 18; ++i) subTriplet.addItem(i + 1, patternNames[i]);
+            root->addSubMenu("Triplet & Swing (8)", subTriplet);
+
+            juce::PopupMenu subDotted;
+            for (int i = 18; i < 26; ++i) subDotted.addItem(i + 1, patternNames[i]);
+            root->addSubMenu("Dotted & Polyrhythm (8)", subDotted);
+
+            juce::PopupMenu subEdm;
+            for (int i = 26; i < 38; ++i) subEdm.addItem(i + 1, patternNames[i]);
+            root->addSubMenu("ColorBass & EDM (12)", subEdm);
+
+            juce::PopupMenu subGlitch;
+            for (int i = 38; i < 50; ++i) subGlitch.addItem(i + 1, patternNames[i]);
+            root->addSubMenu("Glitch & Complex (12)", subGlitch);
+        }
+        else
+        {
+            auto hc = std::make_unique<HelpComboBox>();
+            if (auto* cp = dynamic_cast<juce::AudioParameterChoice*>(proc.apvts.getParameter(d.id)))
+                hc->addItemList(cp->choices, 1);
+            c = std::move(hc);
+        }
+
         c->setColour(juce::ComboBox::backgroundColourId, SpectraColors::knobTrack);
         c->setColour(juce::ComboBox::textColourId, SpectraColors::text);
         c->setColour(juce::ComboBox::outlineColourId, SpectraColors::panelLine);
         c->setColour(juce::ComboBox::arrowColourId, SpectraColors::textDim);
         c->setJustificationType(juce::Justification::centred);
         c->setTooltip(d.tip);
-        if (auto* cp = dynamic_cast<juce::AudioParameterChoice*>(proc.apvts.getParameter(d.id)))
-            c->addItemList(cp->choices, 1);
         addAndMakeVisible(*c);
         detailComboAttach.push_back(
             std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
@@ -410,39 +422,7 @@ void FxPanel::rebuildDetails()
         detailKnobLabels.push_back(std::move(l));
     }
 
-    // Resonator モード(Chord / Free / MIDI) に応じた各コントロールの活性化 / 非活性化 (グレーアウト)
-    if (getSlotType(selectedSlot) == FxChain::Resonator)
-    {
-        if (!detailCombos.empty() && detailCombos[0] != nullptr)
-        {
-            detailCombos[0]->onChange = [this] { updateResonatorEnablement(); };
-        }
-        updateResonatorEnablement();
-    }
-
     resized();
-}
-
-void FxPanel::updateResonatorEnablement()
-{
-    if (getSlotType(selectedSlot) != FxChain::Resonator)
-        return;
-
-    const int mode = (int)proc.apvts.getRawParameterValue("resMode")->load();
-    // comboDefs: 0=resMode, 1=resChord
-    // knobDefs: 0=resRoot, 1=resFreeMs, 2=resDecay, 3=resDamp, 4=resSpread, 5=resShimmer, 6=resInharm
-
-    // resChord コンボ (index 1): Chord モード (mode == 0) のみ有効
-    if (detailCombos.size() > 1 && detailCombos[1] != nullptr)
-        detailCombos[1]->setEnabled(mode == 0);
-
-    // resRoot ノブ (index 0): Chord モード (mode == 0) のみ有効
-    if (detailKnobs.size() > 0 && detailKnobs[0] != nullptr)
-        detailKnobs[0]->setEnabled(mode == 0);
-
-    // resFreeMs ノブ (index 1): Free モード (mode == 1) のみ有効
-    if (detailKnobs.size() > 1 && detailKnobs[1] != nullptr)
-        detailKnobs[1]->setEnabled(mode == 1);
 }
 
 void FxPanel::paint(juce::Graphics& g)
@@ -495,7 +475,7 @@ void FxPanel::resized()
     // コンボは左から順に (Resonatorは2コンボ+7ノブが最大構成。幅はそこに合わせる)
     for (size_t i = 0; i < detailCombos.size(); ++i)
     {
-        const int w = 96;
+        const int w = (i == 1 && getSlotType(selectedSlot) == FxChain::Gate) ? 130 : 96;
         detailComboLabels[i]->setBounds(x, rowY, w, 11);
         detailCombos[i]->setBounds(x, rowY + 13, w, 22);
         x += w + 10;

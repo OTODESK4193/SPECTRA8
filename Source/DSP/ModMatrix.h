@@ -64,6 +64,10 @@ public:
         DstDelayTime, DstDelayFb, DstDelayTone, DstDelayMix,
         DstReverbSize, DstReverbDecay, DstReverbPre, DstReverbDamp, DstReverbMix,
         DstAir,           // 高域エアバンド量 (2026-08-02 追加。必ず末尾)
+        DstGateDecay,     // Gate Decay (Colors移植)
+        DstResShift,      // Resonator Shift (Colors移植)
+        DstResSpread,     // Resonator Spread (Colors移植)
+        DstResOutGain,    // Resonator Out Gain (Colors移植)
         NumDsts
     };
 
@@ -97,7 +101,8 @@ public:
                  "Chorus Rate", "Chorus Depth", "Chorus Width", "Chorus Mix",
                  "Delay Time", "Delay Feedback", "Delay Tone", "Delay Mix",
                  "Reverb Size", "Reverb Decay", "Reverb PreDelay", "Reverb Damp", "Reverb Mix",
-                 "Air" };
+                 "Air",
+                 "Gate Decay", "Resonator Shift", "Resonator Spread", "Resonator Out Gain" };
     }
     static juce::StringArray getWaveNames()
     {
@@ -166,6 +171,10 @@ public:
         case DstReverbPre:      return "revPreDelay";
         case DstReverbDamp:     return "revDamp";
         case DstReverbMix:      return "revMix";
+        case DstGateDecay:      return "gateDecay";
+        case DstResShift:       return "resShift";
+        case DstResSpread:      return "resSpread";
+        case DstResOutGain:     return "resOutGain";
         default:                return "";
         }
     }
@@ -212,14 +221,18 @@ public:
         // --- FX ---
         case DstFxDrive:        return 1.0f;
         case DstGateRate:       return 3.0f;
-        case DstGateDepth:      return 1.0f;
-        case DstGateVowel:      return 1.0f;
+        case DstGateDepth:      return 100.0f;
+        case DstGateVowel:      return 100.0f;
         case DstGateSmooth:     return 1.0f;
         case DstGateShape:      return 1.0f;
+        case DstGateDecay:      return 100.0f;
+        case DstResShift:       return 24.0f;
         case DstResDecay:       return 3.0f;
-        case DstResShimmer:     return 1.0f;
-        case DstResDamp:        return 1.0f;
-        case DstResInharm:      return 1.0f;
+        case DstResShimmer:     return 100.0f;
+        case DstResDamp:        return 100.0f;
+        case DstResInharm:      return 100.0f;
+        case DstResSpread:      return 100.0f;
+        case DstResOutGain:     return 12.0f;
         case DstChorusRate:     return 3.0f;
         case DstChorusDepth:    return 12.0f;
         case DstChorusWidth:    return 1.0f;

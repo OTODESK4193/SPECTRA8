@@ -40,6 +40,24 @@ private:
 
     int mActiveTab = 0; // 0: VOCODER, 1: EXCITATION, 2: MOD, 3: FX, 4: EQ, 5: PRESET
 
+    // ---- リサイズ対応 (Ambience 準拠: アスペクト比固定スケーリング) ----
+    static constexpr int kBaseW = 780;
+    static constexpr int kBaseH = 417;
+
+    struct ContentComponent : public juce::Component
+    {
+        std::function<void(juce::Graphics&)> onPaint;
+        std::function<void()> onLayout;
+        void paint(juce::Graphics& g) override { if (onPaint) onPaint(g); }
+        void resized() override { if (onLayout) onLayout(); }
+    };
+
+    ContentComponent content;
+    juce::ComponentBoundsConstrainer constrainer;
+
+    void paintContent(juce::Graphics& g);
+    void layoutContent();
+
     // タブパネルの実体
     VocoderPanel mVocoderPanel;
     ExcitationPanel mExcitationPanel;

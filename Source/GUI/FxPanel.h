@@ -93,7 +93,6 @@ private:
     void selectSlot(int slot);
     void swapSlots(int a, int b);
     void rebuildDetails();      // 選択中FXに応じて下部のノブ/コンボを作り直す
-    void updateResonatorEnablement();
 
     SPECTRA8AudioProcessor& proc;
     std::array<std::unique_ptr<FxSlotCard>, FxChain::kNumSlots> cards;
@@ -103,10 +102,10 @@ private:
     juce::Label detailHint;
 
     // 詳細エリアは選択FXごとに作り直すため動的保持
-    std::vector<std::unique_ptr<ValueKnob>>    detailKnobs;
-    std::vector<std::unique_ptr<juce::Label>>  detailKnobLabels;
-    std::vector<std::unique_ptr<HelpComboBox>> detailCombos;
-    std::vector<std::unique_ptr<juce::Label>>  detailComboLabels;
+    std::vector<std::unique_ptr<ValueKnob>>      detailKnobs;
+    std::vector<std::unique_ptr<juce::Label>>    detailKnobLabels;
+    std::vector<std::unique_ptr<juce::ComboBox>> detailCombos;
+    std::vector<std::unique_ptr<juce::Label>>    detailComboLabels;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>>   detailKnobAttach;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> detailComboAttach;
 

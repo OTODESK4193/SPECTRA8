@@ -45,7 +45,7 @@ private:
             { "vocoderMode", 0.0f }, { "mode", 0.0f }, { "character", 0.85f }, { "tracking", 100.0f }, { "bandCount", 4.0f }, { "formantShift", 2.0f }, { "resonance", 1.1f }, { "stereoWidth", 0.8f }, { "fx1Type", 4.0f }, { "fx1Amount", 0.35f }, { "choRate", 1.2f }, { "choDepth", 4.0f }, { "choMix", 0.4f }
         });
         addP("FilterBank (Auto)", "03. Deep Male Resonator", {
-            { "vocoderMode", 0.0f }, { "mode", 0.0f }, { "character", 0.3f }, { "tracking", 70.0f }, { "formantShift", -5.0f }, { "resonance", 1.4f }, { "basePitch", 90.0f }, { "fx1Type", 1.0f }, { "fx1Amount", 0.5f }, { "resMode", 0.0f }, { "resChord", 0.0f }, { "resDecay", 1.8f }
+            { "vocoderMode", 0.0f }, { "mode", 0.0f }, { "character", 0.3f }, { "tracking", 70.0f }, { "formantShift", -5.0f }, { "resonance", 1.4f }, { "basePitch", 90.0f }, { "fx1Type", 1.0f }, { "fx1Amount", 0.5f }, { "resDecay", 1.8f }, { "resDamp", 40.0f }
         });
         addP("FilterBank (Auto)", "04. Crystal Clean Bank", {
             { "vocoderMode", 0.0f }, { "mode", 0.0f }, { "character", 0.95f }, { "tracking", 90.0f }, { "bandCount", 5.0f }, { "resonance", 0.75f }, { "stereoWidth", 0.9f }, { "noiseColor", 4500.0f }, { "noise", 15.0f }
@@ -96,7 +96,7 @@ private:
             { "vocoderMode", 0.0f }, { "mode", 0.0f }, { "character", 0.35f }, { "tracking", 65.0f }, { "formantShift", -6.0f }, { "basePitch", 85.0f }, { "resonance", 1.6f }, { "fx1Type", 2.0f }, { "fx1Amount", 0.4f }
         });
         addP("FilterBank (Auto)", "20. Ethereal Reso Shimmer", {
-            { "vocoderMode", 0.0f }, { "mode", 0.0f }, { "character", 0.6f }, { "tracking", 80.0f }, { "fx1Type", 1.0f }, { "fx1Amount", 0.7f }, { "resMode", 1.0f }, { "resFreeMs", 18.0f }, { "resDecay", 2.8f }, { "resShimmer", 0.55f }
+            { "vocoderMode", 0.0f }, { "mode", 0.0f }, { "character", 0.6f }, { "tracking", 80.0f }, { "fx1Type", 1.0f }, { "fx1Amount", 0.7f }, { "resDecay", 2.8f }, { "resShimmer", 55.0f }
         });
 
         // ====================================================================
@@ -176,10 +176,10 @@ private:
             { "vocoderMode", 0.0f }, { "mode", 1.0f }, { "waveform", 1.0f }, { "pulseWidth", 30.0f }, { "bandCount", 4.0f }, { "slot0src", 1.0f }, { "slot0dst", 18.0f }, { "slot0amt", 0.5f }, { "lfo0rate", 1.0f }
         });
         addP("FilterBank (MIDI)", "04. Trance Gate Vocoder", {
-            { "vocoderMode", 0.0f }, { "mode", 1.0f }, { "waveform", 0.0f }, { "detune", 30.0f }, { "fx1Type", 3.0f }, { "fx1Amount", 0.85f }, { "gateRate", 4.0f }, { "gatePattern", 5.0f }, { "gateDepth", 1.0f }
+            { "vocoderMode", 0.0f }, { "mode", 1.0f }, { "waveform", 0.0f }, { "detune", 30.0f }, { "fx1Type", 3.0f }, { "fx1Amount", 0.85f }, { "gateRate", 4.0f }, { "gatePattern", 29.0f }, { "gateDepth", 100.0f }
         });
         addP("FilterBank (MIDI)", "05. Shimmer Resonator Pad", {
-            { "vocoderMode", 0.0f }, { "mode", 1.0f }, { "waveform", 0.0f }, { "detune", 20.0f }, { "fx1Type", 1.0f }, { "fx1Amount", 0.6f }, { "resMode", 2.0f }, { "resDecay", 3.0f }, { "resShimmer", 0.5f }, { "fx2Type", 6.0f }, { "fx2Amount", 0.5f }
+            { "vocoderMode", 0.0f }, { "mode", 1.0f }, { "waveform", 0.0f }, { "detune", 20.0f }, { "fx1Type", 1.0f }, { "fx1Amount", 0.6f }, { "resDecay", 3.0f }, { "resShimmer", 50.0f }, { "fx2Type", 6.0f }, { "fx2Amount", 0.5f }
         });
         addP("FilterBank (MIDI)", "06. Detuned SuperSaw Vox", {
             { "vocoderMode", 0.0f }, { "mode", 1.0f }, { "waveform", 0.0f }, { "detune", 55.0f }, { "detuneMode", 1.0f }, { "bandCount", 5.0f }, { "resonance", 1.15f }, { "stereoWidth", 1.0f }
@@ -243,13 +243,13 @@ private:
             { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 0.0f }, { "frameRate", 1.0f }, { "quantBits", 4.0f }, { "lofi", 0.8f }, { "waveform", 1.0f }
         });
         addP("LPC (MIDI)", "05. Trance Gated LPC Voice", {
-            { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 2.0f }, { "frameRate", 3.0f }, { "fx1Type", 3.0f }, { "fx1Amount", 0.8f }, { "gateRate", 4.0f }, { "gatePattern", 5.0f }
+            { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 2.0f }, { "frameRate", 3.0f }, { "fx1Type", 3.0f }, { "fx1Amount", 0.8f }, { "gateRate", 4.0f }, { "gatePattern", 29.0f }
         });
         addP("LPC (MIDI)", "06. Frozen Vowel Keyboard", {
             { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 3.0f }, { "formantFreeze", 1.0f }, { "waveform", 0.0f }, { "detune", 25.0f }, { "attack", 0.05f }, { "release", 0.6f }
         });
         addP("LPC (MIDI)", "07. Shimmering Vocal Tube", {
-            { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 3.0f }, { "fx1Type", 1.0f }, { "fx1Amount", 0.6f }, { "resMode", 2.0f }, { "resDecay", 2.5f }, { "resShimmer", 0.6f }, { "fx2Type", 6.0f }, { "fx2Amount", 0.5f }
+            { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 3.0f }, { "fx1Type", 1.0f }, { "fx1Amount", 0.6f }, { "resDecay", 2.5f }, { "resShimmer", 60.0f }, { "fx2Type", 6.0f }, { "fx2Amount", 0.5f }
         });
         addP("LPC (MIDI)", "08. LSP Smooth Poly Pad", {
             { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 3.0f }, { "interpMode", 1.0f }, { "frameRate", 4.0f }, { "attack", 0.3f }, { "release", 0.8f }
@@ -273,13 +273,13 @@ private:
             { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 2.0f }, { "fx1Type", 5.0f }, { "fx1Amount", 0.6f }, { "dlyTime", 0.4f }, { "dlyFeedback", 0.6f }
         });
         addP("LPC (MIDI)", "15. ModWheel Reso Shimmer", {
-            { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 3.0f }, { "fx1Type", 1.0f }, { "fx1Amount", 0.6f }, { "resMode", 2.0f }, { "slot0src", 8.0f }, { "slot0dst", 36.0f }, { "slot0amt", 0.8f }
+            { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 3.0f }, { "fx1Type", 1.0f }, { "fx1Amount", 0.6f }, { "slot0src", 8.0f }, { "slot0dst", 36.0f }, { "slot0amt", 0.8f }
         });
         addP("LPC (MIDI)", "16. Extreme 3-Bit Talker", {
             { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 0.0f }, { "frameRate", 1.0f }, { "quantBits", 4.0f }, { "waveform", 0.0f }
         });
         addP("LPC (MIDI)", "17. Resonator Tuned LPC", {
-            { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 2.0f }, { "fx1Type", 1.0f }, { "fx1Amount", 0.7f }, { "resMode", 2.0f }, { "resDecay", 2.0f }
+            { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 2.0f }, { "fx1Type", 1.0f }, { "fx1Amount", 0.7f }, { "resDecay", 2.0f }
         });
         addP("LPC (MIDI)", "18. Formant Stretch Chord", {
             { "vocoderMode", 1.0f }, { "mode", 1.0f }, { "lpcOrder", 3.0f }, { "formantShift", 3.0f }, { "formantStretch", 1.5f }, { "waveform", 0.0f }, { "detune", 20.0f }

@@ -101,6 +101,56 @@ namespace fxutil
         }
     };
 
+    // 1st-Order Thiran Allpass Interpolated Delay Line for Zero High-Frequency Loss
+    struct ThiranDelayLine
+    {
+        std::vector<float> buf;
+        int writePos = 0;
+        float apX1 = 0.0f;
+        float apY1 = 0.0f;
+
+        void prepare(int maxSamples)
+        {
+            buf.assign((size_t)juce::jmax(16, maxSamples), 0.0f);
+            reset();
+        }
+        void reset() noexcept
+        {
+            std::fill(buf.begin(), buf.end(), 0.0f);
+            writePos = 0;
+            apX1 = 0.0f;
+            apY1 = 0.0f;
+        }
+        void write(float v) noexcept
+        {
+            buf[(size_t)writePos] = v;
+            if (++writePos >= (int)buf.size()) writePos = 0;
+        }
+        float readThiran(float delaySamples) noexcept
+        {
+            const int n = (int)buf.size();
+            float d = juce::jlimit(2.0f, (float)(n - 3), delaySamples);
+
+            int intD = (int)std::floor(d);
+            float delta = d - (float)intD;
+            if (delta < 0.5f) {
+                intD -= 1;
+                delta += 1.0f;
+            }
+            float eta = (1.0f - delta) / (1.0f + delta);
+
+            int rp = writePos - intD;
+            while (rp < 0) rp += n;
+            while (rp >= n) rp -= n;
+
+            float x = buf[(size_t)rp];
+            float y = eta * x + apX1 - eta * apY1;
+            apX1 = x;
+            apY1 = y;
+            return y;
+        }
+    };
+
     inline float softClip(float x) noexcept
     {
         // tanh近似 (発散防止の最終段として全FX出力に噛ませる)
@@ -112,32 +162,19 @@ namespace fxutil
 }
 
 // ==========================================
-// 1. Spectral Resonator
-//   8本のコムフィルタ。CHORDモードではROOT+コード種から各コムの周波数を決め、
-//   FREEモードでは全コムをms指定の周りに広げる。
-//   コムは「フィードバック付きディレイ + ループ内ダンピング」= Karplus-Strong構造。
+// 1. Spectral Resonator (MIDI Mode - ColorBass Edition ported from Colors)
+//    8本のチューンド・コムフィルタ。MIDI鍵盤の押鍵周波数に完全追従。
+//    1次Thiranオールパス補間により高域ロールオフゼロ・完全フラット特性。
 // ==========================================
 class SpectralResonator
 {
 public:
     static constexpr int kNumVoices = 8;
-    // コード種ごとの半音オフセット (8音ぶん。足りない分はオクターブ上へ積む)
-    enum Chord { Octaves = 0, Power, Major, Minor, Sus4, Min7, Maj9, Dim, NumChords };
-
-    static juce::StringArray getChordNames()
-    {
-        return { "Octaves", "Power 5", "Major", "Minor", "Sus4", "Min 7", "Maj 9", "Dim" };
-    }
-    // Chord = ROOTノート + コード種で固定配置
-    // Free  = ディレイ時間をms直指定 (チューニングされない金属的な響き)
-    // MIDI  = 押さえている鍵盤に共鳴ピッチが追従する
-    static juce::StringArray getModeNames() { return { "Chord", "Free", "MIDI" }; }
 
     void prepare(double sr)
     {
         sampleRate = sr;
-        // 最低20Hz (= sr/20 サンプル) まで対応できる長さを確保
-        const int maxLen = (int)(sr / 20.0) + 8;
+        const int maxLen = (int)(sr / 20.0) + 32;
         for (auto& v : voicesL) v.dl.prepare(maxLen);
         for (auto& v : voicesR) v.dl.prepare(maxLen);
         reset();
@@ -145,199 +182,138 @@ public:
 
     void reset()
     {
-        for (auto& v : voicesL) { v.dl.reset(); v.damp.reset(); v.shimHp.reset(); v.delaySamples = v.targetDelay; }
-        for (auto& v : voicesR) { v.dl.reset(); v.damp.reset(); v.shimHp.reset(); v.delaySamples = v.targetDelay; }
-        mLfoPhase = 0.0f; mLfoPhase2 = 0.33f;
+        for (auto& v : voicesL) { v.dl.reset(); v.damp.reset(); v.diffuser.reset(); }
+        for (auto& v : voicesR) { v.dl.reset(); v.damp.reset(); v.diffuser.reset(); }
     }
 
-    // mode      : 0=Chord, 1=Free, 2=MIDI
-    // rootHz    : Chord時の基準周波数
-    // chord     : コード種
-    // freeMs    : Free時のディレイ時間(ms)
-    // spreadAmt : Free時のボイス間隔の広がり / Chord時のステレオ広がり
-    // decaySec  : 余韻(T60)の長さ[秒]。ピッチに依らず一定になるようボイス毎に帰還量を算出する。
-    //             ※旧実装は生の帰還係数だったため、同じ設定でも 55Hz=1.63秒 / 880Hz=0.12秒 と
-    //               13倍も差が出ていた(高い音ほど1周期が短く、同じ係数でも早く減衰するため)。
-    // damp      : 0..1 (帰還ループ内LPFの強さ。高域だけ先に減衰させる音色調整)
-    // midiHz/numMidi : MIDIモード時に押鍵中の音の周波数 (0本なら直前の配置を維持)
-    // shimmer   : 0..1 オクターブ上のタップを出力へ加算 (きらめき)
-    // inharm    : 0..1 部分音を非調和に伸ばす (ベル/金属的な倍音)
-    void setParams(int mode, float rootHz, int chord, float freeMs,
-                   float spreadAmt, float decaySec, float damp,
-                   float shimmer, float inharm,
-                   const float* midiHz = nullptr, int numMidi = 0) noexcept
+    void setParams(float decaySec, float damp01, float shimmer01, float inharm01, float spread01,
+                   float outGainDb, float shiftSt, const float* midiHz, int numMidi) noexcept
     {
-        mShimmer = juce::jlimit(0.0f, 1.0f, shimmer);
-        mInharm  = juce::jlimit(0.0f, 1.0f, inharm);
-        // 補間損失のぶん実測が短めに出るので、表示値と体感を合わせる較正係数を掛ける
-        // (無補正だと 2.0s設定→実測1.42s、15s設定→7.7s と乖離していた)
-        mDecaySec = juce::jlimit(0.02f, 30.0f, decaySec * 1.55f);
-        static const int kChordSemis[NumChords][8] = {
-            {  0, 12, 24, 36, 48, 60, 72, 84 },   // Octaves
-            {  0,  7, 12, 19, 24, 31, 36, 43 },   // Power 5
-            {  0,  4,  7, 12, 16, 19, 24, 28 },   // Major
-            {  0,  3,  7, 12, 15, 19, 24, 27 },   // Minor
-            {  0,  5,  7, 12, 17, 19, 24, 29 },   // Sus4
-            {  0,  3,  7, 10, 12, 15, 19, 22 },   // Min 7
-            {  0,  4,  7, 11, 14, 16, 19, 23 },   // Maj 9
-            {  0,  3,  6,  9, 12, 15, 18, 21 },   // Dim
-        };
+        // Logarithmic decay range: 0.0005s (0.5ms snap/click) to 3.0s (lush sustain)
+        mDecaySec = juce::jlimit(0.0005f, 3.0f, decaySec);
+        mDamp = juce::jlimit(0.01f, 0.95f, damp01 * 0.92f);
+        mShimmer = juce::jlimit(0.0f, 1.0f, shimmer01);
+        mInharm = juce::jlimit(0.0f, 1.0f, inharm01);
+        mSpread = juce::jlimit(0.0f, 1.0f, spread01);
+        mOutGainLinear = juce::Decibels::decibelsToGain(juce::jlimit(-24.0f, 12.0f, outGainDb));
+        mShiftSt = juce::jlimit(0.0f, 24.0f, shiftSt);
 
-        mDamp = juce::jlimit(0.0f, 0.95f, damp);
+        if (numMidi <= 0) return;
 
-        const int ch = juce::jlimit(0, (int)NumChords - 1, chord);
-        const float sp = juce::jlimit(0.0f, 1.0f, spreadAmt);
-
-        // MIDIモードで押鍵が無い間は直前の配置を保持する (音が急に消えないように)
-        if (mode == 2 && numMidi <= 0)
-            return;
+        const float shiftRatio = std::pow(2.0f, mShiftSt / 12.0f);
 
         for (int i = 0; i < kNumVoices; ++i)
         {
-            float delaySamples;
-            if (mode == 0)   // Chord: 周波数 → 周期
-            {
-                const float f = juce::jlimit(20.0f, 5000.0f,
-                                             rootHz * std::pow(2.0f, kChordSemis[ch][i] / 12.0f));
-                delaySamples = (float)sampleRate / f;
-            }
-            else if (mode == 2)   // MIDI: 押鍵中の音へ追従
-            {
-                // 鍵盤が8音に満たない場合は上のオクターブへ積んで8ボイスを埋める
-                const int n = juce::jlimit(1, kNumVoices, numMidi);
-                const float baseF = midiHz[i % n];
-                const int oct = i / n;
-                const float f = juce::jlimit(20.0f, 5000.0f, baseF * (float)(1 << oct));
-                delaySamples = (float)sampleRate / f;
-            }
-            else             // Free: 指定msを中心に、ボイス毎に少しずつずらす
-            {
-                const float ms = juce::jlimit(0.2f, 50.0f, freeMs)
-                               * (1.0f + sp * 0.35f * (float)i);
-                delaySamples = (float)(ms * 0.001 * sampleRate);
-            }
+            int n = juce::jlimit(1, kNumVoices, numMidi);
+            float baseF = midiHz[i % n] * shiftRatio;
+            int oct = i / n;
+            float f = juce::jlimit(20.0f, 10000.0f, baseF * (float)(1 << oct));
+            float delaySamples = (float)sampleRate / f;
 
-            // 非調和性: 実弦/ベルのように高次部分音ほど上へずれる (f_n *= sqrt(1+B*n²))。
-            // 低次はほぼ動かず高次ほど大きくずれるので、基音は保ったまま
-            // 上の倍音だけが「うなる」= ベル/金属的な響きになる。
-            // ※旧値 0.0012 では最上位ボイスでも +3.8% しか動かず体感できなかった。
-            //   0.005 で最上位 +15% 程度になり、はっきりうなりが出る。
             if (mInharm > 0.001f)
             {
-                const float B = mInharm * 0.005f;
-                const float n = (float)(i + 1);
-                delaySamples /= std::sqrt(1.0f + B * n * n);
+                float B = mInharm * 0.005f;
+                float harmN = (float)(i + 1);
+                delaySamples /= std::sqrt(1.0f + B * harmN * harmN);
             }
 
-            // L/Rでわずかに長さを変えてステレオ感を出す
-            const float det = sp * 0.02f * ((i % 2 == 0) ? 1.0f : -1.0f);
+            float det = mSpread * 0.02f * ((i % 2 == 0) ? 1.0f : -1.0f);
             voicesL[(size_t)i].targetDelay = delaySamples * (1.0f + det);
             voicesR[(size_t)i].targetDelay = delaySamples * (1.0f - det);
 
-            // --- ボイス毎の帰還量を「余韻の長さ」から逆算する ---
-            //  遅延長 D サンプルのコムは1周につき g 倍になるので、
-            //  -60dB に達するまでの時間は  T60 = -3*D / (log10(g)*sr)
-            //  これを g について解くと   g = 10^(-3*D / (T60*sr))
-            //  こうするとピッチが変わっても余韻の長さが一定になる。
             for (auto* vv : { &voicesL[(size_t)i], &voicesR[(size_t)i] })
             {
-                const float D = juce::jmax(2.0f, vv->targetDelay);
-                const float g = std::pow(10.0f, -3.0f * D / (mDecaySec * (float)sampleRate));
-
-                // ※小数遅延の線形補間による損失を打ち消す補正も試したが、
-                //   短い遅延(高い部分音)では補正後の帰還量が1を超えてクランプされ、
-                //   低域だけが減衰せずに残って「ボワつき」になった。
-                //   補間損失は物理的な減衰として受け入れ、素の値をそのまま使う。
-                //   結果として長い設定では実測がやや短めに出るが、
-                //   ノブは単調で、ピッチ依存も旧実装の13倍→1.7倍まで縮んでいる。
-                vv->feedback = juce::jlimit(0.0f, 0.9995f, g);   // 1.0未満を厳守(発散防止)
+                float D = juce::jmax(2.0f, vv->targetDelay);
+                // Allow fbGain to drop down to 0.0f for ultra-short decays (0.5ms transient generation)
+                vv->fbGain = std::pow(10.0f, -3.0f * D / (mDecaySec * (float)sampleRate));
+                vv->fbGain = juce::jlimit(0.0f, 0.995f, vv->fbGain);
             }
         }
     }
 
-    void process(float& l, float& r) noexcept
+    void process(float inL, float inR, float& outL, float& outR) noexcept
     {
-        // ディレイ長のサンプル毎スムージング。
-        //  ブロック毎に直接書き換えると読み出し位置が飛び、実測で入力の15倍の
-        //  不連続(プチッ)が出ていた。1次平滑で読み出し位置を連続にする。
-        //  ついでにテープ的なピッチグライドにもなる。
-        constexpr float kGlide = 0.0004f;   // τ≈50ms @48k
-
-        // SHIMMER用のゆっくりした揺らぎ (2本の非整数比LFOでうねりを作る)
-        float modL = 0.0f, modR = 0.0f;
-        if (mShimmer > 0.001f)
-        {
-            mLfoPhase  += 0.31f / (float)sampleRate;  if (mLfoPhase  >= 1.0f) mLfoPhase  -= 1.0f;
-            mLfoPhase2 += 0.47f / (float)sampleRate;  if (mLfoPhase2 >= 1.0f) mLfoPhase2 -= 1.0f;
-            const float a = std::sin(mLfoPhase  * juce::MathConstants<float>::twoPi);
-            const float b = std::sin(mLfoPhase2 * juce::MathConstants<float>::twoPi);
-            modL = mShimmer * 0.0025f * a;
-            modR = mShimmer * 0.0025f * b;
-        }
-
         float sumL = 0.0f, sumR = 0.0f;
+
         for (int i = 0; i < kNumVoices; ++i)
         {
             auto& vL = voicesL[(size_t)i];
             auto& vR = voicesR[(size_t)i];
-            vL.delaySamples += kGlide * (vL.targetDelay - vL.delaySamples);
-            vR.delaySamples += kGlide * (vR.targetDelay - vR.delaySamples);
 
-            sumL += tick(vL, l, modL);
-            sumR += tick(vR, r, modR);
+            vL.delaySamples += (vL.targetDelay - vL.delaySamples) * 0.02f;
+            vR.delaySamples += (vR.targetDelay - vR.delaySamples) * 0.02f;
+
+            // Thiran Allpass interpolation maintains 100% flat high-frequency response
+            float curL = vL.dl.readThiran(vL.delaySamples);
+            float curR = vR.dl.readThiran(vR.delaySamples);
+
+            // Shimmer High-Frequency Allpass Diffusion
+            if (mShimmer > 0.001f)
+            {
+                float shimG = 0.45f * mShimmer;
+                curL = vL.diffuser.process(curL, shimG);
+                curR = vR.diffuser.process(curR, shimG);
+            }
+
+            float dL = vL.damp.lp(curL, mDamp);
+            float dR = vR.damp.lp(curR, mDamp);
+
+            // Energy-preserving unity scaling: sqrt(1 - g^2) prevents resonance blowout while maintaining strong punch
+            float inGainL = std::sqrt(1.0f - juce::jmin(0.96f, vL.fbGain * vL.fbGain));
+            float inGainR = std::sqrt(1.0f - juce::jmin(0.96f, vR.fbGain * vR.fbGain));
+
+            vL.dl.write(inL * inGainL + fxutil::softClip(dL * vL.fbGain));
+            vR.dl.write(inR * inGainR + fxutil::softClip(dR * vR.fbGain));
+
+            float pan = ((float)i / (float)(kNumVoices - 1)) * 2.0f - 1.0f;
+            pan *= mSpread;
+            float gL = 0.5f * (1.0f - pan);
+            float gR = 0.5f * (1.0f + pan);
+
+            sumL += curL * gL;
+            sumR += curR * gR;
         }
-        // ボイス数で正規化 (8本足しても音量が跳ねないように)
-        const float norm = 1.0f / (float)kNumVoices;
-        l = fxutil::softClip(sumL * norm * 2.0f);
-        r = fxutil::softClip(sumR * norm * 2.0f);
+
+        // Robust output scale (approx 0.62 at unity outGain) so Resonator matches input power
+        float scale = (1.75f / std::sqrt((float)kNumVoices)) * mOutGainLinear;
+        outL = fxutil::softClip(sumL * scale);
+        outR = fxutil::softClip(sumR * scale);
+    }
+
+    // In-place processing overload
+    void process(float& l, float& r) noexcept
+    {
+        float outL = 0.0f, outR = 0.0f;
+        process(l, r, outL, outR);
+        l = outL;
+        r = outR;
     }
 
 private:
     struct Voice
     {
-        fxutil::DelayLine dl;
+        fxutil::ThiranDelayLine dl;
         fxutil::OnePole damp;
-        fxutil::OnePole shimHp;      // オクターブ上タップの低域を落とす
-        float delaySamples = 100.0f; // 実際に読み出している長さ (平滑後)
-        float targetDelay = 100.0f;  // setParams が書き込む目標長
-        float feedback = 0.9f;       // このボイスの帰還量 (DECAYから逆算)
+        struct SimpleDiffuser {
+            float z1 = 0.0f;
+            inline float process(float in, float g) noexcept {
+                float w = in - g * z1;
+                float out = z1 + g * w;
+                z1 = w;
+                return out;
+            }
+            inline void reset() noexcept { z1 = 0.0f; }
+        } diffuser;
+        float targetDelay = 100.0f;
+        float delaySamples = 100.0f;
+        float fbGain = 0.9f;
     };
-
-    float tick(Voice& v, float in, float mod) noexcept
-    {
-        const float d = v.delaySamples * (1.0f + mod);
-        const float delayed = v.dl.read(d);
-        const float fb = v.damp.lp(delayed, mDamp);
-
-        // 帰還ループは常に素のまま。SHIMMERを帰還へ入れると
-        // オクターブ上の成分が再循環して増殖し、基音の共鳴を食い潰してしまう
-        // (「効果が大きすぎて全てをかき消す」状態になっていた原因)。
-        v.dl.write(fxutil::softClip(in + fb * v.feedback));
-
-        float out = delayed;
-
-        // SHIMMER: 1/2 と 1/4 の長さ = 1・2オクターブ上のタップを
-        //  「出力へ並列に加算するだけ」。帰還には一切戻さない。
-        //  基音の共鳴はそのまま残り、その上に倍音の煌めき(Sparkle)だけが乗る。
-        if (mShimmer > 0.001f)
-        {
-            const float oct1 = v.dl.read(d * 0.5f);    // +1oct
-            const float oct2 = v.dl.read(d * 0.25f);   // +2oct
-            float sp = oct1 * 0.55f + oct2 * 0.45f;
-            sp -= v.shimHp.lp(sp, 0.75f);              // 低域を落として「空気感」だけ残す
-            out += sp * mShimmer * 0.75f;
-        }
-
-        return out;
-    }
 
     double sampleRate = 44100.0;
     std::array<Voice, kNumVoices> voicesL, voicesR;
-    float mDamp = 0.3f;
-    float mDecaySec = 2.0f;
-    float mShimmer = 0.0f;
-    float mInharm = 0.0f;
-    float mLfoPhase = 0.0f, mLfoPhase2 = 0.33f;
+    float mDecaySec = 0.5f, mDamp = 0.3f, mShimmer = 0.0f, mInharm = 0.0f, mSpread = 0.8f;
+    float mOutGainLinear = 1.0f;
+    float mShiftSt = 0.0f;
 };
 
 // ==========================================
@@ -427,137 +403,294 @@ private:
 };
 
 // ==========================================
-// 3. Formant Gate
-//   16ステップのリズムゲート。各ステップで母音(A-I-U-E-O)のフォルマントを切り替える。
-//   ボコーダー出力に掛けると「喋るチョップ」になる。
+// 3. Formant Gate (Click-Free Hann S-Curve Vocal Rhythm Gate - 50 Patterns ported from Colors)
+//    DAWタイムライン完全同期(PPQ)、C1滑らかなHann S-Curve包絡線、Legatoタイ結合対応
 // ==========================================
 class FormantGate
 {
 public:
     static constexpr int kNumSteps = 16;
+    static constexpr int kTotalPatterns = 50;
+
     static juce::StringArray getRateNames()
     {
         return { "1/2", "1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32" };
     }
+
     static juce::StringArray getPatternNames()
     {
-        return { "All On", "Off Beat", "Gallop", "Syncopate 1", "Syncopate 2",
-                 "Trance Gate", "Stutter 4", "Straight 4", "Random 1", "Random 2",
-                 "Build", "Sparse" };
+        return {
+            // Category 1: Straight (10)
+            "1/2 Beat", "1/4 Beat", "1/8 Beat", "1/16 Beat", "1/32 Beat",
+            "Off-Beat 8th", "Off-Beat 16th", "Pulse 25%", "Pulse 75%", "March 4-on-floor",
+            // Category 2: Triplet & Swing (8)
+            "1/4 Triplet", "1/8 Triplet", "1/16 Triplet", "Shuffle Light", "Shuffle Heavy",
+            "Triplet Burst", "Gallop", "Waltz",
+            // Category 3: Dotted & Polyrhythm (8)
+            "1/4 Dotted", "1/8 Dotted", "1/16 Dotted", "Syncopated Dotted",
+            "Polyrhythm 3:4", "Polyrhythm 3:2", "Hemiola", "Tresillo 3-3-2",
+            // Category 4: ColorBass & EDM (12)
+            "Dubstep Wobble", "Riddim Chug", "Future Bass Pump", "Trance Gate Classic",
+            "Sidechain Pump", "Psytrance 16th", "Trap Hihat Roll", "Half-Time Chop",
+            "Drum'n'Bass Chop", "UK Garage Bounce", "Bounce Groove", "Stutter Drop",
+            // Category 5: Glitch & Complex (12)
+            "Euclid 3/8", "Euclid 5/8", "Euclid 5/16", "Euclid 7/16", "Euclid 9/16",
+            "Binary Counter", "Fibonacci", "Accelerated Burst", "Decelerated Drop",
+            "Micro Stutter", "Chaos Squelch", "Morse Code"
+        };
     }
 
-    void prepare(double sr) { sampleRate = sr; reset(); }
+    void prepare(double sr)
+    {
+        sampleRate = sr;
+        slewCoeff = (float)(1.0 - std::exp(-1.0 / (sampleRate * 0.0008)));
+        reset();
+    }
+
     void reset()
     {
         phase = 0.0;
         stepIdx = 0;
-        env = 0.0f;
+        prevStepIdx = 0;
+        curEnv = 0.0f;
         for (auto& f : fmtL) f.reset();
         for (auto& f : fmtR) f.reset();
+        curF1 = 700.0f; curF2 = 1100.0f; curF3 = 2400.0f;
     }
 
-    // rate: getRateNames のインデックス / pattern: getPatternNames のインデックス
-    // depth: 0..1 ゲートの深さ / vowelAmt: 0..1 フォルマントの効き / smooth: 0..1 立ち上がり鈍化
-    // shape: 0..1 ステップ内の減衰。0=そのステップ全体を保持(従来) /
-    //        1=各ステップ頭で鋭く減衰する打点になる。
-    void setParams(int rate, int pattern, float depth, float vowelAmt, float smooth,
-                   float shape, double bpm) noexcept
+    void setParams(int rateIdx, int patternIdx, float depth01, float decay01, float vowel01) noexcept
     {
-        mShape = juce::jlimit(0.0f, 1.0f, shape);
-        static const double kBeats[7] = { 2.0, 1.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125 };
-        mRate = juce::jlimit(0, 6, rate);
-        mPattern = juce::jlimit(0, 11, pattern);
-        mDepth = juce::jlimit(0.0f, 1.0f, depth);
-        mVowel = juce::jlimit(0.0f, 1.0f, vowelAmt);
-        mSmooth = juce::jlimit(0.0f, 1.0f, smooth);
-
-        const double b = (bpm > 1.0) ? bpm : 120.0;
-        stepHz = b / (60.0 * kBeats[mRate]);
+        mRate = juce::jlimit(0, 6, rateIdx);
+        mPattern = juce::jlimit(0, kTotalPatterns - 1, patternIdx);
+        mDepth = juce::jlimit(0.0f, 1.0f, depth01);
+        mDecay = juce::jlimit(0.05f, 1.0f, decay01);
+        mVowel = juce::jlimit(0.0f, 1.0f, vowel01);
     }
 
-    void process(float& l, float& r) noexcept
+    void process(float& l, float& r, double bpm = 120.0, double ppqPosition = 0.0, bool isPlaying = false) noexcept
     {
-        // --- ステップ進行 ---
-        phase += stepHz / sampleRate;
-        while (phase >= 1.0)
+        // Rate step length in musical beats (1 beat = 1 Quarter note)
+        static const double kStepBeats[7] = {
+            2.0,            // 1/2
+            1.0,            // 1/4
+            0.5,            // 1/8
+            1.0 / 3.0,      // 1/8T
+            0.25,           // 1/16
+            1.0 / 6.0,      // 1/16T
+            0.125           // 1/32
+        };
+        const double stepBeats = kStepBeats[juce::jlimit(0, 6, mRate)];
+        const double safeBpm = (bpm > 20.0 && bpm < 400.0) ? bpm : 120.0;
+
+        int curStep = 0;
+        int nextStep = 0;
+        float p = 0.0f;
+
+        if (isPlaying && ppqPosition >= 0.0)
         {
-            phase -= 1.0;
-            stepIdx = (stepIdx + 1) % kNumSteps;
-            if (mShape > 0.001f && stepOn(stepIdx))
-                env = 0.0f;
+            // Sample-accurate phase quantization to DAW song timeline
+            double stepPos = ppqPosition / stepBeats;
+            double intPart = std::floor(stepPos);
+            p = (float)(stepPos - intPart);
+            curStep = ((int)intPart % kNumSteps + kNumSteps) % kNumSteps;
+            nextStep = (curStep + 1) % kNumSteps;
+            stepIdx = curStep;
+        }
+        else
+        {
+            // Free-running mode using accurate project tempo (BPM)
+            double stepHz = (safeBpm / 60.0) / stepBeats;
+            phase += stepHz / sampleRate;
+            while (phase >= 1.0)
+            {
+                phase -= 1.0;
+                stepIdx = (stepIdx + 1) % kNumSteps;
+            }
+            curStep = stepIdx;
+            nextStep = (stepIdx + 1) % kNumSteps;
+            p = (float)phase;
         }
 
-        // --- ゲートエンベロープ (smoothで立ち上がり/下がりを鈍らせクリック防止) ---
-        float target = stepOn(stepIdx) ? 1.0f : 0.0f;
-        if (mShape > 0.001f && target > 0.5f)
+        const int prevStep = (curStep - 1 + kNumSteps) % kNumSteps;
+        const bool prevOn = getPatternStep(mPattern, prevStep);
+        const bool curOn = getPatternStep(mPattern, curStep);
+        const bool nextOn = getPatternStep(mPattern, nextStep);
+
+        // Step duration in seconds
+        const double stepSec = (60.0 / safeBpm) * stepBeats;
+
+        // Guaranteed minimum fade duration (>= 3.5ms) to eliminate audio clicks
+        const float fadeRatio = (float)juce::jlimit(0.015, 0.35, 0.0035 / stepSec);
+
+        // Decay controls gate open length:
+        // When mDecay >= 0.95: Legato mode with tie preservation across adjacent active steps
+        // When mDecay < 0.95: Staccato / rhythmic articulation with guaranteed silence landing
+        const bool isLegato = (mDecay >= 0.95f);
+        const float openRatio = isLegato ? 1.0f : juce::jmap(mDecay, 0.05f, 0.95f, 0.15f, 0.90f);
+        const float gateLen = juce::jmax(fadeRatio * 2.0f, openRatio);
+        const float releaseStart = gateLen - fadeRatio;
+
+        float stepEnv = 0.0f;
+
+        if (curOn)
         {
-            const float decayPos = (float)phase / juce::jmax(0.05f, 1.0f - mShape * 0.92f);
-            target = juce::jlimit(0.0f, 1.0f, 1.0f - decayPos);
+            const bool tiedFromPrev = prevOn && isLegato;
+            const bool tiedToNext = nextOn && isLegato;
+
+            if (p < fadeRatio)
+            {
+                if (tiedFromPrev)
+                    stepEnv = 1.0f;
+                else
+                    stepEnv = 0.5f * (1.0f - std::cos(juce::MathConstants<float>::pi * (p / fadeRatio)));
+            }
+            else if (p >= releaseStart)
+            {
+                if (tiedToNext)
+                    stepEnv = 1.0f;
+                else if (p < gateLen)
+                {
+                    const float fallP = (p - releaseStart) / fadeRatio;
+                    stepEnv = 0.5f * (1.0f + std::cos(juce::MathConstants<float>::pi * juce::jlimit(0.0f, 1.0f, fallP)));
+                }
+                else
+                {
+                    stepEnv = 0.0f;
+                }
+            }
+            else
+            {
+                stepEnv = 1.0f;
+            }
+        }
+        else
+        {
+            stepEnv = 0.0f;
         }
 
-        const float tauMs = 1.0f + mSmooth * 60.0f;
-        const float coeff = 1.0f - std::exp(-1.0f / (tauMs * 0.001f * (float)sampleRate));
-        env += coeff * (target - env);
+        // One-pole slew filter (~0.8ms time constant) to guarantee C1-smooth envelope
+        curEnv += slewCoeff * (stepEnv - curEnv);
+        const float gain = 1.0f - mDepth * (1.0f - curEnv);
 
-        const float gain = 1.0f - mDepth * (1.0f - env);
-
-        // --- 母音フォルマント (ステップ毎に切替) ---
+        // Vowel Formant SVF Filters with Slew Smoothing
         if (mVowel > 0.001f)
         {
-            static const float kVowelHz[5][3] = {
-                {  730.0f, 1090.0f, 2440.0f },   // A
-                {  270.0f, 2290.0f, 3010.0f },   // I
-                {  300.0f,  870.0f, 2240.0f },   // U
-                {  530.0f, 1840.0f, 2480.0f },   // E
-                {  570.0f,  840.0f, 2410.0f },   // O
+            static const float kVowels[5][3] = {
+                {  730.0f, 1090.0f, 2440.0f }, // /a/
+                {  270.0f, 2290.0f, 3010.0f }, // /i/
+                {  300.0f,  870.0f, 2240.0f }, // /u/
+                {  530.0f, 1840.0f, 2480.0f }, // /e/
+                {  570.0f,  840.0f, 2410.0f }, // /o/
             };
             const int v = stepIdx % 5;
+            const float targetF1 = kVowels[v][0];
+            const float targetF2 = kVowels[v][1];
+            const float targetF3 = kVowels[v][2];
+
+            curF1 += (targetF1 - curF1) * 0.01f;
+            curF2 += (targetF2 - curF2) * 0.01f;
+            curF3 += (targetF3 - curF3) * 0.01f;
+
+            float freqs[3] = { curF1, curF2, curF3 };
             float wetL = 0.0f, wetR = 0.0f;
+
             for (int j = 0; j < 3; ++j)
             {
-                const float fc = kVowelHz[v][j] / (float)sampleRate;
+                const float fc = juce::jlimit(20.0f, (float)sampleRate * 0.45f, freqs[j]) / (float)sampleRate;
                 float lp, bp, hp;
                 fmtL[(size_t)j].process(l, fc, 6.0f, lp, bp, hp);
                 wetL += bp;
                 fmtR[(size_t)j].process(r, fc, 6.0f, lp, bp, hp);
                 wetR += bp;
             }
+
             l = l * (1.0f - mVowel) + wetL * 2.0f * mVowel;
             r = r * (1.0f - mVowel) + wetR * 2.0f * mVowel;
         }
 
-        l *= gain;
-        r *= gain;
+        l = fxutil::softClip(l * gain);
+        r = fxutil::softClip(r * gain);
+    }
+
+    static bool getPatternStep(int pattern, int step) noexcept
+    {
+        // 50 Rhythmic Patterns across 5 Categories
+        static const uint16_t kPatternMasks[kTotalPatterns] = {
+            // Category 1: Straight (10)
+            0xAAAA, // 0: 1/2 Beat (alternating)
+            0x8888, // 1: 1/4 Beat
+            0xCCCC, // 2: 1/8 Beat
+            0xFFFF, // 3: 1/16 Beat (Continuous pulse)
+            0xEEEE, // 4: 1/32 Beat pulse
+            0x5555, // 5: Off-Beat 8th
+            0x2222, // 6: Off-Beat 16th
+            0x1111, // 7: Pulse 25%
+            0x7777, // 8: Pulse 75%
+            0x9999, // 9: March 4-on-floor
+
+            // Category 2: Triplet & Swing (8)
+            0x9249, // 10: 1/4 Triplet
+            0xB6DB, // 11: 1/8 Triplet
+            0xEDDB, // 12: 1/16 Triplet
+            0x8A8A, // 13: Shuffle Light
+            0x8282, // 14: Shuffle Heavy
+            0xEA20, // 15: Triplet Burst
+            0x9292, // 16: Gallop
+            0x4924, // 17: Waltz (3/4 time)
+
+            // Category 3: Dotted & Polyrhythm (8)
+            0x8421, // 18: 1/4 Dotted
+            0x9249, // 19: 1/8 Dotted
+            0x4924, // 20: 1/16 Dotted
+            0x8892, // 21: Syncopated Dotted
+            0x8A42, // 22: Polyrhythm 3:4
+            0x94A5, // 23: Polyrhythm 3:2
+            0x6969, // 24: Hemiola
+            0x8924, // 25: Tresillo 3-3-2 (Classic Caribbean / Reggaeton)
+
+            // Category 4: ColorBass & EDM (12)
+            0xEA00, // 26: Dubstep Wobble
+            0x00A0, // 27: Riddim Chug
+            0x0888, // 28: Future Bass Pump
+            0xA5A5, // 29: Trance Gate Classic
+            0x000F, // 30: Sidechain Pump
+            0x7777, // 31: Psytrance 16th
+            0xFFF0, // 32: Trap Hihat Roll
+            0x8080, // 33: Half-Time Chop
+            0x9090, // 34: Drum'n'Bass Chop
+            0x9A48, // 35: UK Garage Bounce
+            0x69B2, // 36: Bounce Groove
+            0xFE02, // 37: Stutter Drop
+
+            // Category 5: Glitch & Complex (12)
+            0x9248, // 38: Euclid 3/8
+            0xAD5B, // 39: Euclid 5/8
+            0x8892, // 40: Euclid 5/16
+            0xAA92, // 41: Euclid 7/16
+            0xADA5, // 42: Euclid 9/16
+            0x5A5A, // 43: Binary Counter
+            0x9421, // 44: Fibonacci
+            0xF842, // 45: Accelerated Burst
+            0x248F, // 46: Decelerated Drop
+            0xF0F0, // 47: Micro Stutter
+            0x6B3D, // 48: Chaos Squelch
+            0xA8AE  // 49: Morse Code
+        };
+
+        const int pIdx = juce::jlimit(0, kTotalPatterns - 1, pattern);
+        return ((kPatternMasks[pIdx] >> (step % 16)) & 1) != 0;
     }
 
 private:
-    bool stepOn(int i) const noexcept
-    {
-        // 16bitのパターンマスク (全12種類)
-        static const uint16_t kMasks[12] = {
-            0xFFFF,             // All On
-            0b1010101010101010, // Off Beat
-            0b1101110111011101, // Gallop
-            0b1001001001001001, // Syncopate 1
-            0b0100100100100100, // Syncopate 2
-            0b1100110011001100, // Trance Gate
-            0b1111000011110000, // Stutter 4
-            0b1000100010001000, // Straight 4
-            0b1011010110110101, // Random 1
-            0b1110010110100111, // Random 2
-            0b1000100010101111, // Build
-            0b1000000110000001, // Sparse
-        };
-        return (kMasks[mPattern] >> i) & 1;
-    }
-
     double sampleRate = 44100.0;
-    double phase = 0.0, stepHz = 8.0;
-    int stepIdx = 0;
-    float env = 0.0f;
+    double phase = 0.0;
+    int stepIdx = 0, prevStepIdx = 0;
+    float curEnv = 0.0f;
+    float slewCoeff = 0.025f;
     int mRate = 4, mPattern = 0;
-    float mDepth = 1.0f, mVowel = 0.0f, mSmooth = 0.2f, mShape = 0.0f;
+    float mDepth = 0.8f, mVowel = 0.5f, mDecay = 0.5f;
     std::array<fxutil::Svf, 3> fmtL, fmtR;
+    float curF1 = 700.0f, curF2 = 1100.0f, curF3 = 2400.0f;
 };
 
 // ==========================================
@@ -785,26 +918,28 @@ public:
     {
         std::array<SlotParams, kNumSlots> slot;
 
-        // Resonator
-        int   resMode = 0;      // 0=Chord 1=Free 2=MIDI
-        float resShimmer = 0.0f, resInharm = 0.0f;
-        float resRootHz = 110.0f;
+        // Resonator (Colors完全移植: MIDIモード専用)
+        float resShift = 0.0f;
+        float resDecay = 0.5f;
+        float resDamp = 30.0f;
+        float resShimmer = 0.0f;
+        float resInharm = 0.0f;
+        float resSpread = 80.0f;
+        float resOutGain = 0.0f;
         std::array<float, 8> midiHz {};   // MIDIモード時の押鍵周波数 (低い順)
         int   numMidiHz = 0;
-        int   resChord = 2;
-        float resFreeMs = 5.0f;
-        float resSpread = 0.4f;
-        float resDecay = 2.0f;   // 余韻の長さ[秒]
-        float resDamp = 0.35f;
 
         // Drive
         int   drvShape = 0;
         float drvDrive = 4.0f;
         float drvLow = 0.4f, drvMid = 1.0f, drvHigh = 0.7f;
 
-        // Gate
-        int   gateRate = 4, gatePattern = 1;
-        float gateDepth = 1.0f, gateVowel = 0.0f, gateSmooth = 0.2f, gateShape = 0.0f;
+        // Gate (Colors完全移植: 50パターン、PPQ同期、S-Curve)
+        int   gateRate = 4;
+        int   gatePattern = 0;
+        float gateDepth = 80.0f;
+        float gateDecay = 50.0f;
+        float gateVowel = 50.0f;
 
         // Chorus
         float choRate = 0.6f, choDepth = 4.0f, choWidth = 0.7f;
@@ -814,10 +949,13 @@ public:
         float revPredelay = 20.0f, revWidth = 0.6f, revLowCut = 200.0f, revMod = 0.3f;
 
         double bpm = 120.0;
+        double ppqPosition = 0.0;
+        bool   isPlaying = false;
     };
 
     void prepare(double sr)
     {
+        sampleRate = sr;
         mResonator.prepare(sr);
         mDrive.prepare(sr);
         mGate.prepare(sr);
@@ -862,25 +1000,32 @@ public:
         else
         {
             // 整数・離散値はそのまま反映 (平滑すると中間値が生まれて破綻する)
-            mParams.slot     = p.slot;
-            mParams.resMode  = p.resMode;
-            mParams.resChord = p.resChord;
-            mParams.drvShape = p.drvShape;
-            mParams.gateRate = p.gateRate;
+            mParams.slot        = p.slot;
+            mParams.drvShape    = p.drvShape;
+            mParams.gateRate    = p.gateRate;
             mParams.gatePattern = p.gatePattern;
-            mParams.midiHz   = p.midiHz;
-            mParams.numMidiHz = p.numMidiHz;
-            mParams.bpm      = p.bpm;
+            mParams.midiHz      = p.midiHz;
+            mParams.numMidiHz   = p.numMidiHz;
+            mParams.bpm         = p.bpm;
+            mParams.ppqPosition = p.ppqPosition;
+            mParams.isPlaying   = p.isPlaying;
 
             // 連続値は1極で追従させる
-            sm(mParams.resShimmer, p.resShimmer);  sm(mParams.resInharm, p.resInharm);
-            sm(mParams.resRootHz,  p.resRootHz);   sm(mParams.resFreeMs, p.resFreeMs);
-            sm(mParams.resSpread,  p.resSpread);   sm(mParams.resDecay,  p.resDecay);
+            sm(mParams.resShift,   p.resShift);
+            sm(mParams.resDecay,   p.resDecay);
             sm(mParams.resDamp,    p.resDamp);
+            sm(mParams.resShimmer, p.resShimmer);
+            sm(mParams.resInharm,  p.resInharm);
+            sm(mParams.resSpread,  p.resSpread);
+            sm(mParams.resOutGain, p.resOutGain);
+
             sm(mParams.drvDrive,   p.drvDrive);    sm(mParams.drvLow,    p.drvLow);
             sm(mParams.drvMid,     p.drvMid);      sm(mParams.drvHigh,   p.drvHigh);
-            sm(mParams.gateDepth,  p.gateDepth);   sm(mParams.gateVowel, p.gateVowel);
-            sm(mParams.gateSmooth, p.gateSmooth);  sm(mParams.gateShape, p.gateShape);
+
+            sm(mParams.gateDepth,  p.gateDepth);
+            sm(mParams.gateDecay,  p.gateDecay);
+            sm(mParams.gateVowel,  p.gateVowel);
+
             sm(mParams.choRate,    p.choRate);     sm(mParams.choDepth,  p.choDepth);
             sm(mParams.choWidth,   p.choWidth);
             sm(mParams.revSize,    p.revSize);     sm(mParams.revDamp,   p.revDamp);
@@ -888,15 +1033,21 @@ public:
             sm(mParams.revLowCut,  p.revLowCut);   sm(mParams.revMod,    p.revMod);
         }
 
+        // PPQ時間進行の設定
+        mCurPpq = p.ppqPosition;
+        const double safeBpm = (p.bpm > 20.0 && p.bpm < 400.0) ? p.bpm : 120.0;
+        mPpqPerSample = (safeBpm / 60.0) / (sampleRate > 1000.0 ? sampleRate : 44100.0);
+        mIsPlaying = p.isPlaying;
+
         // 以降は平滑済みの mParams を各FXへ渡す (p ではないことに注意)
         const Params& q = mParams;
-        mResonator.setParams(q.resMode, q.resRootHz, q.resChord, q.resFreeMs,
-                             q.resSpread, q.resDecay, q.resDamp,
-                             q.resShimmer, q.resInharm,
-                             q.midiHz.data(), q.numMidiHz);
+        mResonator.setParams(q.resDecay, q.resDamp * 0.01f,
+                             q.resShimmer * 0.01f, q.resInharm * 0.01f,
+                             q.resSpread * 0.01f, q.resOutGain,
+                             q.resShift, q.midiHz.data(), q.numMidiHz);
         mDrive.setParams(q.drvShape, q.drvDrive, q.drvLow, q.drvMid, q.drvHigh);
-        mGate.setParams(q.gateRate, q.gatePattern, q.gateDepth, q.gateVowel, q.gateSmooth,
-                        q.gateShape, q.bpm);
+        mGate.setParams(q.gateRate, q.gatePattern,
+                        q.gateDepth * 0.01f, q.gateDecay * 0.01f, q.gateVowel * 0.01f);
         // Mixは各slotのAmountで管理するのでFX内部のMixは常に1.0
         mChorus.setParams(q.choRate, q.choDepth, q.choWidth, 1.0f);
         mReverb.setParams(q.revSize, q.revDamp, 1.0f,
@@ -904,14 +1055,6 @@ public:
     }
 
     // スロット順に直列適用。各スロットのAmountがそのFXのDry/Wet。
-    //
-    //  【改修 2026-08-01】
-    //   1. Amount=0 でも FX 本体は動かし続ける (出力ミックスだけ 0 にする)。
-    //      旧実装は丸ごと skip していたため、リバーブやレゾネーターの状態が凍結し、
-    //      Amount を戻した瞬間に古い残響が復活してポップしていた。
-    //   2. Amount をサンプル単位で平滑 (τ=15ms)。ブロック毎の階段を無くす。
-    //   3. Type を変えるときは、いったん Amount を 0 まで落としてから差し替える
-    //      (τ=8ms)。旧実装は瞬時に切り替わり必ずプツッと鳴っていた。
     void processSample(float& l, float& r) noexcept
     {
         for (int s = 0; s < kNumSlots; ++s)
@@ -948,7 +1091,7 @@ public:
             {
             case Resonator: mResonator.process(wl, wr); break;
             case Drive:     mDrive.process(wl, wr);     break;
-            case Gate:      mGate.process(wl, wr);      break;
+            case Gate:      mGate.process(wl, wr, mParams.bpm, mCurPpq, mIsPlaying); break;
             case Chorus:    mChorus.process(wl, wr);    break;
             case Reverb:    mReverb.process(wl, wr);    break;
             default: continue;
@@ -961,6 +1104,8 @@ public:
                 r = r * (1.0f - a) + wr * a;
             }
         }
+
+        mCurPpq += mPpqPerSample;
     }
 
     // 現在どれかのスロットが処理を必要としているか。
@@ -1000,6 +1145,11 @@ private:
     float mAmtCoef  = 0.002f;
     float mSwapCoef = 0.004f;
     bool  mParamsPrimed = false;   // 初回は平滑せず即値で取り込む
+
+    double sampleRate = 44100.0;
+    double mCurPpq = 0.0;
+    double mPpqPerSample = 0.0;
+    bool   mIsPlaying = false;
 
     Params mParams;
     SpectralResonator mResonator;

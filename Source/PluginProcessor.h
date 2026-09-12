@@ -97,6 +97,15 @@ public:
     static juce::String getGlobalWavetableDir();
     static void setGlobalWavetableDir(const juce::String& path);
 
+    // ---- GUI サイズ管理 (Ambience準拠) ----
+    int getSavedEditorWidth() const noexcept { return savedEditorWidth; }
+    int getSavedEditorHeight() const noexcept { return savedEditorHeight; }
+    void setSavedEditorSize(int w, int h) noexcept
+    {
+        savedEditorWidth = w;
+        savedEditorHeight = h;
+    }
+
     // ---- モジュレーション ----
     // GUI(アークの変調レンジ帯表示)から参照する。
     const ModMatrix& getModMatrix() const noexcept { return mModMatrix; }
@@ -326,6 +335,10 @@ private:
     juce::LinearSmoothedValue<float> mOutGainSm;  // OUT LEVEL リニアゲイン (同上)
     float mFmtShiftSm = 0.0f;     // FMT SHIFT (16k一次平滑 τ≈5ms)
     float mFmtStretchSm = 1.0f;   // FMT STRETCH (同上)
+
+    // GUI サイズ管理 (Ambience準拠)
+    int savedEditorWidth{ 780 };
+    int savedEditorHeight{ 417 };
 
     JUCE_DECLARE_WEAK_REFERENCEABLE(SPECTRA8AudioProcessor)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SPECTRA8AudioProcessor)

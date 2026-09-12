@@ -457,50 +457,35 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
             Attr().withStringFromValueFunction(fmtPercent01)));
     }
 
-    // Spectral Resonator
-    layout.add(std::make_unique<juce::AudioParameterChoice>(
-        juce::ParameterID("resMode", 1), "Res Mode", SpectralResonator::getModeNames(), 0));
-    // ROOTはHz直値ではなくMIDIノート番号。音楽的に合わせやすく、表示も音名になる。
-    //  24 = C1 … 96 = C7 / 既定45 = A2 (110Hz)
+    // Spectral Resonator (Colors完全移植: MIDIモード専用)
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("resRoot", 1), "Res Root",
-        juce::NormalisableRange<float>(24.0f, 96.0f, 1.0f), 45.0f,
-        juce::AudioParameterFloatAttributes().withStringFromValueFunction(
-            [](float v, int)
-            {
-                static const char* kNames[12] = { "C", "C#", "D", "D#", "E", "F",
-                                                  "F#", "G", "G#", "A", "A#", "B" };
-                const int n = juce::jlimit(0, 127, (int)std::lround(v));
-                return juce::String(kNames[n % 12]) + juce::String(n / 12 - 1);
-            })));
-    layout.add(std::make_unique<juce::AudioParameterChoice>(
-        juce::ParameterID("resChord", 1), "Res Chord", SpectralResonator::getChordNames(), 2));
+        juce::ParameterID("resShift", 1), "Resonator Shift",
+        juce::NormalisableRange<float>(0.0f, 24.0f, 1.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtSemitone)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("resFreeMs", 1), "Res Time",
-        juce::NormalisableRange<float>(0.2f, 50.0f, 0.0f, 0.4f), 5.0f,
-        Attr().withStringFromValueFunction([](float v, int) { return juce::String(v, 1) + " ms"; })));
+        juce::ParameterID("resDecay", 1), "Resonator Decay",
+        juce::NormalisableRange<float>(0.0005f, 3.0f, 0.0f, 0.35f), 0.5f,
+        Attr().withStringFromValueFunction(fmtTime)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("resSpread", 1), "Res Spread",
-        juce::NormalisableRange<float>(0.0f, 1.0f), 0.4f,
-        Attr().withStringFromValueFunction(fmtPercent01)));
-    // DECAY: 余韻(T60)の長さ[秒]。ピッチに依らず一定になるよう内部で帰還量へ変換する。
+        juce::ParameterID("resDamp", 1), "Resonator Damp",
+        juce::NormalisableRange<float>(0.0f, 100.0f), 30.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("resDecay", 1), "Res Decay",
-        juce::NormalisableRange<float>(0.05f, 20.0f, 0.0f, 0.35f), 2.0f,
-        juce::AudioParameterFloatAttributes().withStringFromValueFunction(
-            [](float v, int) { return juce::String(v, v < 1.0f ? 2 : 1) + " s"; })));
+        juce::ParameterID("resShimmer", 1), "Resonator Shimmer",
+        juce::NormalisableRange<float>(0.0f, 100.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("resDamp", 1), "Res Damp",
-        juce::NormalisableRange<float>(0.0f, 1.0f), 0.35f,
-        Attr().withStringFromValueFunction(fmtPercent01)));
+        juce::ParameterID("resInharm", 1), "Resonator Inharmonic",
+        juce::NormalisableRange<float>(0.0f, 100.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("resShimmer", 1), "Res Shimmer",
-        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
-        Attr().withStringFromValueFunction(fmtPercent01)));
+        juce::ParameterID("resSpread", 1), "Resonator Spread",
+        juce::NormalisableRange<float>(0.0f, 100.0f), 80.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("resInharm", 1), "Res Inharm",
-        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
-        Attr().withStringFromValueFunction(fmtPercent01)));
+        juce::ParameterID("resOutGain", 1), "Resonator Out Gain",
+        juce::NormalisableRange<float>(-24.0f, 12.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtDb)));
 
     // Multiband Drive
     layout.add(std::make_unique<juce::AudioParameterChoice>(
@@ -522,28 +507,23 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::NormalisableRange<float>(0.0f, 1.0f), 0.7f,
         Attr().withStringFromValueFunction(fmtPercent01)));
 
-    // Formant Gate
+    // Formant Gate (Colors完全移植: 50パターン、PPQ同期、S-Curve)
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("gateRate", 1), "Gate Rate", FormantGate::getRateNames(), 4));
     layout.add(std::make_unique<juce::AudioParameterChoice>(
-        juce::ParameterID("gatePattern", 1), "Gate Pattern", FormantGate::getPatternNames(), 1));
+        juce::ParameterID("gatePattern", 1), "Gate Pattern", FormantGate::getPatternNames(), 0));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("gateDepth", 1), "Gate Depth",
-        juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f,
-        Attr().withStringFromValueFunction(fmtPercent01)));
+        juce::NormalisableRange<float>(0.0f, 100.0f), 80.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("gateDecay", 1), "Gate Decay",
+        juce::NormalisableRange<float>(10.0f, 100.0f), 50.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("gateVowel", 1), "Gate Vowel",
-        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
-        Attr().withStringFromValueFunction(fmtPercent01)));
-    layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("gateSmooth", 1), "Gate Smooth",
-        juce::NormalisableRange<float>(0.0f, 1.0f), 0.2f,
-        Attr().withStringFromValueFunction(fmtPercent01)));
-    // SHAPE: 0=ステップ保持 / 1=各ステップ頭で鋭く減衰する打点 (連打が作れる)
-    layout.add(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID("gateShape", 1), "Gate Shape",
-        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
-        Attr().withStringFromValueFunction(fmtPercent01)));
+        juce::NormalisableRange<float>(0.0f, 100.0f), 50.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
 
     // Chorus
     layout.add(std::make_unique<juce::AudioParameterFloat>(
@@ -1387,17 +1367,13 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             fp.slot[(size_t)s].type   = (int)f.type->load();
             fp.slot[(size_t)s].amount = f.amount->load();
         }
-        fp.resMode     = (int)apvts.getRawParameterValue("resMode")->load();
-        // ROOTはMIDIノート番号なのでHzへ変換
-        fp.resRootHz   = 440.0f * std::pow(2.0f,
-                            (apvts.getRawParameterValue("resRoot")->load() - 69.0f) / 12.0f);
-        fp.resChord    = (int)apvts.getRawParameterValue("resChord")->load();
-        fp.resFreeMs   = apvts.getRawParameterValue("resFreeMs")->load();
-        fp.resSpread   = apvts.getRawParameterValue("resSpread")->load();
+        fp.resShift    = apvts.getRawParameterValue("resShift")->load();
         fp.resDecay    = apvts.getRawParameterValue("resDecay")->load();
         fp.resDamp     = apvts.getRawParameterValue("resDamp")->load();
         fp.resShimmer  = apvts.getRawParameterValue("resShimmer")->load();
         fp.resInharm   = apvts.getRawParameterValue("resInharm")->load();
+        fp.resSpread   = apvts.getRawParameterValue("resSpread")->load();
+        fp.resOutGain  = apvts.getRawParameterValue("resOutGain")->load();
 
         fp.drvShape = (int)apvts.getRawParameterValue("drvShape")->load();
         fp.drvDrive = apvts.getRawParameterValue("drvDrive")->load();
@@ -1408,9 +1384,8 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         fp.gateRate    = (int)apvts.getRawParameterValue("gateRate")->load();
         fp.gatePattern = (int)apvts.getRawParameterValue("gatePattern")->load();
         fp.gateDepth   = apvts.getRawParameterValue("gateDepth")->load();
+        fp.gateDecay   = apvts.getRawParameterValue("gateDecay")->load();
         fp.gateVowel   = apvts.getRawParameterValue("gateVowel")->load();
-        fp.gateSmooth  = apvts.getRawParameterValue("gateSmooth")->load();
-        fp.gateShape   = apvts.getRawParameterValue("gateShape")->load();
 
         fp.choRate  = apvts.getRawParameterValue("choRate")->load();
         fp.choDepth = apvts.getRawParameterValue("choDepth")->load();
@@ -1428,12 +1403,21 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         for (int i = 0; i < fp.numMidiHz; ++i)
             fp.midiHz[(size_t)i] = 440.0f * std::pow(2.0f, (mHeldNotes[(size_t)i] - 69) / 12.0f);
 
-        // Gateのテンポ同期用BPM
+        // Gateのテンポ同期用BPM / PPQ / 再生状態
         fp.bpm = 120.0;
+        fp.ppqPosition = 0.0;
+        fp.isPlaying = false;
         if (auto* pH = getPlayHead())
+        {
             if (auto info = pH->getPosition())
+            {
                 if (info->getBpm().hasValue())
                     fp.bpm = *(info->getBpm());
+                if (info->getPpqPosition().hasValue())
+                    fp.ppqPosition = *(info->getPpqPosition());
+                fp.isPlaying = info->getIsPlaying();
+            }
+        }
 
         // FXの連続パラメータはブロック毎の階段になるので τ=30ms で均す
         {
@@ -1533,6 +1517,8 @@ juce::AudioProcessorEditor* SPECTRA8AudioProcessor::createEditor()
 void SPECTRA8AudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
+    state.setProperty("editorWidth", savedEditorWidth, nullptr);
+    state.setProperty("editorHeight", savedEditorHeight, nullptr);
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
 
     // 【重要】setStateInformation の replaceState で BAND_EQ_GAINS ごと apvts.state に
@@ -1573,7 +1559,10 @@ void SPECTRA8AudioProcessor::setStateInformation(const void* data, int sizeInByt
             // BAND_EQ_GAINS は apvts の管理外。取り込むと保存の度に増殖するので
             // ValueTree へ移す前に取り除く。
             xmlState->deleteAllChildElementsWithTagName("BAND_EQ_GAINS");
-            apvts.replaceState(juce::ValueTree::fromXml(*xmlState));
+            auto tree = juce::ValueTree::fromXml(*xmlState);
+            savedEditorWidth = tree.getProperty("editorWidth", 780);
+            savedEditorHeight = tree.getProperty("editorHeight", 417);
+            apvts.replaceState(tree);
         }
 
         // カスタムWavetableの復元 (パスが保存されていればロード)。

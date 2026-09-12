@@ -15,6 +15,23 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
       mBandsEqPanel(p.apvts, p.getBandGains(), p.getBandLevelsForUi(), p.getAnalyzer()),
       mPresetPanel(p.apvts)
 {
+    // Content Component の設定 (Ambience準拠: 75%縮小〜175%拡大)
+    addAndMakeVisible(content);
+    content.onPaint = [this](juce::Graphics& g) { paintContent(g); };
+    content.onLayout = [this] { layoutContent(); };
+
+    constrainer.setFixedAspectRatio((double)kBaseW / (double)kBaseH);
+    constrainer.setSizeLimits(
+        static_cast<int>(kBaseW * 0.75), static_cast<int>(kBaseH * 0.75),
+        static_cast<int>(kBaseW * 1.75), static_cast<int>(kBaseH * 1.75));
+    setConstrainer(&constrainer);
+    setResizable(true, true);
+
+    const int savedW = audioProcessor.getSavedEditorWidth();
+    const int savedH = audioProcessor.getSavedEditorHeight();
+    setSize(juce::jlimit(static_cast<int>(kBaseW * 0.75), static_cast<int>(kBaseW * 1.75), savedW),
+            juce::jlimit(static_cast<int>(kBaseH * 0.75), static_cast<int>(kBaseH * 1.75), savedH));
+
     // ボタンのスタイルとリスナー初期化
     auto setupTabButton = [this](juce::TextButton& btn, int tabIdx)
     {
@@ -25,7 +42,7 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
         btn.setClickingTogglesState(true);
         btn.setRadioGroupId(1001); // 同一グループで排他トグル
         btn.onClick = [this, tabIdx] { selectTab(tabIdx); };
-        addAndMakeVisible(btn);
+        content.addAndMakeVisible(btn);
     };
 
     setupTabButton(mTabVocoderBtn, 0);
@@ -36,12 +53,12 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
     setupTabButton(mTabPresetBtn, 5);
 
     // タブパネルを追加
-    addChildComponent(mVocoderPanel);
-    addChildComponent(mExcitationPanel);
-    addChildComponent(mModPanel);
-    addChildComponent(mFxPanel);
-    addChildComponent(mBandsEqPanel);
-    addChildComponent(mPresetPanel);
+    content.addChildComponent(mVocoderPanel);
+    content.addChildComponent(mExcitationPanel);
+    content.addChildComponent(mModPanel);
+    content.addChildComponent(mFxPanel);
+    content.addChildComponent(mBandsEqPanel);
+    content.addChildComponent(mPresetPanel);
 
     // インフォバーの初期化。
     //  juce::Label は drawFittedText で「高さ / 行の高さ」ぶんの行数まで自動折り返しするので、
@@ -56,21 +73,17 @@ SPECTRA8AudioProcessorEditor::SPECTRA8AudioProcessorEditor(SPECTRA8AudioProcesso
     mDebugLabel.setJustificationType(juce::Justification::topLeft);
     mDebugLabel.setBorderSize(juce::BorderSize<int>(5, kInfoTextInset, 4, 12));
     mDebugLabel.setMinimumHorizontalScale(1.0f);   // 縮小せず必ず折り返す
-    addAndMakeVisible(mDebugLabel);
+    content.addAndMakeVisible(mDebugLabel);
 
     // インフォバー左側余白の受信ノート名ラベル初期化
     mMidiNotesLabel.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
     mMidiNotesLabel.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
     mMidiNotesLabel.setColour(juce::Label::textColourId, SpectraColors::accentVocoder);
     mMidiNotesLabel.setJustificationType(juce::Justification::centredLeft);
-    addAndMakeVisible(mMidiNotesLabel);
+    content.addAndMakeVisible(mMidiNotesLabel);
 
     // 初期タブの選択
     mTabVocoderBtn.setToggleState(true, juce::sendNotification);
-
-    // ウィンドウサイズ設定 (Granular準拠のワイド表示)
-    //  インフォバーを3行(20→52px)にしたぶん、縦を 380 → 412 へ広げてパネル面積を保つ。
-    setSize(780, 417);
 
     // タブボタンにも説明を付ける
     mTabVocoderBtn.setTooltip("VOCODER - core vocoder settings: engine type, voicing mode, formants and level.");
@@ -91,13 +104,16 @@ SPECTRA8AudioProcessorEditor::~SPECTRA8AudioProcessorEditor()
 void SPECTRA8AudioProcessorEditor::paint(juce::Graphics& g)
 {
     g.fillAll(SpectraColors::bg);
+}
 
+void SPECTRA8AudioProcessorEditor::paintContent(juce::Graphics& g)
+{
     // ヘッダー背景
-    auto headerRect = getLocalBounds().removeFromTop(36);
+    auto headerRect = content.getLocalBounds().removeFromTop(36);
     g.setColour(SpectraColors::panel);
     g.fillRect(headerRect);
     g.setColour(SpectraColors::panelLine);
-    g.drawHorizontalLine(headerRect.getBottom() - 1, 0.0f, (float)getWidth());
+    g.drawHorizontalLine(headerRect.getBottom() - 1, 0.0f, (float)kBaseW);
 
     // プラグインタイトル
     g.setColour(SpectraColors::text);
@@ -111,7 +127,15 @@ void SPECTRA8AudioProcessorEditor::paint(juce::Graphics& g)
 
 void SPECTRA8AudioProcessorEditor::resized()
 {
-    auto r = getLocalBounds();
+    const float scale = juce::jmax(0.25f, (float)getWidth() / (float)kBaseW);
+    content.setTransform(juce::AffineTransform::scale(scale));
+    content.setBounds(0, 0, kBaseW, kBaseH);
+    audioProcessor.setSavedEditorSize(getWidth(), getHeight());
+}
+
+void SPECTRA8AudioProcessorEditor::layoutContent()
+{
+    auto r = content.getLocalBounds();
 
     // 1. ヘッダー部のレイアウト
     auto headerArea = r.removeFromTop(36);
@@ -119,7 +143,7 @@ void SPECTRA8AudioProcessorEditor::resized()
     // タブ選択ボタンの配置 (ヘッダーの右側に6個並べる)
     const int tabW = 76;
     const int tabH = 24;
-    int tabX = getWidth() - (tabW * 6) - 12;
+    int tabX = kBaseW - (tabW * 6) - 12;
     const int tabY = (headerArea.getHeight() - tabH) / 2;
 
     mTabVocoderBtn.setBounds(tabX, tabY, tabW, tabH);
@@ -155,9 +179,10 @@ void SPECTRA8AudioProcessorEditor::timerCallback()
 
     juce::String help;
 
-    if (auto* c = getComponentAt(getMouseXYRelative()))
+    const auto mousePos = content.getLocalPoint(this, getMouseXYRelative());
+    if (auto* c = content.getComponentAt(mousePos))
     {
-        for (auto* comp = c; comp != nullptr && comp != this; comp = comp->getParentComponent())
+        for (auto* comp = c; comp != nullptr && comp != &content; comp = comp->getParentComponent())
         {
             if (auto* tc = dynamic_cast<juce::TooltipClient*>(comp))
             {
