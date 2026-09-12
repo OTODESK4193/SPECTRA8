@@ -86,6 +86,7 @@ public:
         cats.add("M.Pitch Modulations");
         cats.add("Rhythmic Formant Gate");
         cats.add("Spectral Resonator Lab");
+        cats.add("SpecialFX");
         cats.add("User");
         return cats;
     }
