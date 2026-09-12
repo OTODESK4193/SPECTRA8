@@ -83,6 +83,9 @@ public:
         cats.add("LPC (Auto)");
         cats.add("FilterBank (MIDI)");
         cats.add("LPC (MIDI)");
+        cats.add("M.Pitch Modulations");
+        cats.add("Rhythmic Formant Gate");
+        cats.add("Spectral Resonator Lab");
         cats.add("User");
         return cats;
     }
