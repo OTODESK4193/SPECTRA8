@@ -4,7 +4,7 @@
 ![License](https://img.shields.io/badge/license-AGPLv3-green)
 ![JUCE](https://img.shields.io/badge/JUCE-8.0.x-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
-
+![Downloads](https://img.shields.io/github/downloads/OTODESK4193/SPECTRA8/total.svg)
 ##
 <img src="Source/Assets/VOCODER.jpg" width="700">
 
