@@ -122,7 +122,7 @@ void SPECTRA8AudioProcessorEditor::paintContent(juce::Graphics& g)
 
     g.setColour(SpectraColors::textDim);
     g.setFont(juce::FontOptions(10.0f));
-    g.drawText("v1.0.0", 118, 2, 80, headerRect.getHeight(), juce::Justification::centredLeft);
+    g.drawText("v1.0.0 B001", 118, 2, 120, headerRect.getHeight(), juce::Justification::centredLeft);
 }
 
 void SPECTRA8AudioProcessorEditor::resized()

@@ -20,6 +20,7 @@
 #include "ValueKnob.h"
 #include "HelpComboBox.h"
 #include "ArcDial.h"
+#include "ModRing.h"
 
 class SPECTRA8AudioProcessor;
 
@@ -79,7 +80,8 @@ private:
 // FXタブ本体
 // ------------------------------------------
 class FxPanel : public juce::Component,
-                public juce::DragAndDropContainer
+                public juce::DragAndDropContainer,
+                private juce::Timer
 {
 public:
     explicit FxPanel(SPECTRA8AudioProcessor& p);
@@ -89,6 +91,8 @@ public:
     void resized() override;
 
 private:
+    void timerCallback() override;
+
     int  getSlotType(int slot) const;
     void selectSlot(int slot);
     void swapSlots(int a, int b);

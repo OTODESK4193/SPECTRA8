@@ -1367,33 +1367,33 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             fp.slot[(size_t)s].type   = (int)f.type->load();
             fp.slot[(size_t)s].amount = f.amount->load();
         }
-        fp.resShift    = apvts.getRawParameterValue("resShift")->load();
-        fp.resDecay    = apvts.getRawParameterValue("resDecay")->load();
-        fp.resDamp     = apvts.getRawParameterValue("resDamp")->load();
-        fp.resShimmer  = apvts.getRawParameterValue("resShimmer")->load();
-        fp.resInharm   = apvts.getRawParameterValue("resInharm")->load();
-        fp.resSpread   = apvts.getRawParameterValue("resSpread")->load();
-        fp.resOutGain  = apvts.getRawParameterValue("resOutGain")->load();
+        fp.resShift    = smoothedParam(ModMatrix::DstResShift);
+        fp.resDecay    = smoothedParam(ModMatrix::DstResDecay);
+        fp.resDamp     = smoothedParam(ModMatrix::DstResDamp);
+        fp.resShimmer  = smoothedParam(ModMatrix::DstResShimmer);
+        fp.resInharm   = smoothedParam(ModMatrix::DstResInharm);
+        fp.resSpread   = smoothedParam(ModMatrix::DstResSpread);
+        fp.resOutGain  = smoothedParam(ModMatrix::DstResOutGain);
 
         fp.drvShape = (int)apvts.getRawParameterValue("drvShape")->load();
-        fp.drvDrive = apvts.getRawParameterValue("drvDrive")->load();
+        fp.drvDrive = smoothedParam(ModMatrix::DstFxDrive);
         fp.drvLow   = apvts.getRawParameterValue("drvLow")->load();
         fp.drvMid   = apvts.getRawParameterValue("drvMid")->load();
         fp.drvHigh  = apvts.getRawParameterValue("drvHigh")->load();
 
         fp.gateRate    = (int)apvts.getRawParameterValue("gateRate")->load();
         fp.gatePattern = (int)apvts.getRawParameterValue("gatePattern")->load();
-        fp.gateDepth   = apvts.getRawParameterValue("gateDepth")->load();
-        fp.gateDecay   = apvts.getRawParameterValue("gateDecay")->load();
-        fp.gateVowel   = apvts.getRawParameterValue("gateVowel")->load();
+        fp.gateDepth   = smoothedParam(ModMatrix::DstGateDepth);
+        fp.gateDecay   = smoothedParam(ModMatrix::DstGateDecay);
+        fp.gateVowel   = smoothedParam(ModMatrix::DstGateVowel);
 
-        fp.choRate  = apvts.getRawParameterValue("choRate")->load();
-        fp.choDepth = apvts.getRawParameterValue("choDepth")->load();
-        fp.choWidth = apvts.getRawParameterValue("choWidth")->load();
+        fp.choRate  = smoothedParam(ModMatrix::DstChorusRate);
+        fp.choDepth = smoothedParam(ModMatrix::DstChorusDepth);
+        fp.choWidth = smoothedParam(ModMatrix::DstChorusWidth);
 
-        fp.revSize     = apvts.getRawParameterValue("revSize")->load();
-        fp.revDamp     = apvts.getRawParameterValue("revDamp")->load();
-        fp.revPredelay = apvts.getRawParameterValue("revPredelay")->load();
+        fp.revSize     = smoothedParam(ModMatrix::DstReverbSize);
+        fp.revDamp     = smoothedParam(ModMatrix::DstReverbDamp);
+        fp.revPredelay = smoothedParam(ModMatrix::DstReverbPre);
         fp.revWidth    = apvts.getRawParameterValue("revWidth")->load();
         fp.revLowCut   = apvts.getRawParameterValue("revLowCut")->load();
         fp.revMod      = apvts.getRawParameterValue("revMod")->load();

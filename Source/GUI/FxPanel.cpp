@@ -177,12 +177,73 @@ FxPanel::FxPanel(SPECTRA8AudioProcessor& p) : proc(p)
     addAndMakeVisible(detailHint);
 
     selectSlot(0);
+    startTimerHz(30);
 }
 
 FxPanel::~FxPanel()
 {
+    stopTimer();
     for (auto& k : detailKnobs)
         if (k) k->setLookAndFeel(nullptr);
+}
+
+void FxPanel::timerCallback()
+{
+    using M = ModMatrix;
+    const auto& mm = proc.getModMatrix();
+
+    switch (getSlotType(selectedSlot))
+    {
+    case FxChain::Resonator:
+        if (detailKnobs.size() >= 7)
+        {
+            ModRing::apply(*detailKnobs[0], mm, M::DstResShift);
+            ModRing::apply(*detailKnobs[1], mm, M::DstResDecay);
+            ModRing::apply(*detailKnobs[2], mm, M::DstResDamp);
+            ModRing::apply(*detailKnobs[3], mm, M::DstResShimmer);
+            ModRing::apply(*detailKnobs[4], mm, M::DstResInharm);
+            ModRing::apply(*detailKnobs[5], mm, M::DstResSpread);
+            ModRing::apply(*detailKnobs[6], mm, M::DstResOutGain);
+        }
+        break;
+
+    case FxChain::Drive:
+        if (detailKnobs.size() >= 1)
+        {
+            ModRing::apply(*detailKnobs[0], mm, M::DstFxDrive);
+        }
+        break;
+
+    case FxChain::Gate:
+        if (detailKnobs.size() >= 3)
+        {
+            ModRing::apply(*detailKnobs[0], mm, M::DstGateDepth);
+            ModRing::apply(*detailKnobs[1], mm, M::DstGateDecay);
+            ModRing::apply(*detailKnobs[2], mm, M::DstGateVowel);
+        }
+        break;
+
+    case FxChain::Chorus:
+        if (detailKnobs.size() >= 3)
+        {
+            ModRing::apply(*detailKnobs[0], mm, M::DstChorusRate);
+            ModRing::apply(*detailKnobs[1], mm, M::DstChorusDepth);
+            ModRing::apply(*detailKnobs[2], mm, M::DstChorusWidth);
+        }
+        break;
+
+    case FxChain::Reverb:
+        if (detailKnobs.size() >= 3)
+        {
+            ModRing::apply(*detailKnobs[0], mm, M::DstReverbSize);
+            ModRing::apply(*detailKnobs[1], mm, M::DstReverbDamp);
+            ModRing::apply(*detailKnobs[2], mm, M::DstReverbPre);
+        }
+        break;
+
+    default:
+        break;
+    }
 }
 
 int FxPanel::getSlotType(int slot) const

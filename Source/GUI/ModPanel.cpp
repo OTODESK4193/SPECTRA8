@@ -20,10 +20,16 @@ namespace
         vocMenu.addItem(ModMatrix::DstFormantStretch + 1, "Formant Stretch", true, currentDst == ModMatrix::DstFormantStretch);
         vocMenu.addItem(ModMatrix::DstLofi + 1, "LoFi", true, currentDst == ModMatrix::DstLofi);
         vocMenu.addItem(ModMatrix::DstBasePitch + 1, "Base Pitch", true, currentDst == ModMatrix::DstBasePitch);
+        vocMenu.addItem(ModMatrix::DstMasterPitch + 1, "Master Pitch", true, currentDst == ModMatrix::DstMasterPitch);
         vocMenu.addItem(ModMatrix::DstNoiseColor + 1, "Noise Color", true, currentDst == ModMatrix::DstNoiseColor);
         vocMenu.addItem(ModMatrix::DstNoise + 1, "Noise Mix", true, currentDst == ModMatrix::DstNoise);
         vocMenu.addItem(ModMatrix::DstResonance + 1, "Resonance", true, currentDst == ModMatrix::DstResonance);
         vocMenu.addItem(ModMatrix::DstStereoWidth + 1, "Stereo Width", true, currentDst == ModMatrix::DstStereoWidth);
+        vocMenu.addItem(ModMatrix::DstAttack + 1, "Attack", true, currentDst == ModMatrix::DstAttack);
+        vocMenu.addItem(ModMatrix::DstDecay + 1, "Decay", true, currentDst == ModMatrix::DstDecay);
+        vocMenu.addItem(ModMatrix::DstSustain + 1, "Sustain", true, currentDst == ModMatrix::DstSustain);
+        vocMenu.addItem(ModMatrix::DstRelease + 1, "Release", true, currentDst == ModMatrix::DstRelease);
+        vocMenu.addItem(ModMatrix::DstAir + 1, "Air", true, currentDst == ModMatrix::DstAir);
         vocMenu.addItem(ModMatrix::DstMix + 1, "Mix", true, currentDst == ModMatrix::DstMix);
         vocMenu.addItem(ModMatrix::DstOutLevel + 1, "Out Level", true, currentDst == ModMatrix::DstOutLevel);
         menu.addSubMenu("1. Vocoder", vocMenu);
@@ -40,7 +46,6 @@ namespace
         excMenu.addItem(ModMatrix::DstSyncShift + 1, "Sync Shift", true, currentDst == ModMatrix::DstSyncShift);
         excMenu.addItem(ModMatrix::DstVocAmt + 1, "Formant Morph", true, currentDst == ModMatrix::DstVocAmt);
         excMenu.addItem(ModMatrix::DstVocShift + 1, "Formant Shift (Exc)", true, currentDst == ModMatrix::DstVocShift);
-        excMenu.addItem(ModMatrix::DstMasterPitch + 1, "Master Pitch", true, currentDst == ModMatrix::DstMasterPitch);
         menu.addSubMenu("2. Excitation", excMenu);
 
         // 3. FX
@@ -48,13 +53,17 @@ namespace
         fxMenu.addItem(ModMatrix::DstFxDrive + 1, "Drive", true, currentDst == ModMatrix::DstFxDrive);
         fxMenu.addItem(ModMatrix::DstGateRate + 1, "Gate Rate", true, currentDst == ModMatrix::DstGateRate);
         fxMenu.addItem(ModMatrix::DstGateDepth + 1, "Gate Depth", true, currentDst == ModMatrix::DstGateDepth);
+        fxMenu.addItem(ModMatrix::DstGateDecay + 1, "Gate Decay", true, currentDst == ModMatrix::DstGateDecay);
         fxMenu.addItem(ModMatrix::DstGateVowel + 1, "Gate Vowel", true, currentDst == ModMatrix::DstGateVowel);
         fxMenu.addItem(ModMatrix::DstGateSmooth + 1, "Gate Smooth", true, currentDst == ModMatrix::DstGateSmooth);
         fxMenu.addItem(ModMatrix::DstGateShape + 1, "Gate Shape", true, currentDst == ModMatrix::DstGateShape);
+        fxMenu.addItem(ModMatrix::DstResShift + 1, "Resonator Shift", true, currentDst == ModMatrix::DstResShift);
         fxMenu.addItem(ModMatrix::DstResDecay + 1, "Resonator Decay", true, currentDst == ModMatrix::DstResDecay);
-        fxMenu.addItem(ModMatrix::DstResShimmer + 1, "Resonator Shimmer", true, currentDst == ModMatrix::DstResShimmer);
         fxMenu.addItem(ModMatrix::DstResDamp + 1, "Resonator Damp", true, currentDst == ModMatrix::DstResDamp);
+        fxMenu.addItem(ModMatrix::DstResShimmer + 1, "Resonator Shimmer", true, currentDst == ModMatrix::DstResShimmer);
         fxMenu.addItem(ModMatrix::DstResInharm + 1, "Resonator Inharm", true, currentDst == ModMatrix::DstResInharm);
+        fxMenu.addItem(ModMatrix::DstResSpread + 1, "Resonator Spread", true, currentDst == ModMatrix::DstResSpread);
+        fxMenu.addItem(ModMatrix::DstResOutGain + 1, "Resonator Out Gain", true, currentDst == ModMatrix::DstResOutGain);
         fxMenu.addItem(ModMatrix::DstChorusRate + 1, "Chorus Rate", true, currentDst == ModMatrix::DstChorusRate);
         fxMenu.addItem(ModMatrix::DstChorusDepth + 1, "Chorus Depth", true, currentDst == ModMatrix::DstChorusDepth);
         fxMenu.addItem(ModMatrix::DstChorusWidth + 1, "Chorus Width", true, currentDst == ModMatrix::DstChorusWidth);
