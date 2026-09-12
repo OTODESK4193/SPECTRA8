@@ -1,6 +1,6 @@
 # SPECTRA 8
 
-![Release](https://img.shields.io/badge/release-v1.0.0%20B005-blue)
+![Release](https://img.shields.io/badge/release-v1.0.0%20B006-blue)
 ![License](https://img.shields.io/badge/license-AGPLv3-green)
 ![JUCE](https://img.shields.io/badge/JUCE-8.0.x-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -15,7 +15,7 @@
 * **Filterbank Vocoder** — a classic 8–48 band analysis/synthesis vocoder with per-band level tracking. Crisp, articulate, and immediate.
 * **LPC Vocoder** — a linear-predictive vocal-tract model with reflection-coefficient lattice synthesis. This is the architecture behind speech chips like the TMS5220, and it delivers everything from natural formant morphing to unapologetically retro robot speech.
 
-Both engines share the same carrier (excitation) section, a 56-destination modulation matrix, an interactive 48-band EQ, and an expanded 5-slot FX chain ported directly from COLORS (featuring a 50-pattern Formant Gate and a MIDI-tracking Spectral Resonator). You can crossfade between engines without dropouts, freely resize the UI, and choose from 150 factory presets spanning 8 dedicated categories.
+Both engines share the same carrier (excitation) section, a 60-destination modulation matrix, an interactive 48-band EQ, and an expanded 5-slot FX chain ported directly from COLORS (featuring a 50-pattern Formant Gate, a MIDI-tracking Spectral Resonator with Scale Snap, an ADAA 10-model Saturator, and a Sub-Protected Hyper Dimension Chorus). You can crossfade between engines without dropouts, freely resize the UI, and choose from 150 factory presets spanning 8 dedicated categories.
 
 **Design goal:** surpass Orange Vocoder in sound quality while absorbing the retro character of BitSpeek — in one versatile, highly-playable instrument.
 
@@ -66,7 +66,7 @@ The carrier is an 8-voice polyphonic oscillator with PolyBLEP anti-aliasing.
 
 * **Sources:** LFO × 3 (Sine/Tri/Saw/Square/S&H/Chaos, free or tempo-synced across 13 divisions), ENV × 2 (loopable ADSR), Velocity, Note, Mod Wheel, Random.
 * **6 slots**, each with Source → Destination, bipolar Amount, and a Uni/Bipolar polarity switch.
-* **56 destinations** — every knob across the VOCODER, EXCITATION, and FX tabs (including Resonator Shift/Spread/OutGain, Gate Decay, Drive, Chorus, and Reverb).
+* **60 destinations** — every knob across the VOCODER, EXCITATION, and FX tabs (including Resonator Shift/Spread/OutGain, Gate Decay, Drive Pre-Cut/Trim, Chorus Low-Cut/Dimension, and Reverb).
 * **Live range display:** modulated destination knobs persistently render a pink arc band showing the reachable modulation range plus a bright dot for the instantaneous modulated value. Real-time preview is active even when idling without incoming audio. The band is computed through the exact same mathematical function the DSP uses, ensuring perfect visual-to-audio fidelity.
 * Logarithmic parameters (BASE PITCH, NOISE COLOR, RESONANCE, Attack/Decay/Release) are modulated as octave ratios rather than linear offsets, keeping them musically usable across their entire range.
 
@@ -82,18 +82,26 @@ Five slots in series, ported and expanded directly from **COLORS** with full MID
 * **SPECTRAL RESONATOR** — 8 tuned comb resonators with Karplus-Strong topology and complete MIDI tracking.
   * **CHORD mode:** place the resonators on a root note and chord type (Octaves / Power 5 / Major / Minor / Sus4 / Min7 / Maj9 / Dim).
   * **MIDI mode:** resonator pitches dynamically follow the MIDI notes played. Fewer than 8 notes are stacked into upper octaves. Releasing keys holds the last voicing without cutting off.
+  * **KEY/SCALE FOLLOW:** snaps resonator notes to the selected scale and key when MIDI input is active or chords are generated.
   * **SHIFT (±24 st):** semitone pitch transposition knob — modifiable in real time via the ModMatrix for arpeggiated resonator chords and pitch bends.
   * **SPREAD (0–100%):** stereo pan distribution across the 8 resonator lines.
   * **OUT GAIN (-12–+12 dB):** output level compensation.
   * **DECAY (0.05–20 s):** pitch-compensated ring-out time in seconds, ensuring equal sustained resonance from low sub-bass up to high treble.
   * **SHIMMER (0–100%):** adds octave-up and two-octave-up sparkle exclusively in parallel to the output without destabilizing the feedback loop.
   * **INHARM (0–100%):** partial-frequency stretching (`f_n /= √(1+B·n²)`), producing authentic metallic bells and gamelan-like clangs.
-* **MULTIBAND DRIVE** — 3-band split (300 Hz / 2500 Hz) with independent band gains and drive amount. Shapes: Tanh / Fold / Crush.
+* **ANATOMY ADAA SATURATOR (10 MODELS)** — Ported directly from COLORS. 1st-Order Anti-Derivative Anti-Aliasing (ADAA) nonlinear processing with Pre-HPF and Trim.
+  * **10 Models:** Soft Tanh, Hard Clip, Triode (asymmetric tube), Tape (hysteresis-like rounding), Transformer (magnetic saturation), JFET (warm FET breakup), BJT (crisp bipolar transistor), Wavefold (Buchla-style metallic folding), Exciter (even-harmonic sparkle), Cubic (pure 3rd harmonic).
+  * **PRE-HPF (20–2000 Hz):** tightens low-end rumble before hitting the saturation core to prevent muddy intermodulation.
+  * **TRIM (-12–+12 dB):** output level compensation with integrated DC blocking.
 * **FORMANT GATE** — 16-step tempo-synced rhythm slicer ported from COLORS.
   * **50 PATTERNS:** comprehensive rhythm library including classic trance gates, triplets, dotted polyrhythms, stutter glitches, swing funk cuts, and complex chisel patterns.
   * **GATE DECAY (5–1000 ms):** continuous envelope release control, ranging from sharp micro-plucks to smooth breathing swells.
   * **VOWEL (0–100%):** per-step vowel formant filter modulation.
-* **ENSEMBLE CHORUS** — 4-voice widener with Rate, Depth, and Width.
+* **HYPER DIMENSION CHORUS** — Ported directly from COLORS with Sub-Bass Protection.
+  * **SUB PROTECTION (LOW CUT 20–500 Hz):** Linkwitz-Riley-derived crossover splits the low bass, keeping it monophonic and completely dry while modulating only the mids and highs. Eliminates phase cancellation in the sub-bass.
+  * **4-VOICE GOLDEN RATIO MODULATION:** 4 delay lines modulated at golden-ratio rate offsets (1.000, 1.618, 2.618, 4.236) to prevent phase build-up and comb clustering.
+  * **DIMENSION EXPANDER (0–100%):** out-of-phase cross-coupling for hyper-dimensional spatial imaging.
+  * **WIDTH (0–200%):** Mid/Side spatial width control.
 * **REVERB** — comb/allpass reverb with Size, Pre-Delay (0–200 ms), Width (M/S), Low Cut, Damp, and delay-modulation jitter.
 
 ---

@@ -114,9 +114,24 @@ Eight tuned comb resonators that ring in response to the input, featuring comple
 * **SPREAD** — Stereo pan distribution across the 8 resonator lines (0–100%).
 * **OUT GAIN** — Output volume trim (-24 to +12 dB).
 
-### Multiband Drive
+### Anatomy ADAA Saturator (10 Models)
 
-Splits at 300 Hz and 2.5 kHz and distorts each band separately, so the low end stays solid while the mids get dirty. Shapes: **Tanh** (smooth), **Fold** (aggressive), **Crush** (digital).
+Ported directly from COLORS. A premium saturator equipped with 1st-Order ADAA (Anti-Derivative Anti-Aliasing) nonlinear processing. Even under aggressive overdrive, harsh Nyquist foldover distortion is virtually eliminated, yielding the rich, musical harmonic saturation of analog studio hardware.
+
+* **SHAPE** — **10 Analog & Digital Saturation Models**
+  * `Soft Tanh`: Warm, natural saturation modeled after analog tape and tubes.
+  * `Hard Clip`: Edgy, sharp clipping typical of solid-state overdrive.
+  * `Triode`: Asymmetric vacuum-tube response rich in musical even harmonics.
+  * `Tape`: Round, fat saturation simulating magnetic tape hysteresis.
+  * `Transformer`: Core saturation with magnetic low-end push.
+  * `JFET`: Warm, dynamic breakup of field-effect transistors.
+  * `BJT`: Crisp, punchy bipolar junction transistor overdrive.
+  * `Wavefold`: Buchla-style wavefolding adding aggressive metallic overtones.
+  * `Exciter`: Subtle even-order harmonic sparkle across high frequencies.
+  * `Cubic`: Pure symmetric 3rd-harmonic soft clipping.
+* **DRIVE** — Input drive gain (1.0 to 40.0).
+* **PRE-HPF** — Pre-saturation low-cut filter (20 to 2000 Hz). Removing muddy sub-rumble before saturation keeps the distorted sound punchy and focused.
+* **TRIM** — Output level trim (-12 to +12 dB) with an integrated DC-blocking filter.
 
 ### Formant Gate
 
@@ -128,9 +143,19 @@ Splits at 300 Hz and 2.5 kHz and distorts each band separately, so the low end s
 * **VOWEL** — How strongly the per-step vowel formant filter is applied.
 * **SMOOTH** — Softens the gate edges.
 
-### Ensemble Chorus / Reverb
+### Hyper Dimension Chorus
 
-Standard wideners. The reverb adds **PRE-DLY**, **WIDTH**, **LOW CUT** (keeps the tail from muddying the low end) and **MOD** (breaks up metallic ringing).
+Ported directly from COLORS. Combines sub-bass protection crossover with a dimension-expanding spatial processor.
+
+* **RATE** — Chorus modulation speed (0.05 to 8.0 Hz).
+* **DEPTH** — Modulation depth (0 to 100%).
+* **WIDTH** — Mid/Side stereo soundstage spread (0 to 200%).
+* **LOW CUT (Sub Protection)** — Sub crossover cutoff (20 to 500 Hz). Bass frequencies below this threshold are isolated, summed to mono, and bypassed from chorus modulation. This completely eliminates low-end phase cancellation, keeping club kick and sub-bass tight while letting mids and highs bloom in full stereo.
+* **DIMENSION** — Dimension Expander amount (0 to 100%). Employs out-of-phase cross-coupling to create a 3D acoustic illusion where sound appears far wider than the physical speakers.
+
+### Reverb
+
+High-grade spatial processor featuring **SIZE**, **PRE-DLY**, **WIDTH**, **LOW CUT** (keeps tails clean), **DAMP**, and **MOD** (dispels metallic ringing).
 
 ---
 

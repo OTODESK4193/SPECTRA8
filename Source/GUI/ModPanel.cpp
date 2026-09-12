@@ -64,9 +64,13 @@ namespace
         fxMenu.addItem(ModMatrix::DstResInharm + 1, "Resonator Inharm", true, currentDst == ModMatrix::DstResInharm);
         fxMenu.addItem(ModMatrix::DstResSpread + 1, "Resonator Spread", true, currentDst == ModMatrix::DstResSpread);
         fxMenu.addItem(ModMatrix::DstResOutGain + 1, "Resonator Out Gain", true, currentDst == ModMatrix::DstResOutGain);
+        fxMenu.addItem(ModMatrix::DstDrivePreCut + 1, "Drive Pre-HPF", true, currentDst == ModMatrix::DstDrivePreCut);
+        fxMenu.addItem(ModMatrix::DstDriveTrim + 1, "Drive Trim", true, currentDst == ModMatrix::DstDriveTrim);
         fxMenu.addItem(ModMatrix::DstChorusRate + 1, "Chorus Rate", true, currentDst == ModMatrix::DstChorusRate);
         fxMenu.addItem(ModMatrix::DstChorusDepth + 1, "Chorus Depth", true, currentDst == ModMatrix::DstChorusDepth);
         fxMenu.addItem(ModMatrix::DstChorusWidth + 1, "Chorus Width", true, currentDst == ModMatrix::DstChorusWidth);
+        fxMenu.addItem(ModMatrix::DstChorusLowCut + 1, "Chorus Low Cut", true, currentDst == ModMatrix::DstChorusLowCut);
+        fxMenu.addItem(ModMatrix::DstChorusDimension + 1, "Chorus Dimension", true, currentDst == ModMatrix::DstChorusDimension);
         fxMenu.addItem(ModMatrix::DstChorusMix + 1, "Chorus Mix", true, currentDst == ModMatrix::DstChorusMix);
         fxMenu.addItem(ModMatrix::DstDelayTime + 1, "Delay Time", true, currentDst == ModMatrix::DstDelayTime);
         fxMenu.addItem(ModMatrix::DstDelayFb + 1, "Delay Feedback", true, currentDst == ModMatrix::DstDelayFb);

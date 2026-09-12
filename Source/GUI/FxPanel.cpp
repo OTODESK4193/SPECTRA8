@@ -208,9 +208,11 @@ void FxPanel::timerCallback()
         break;
 
     case FxChain::Drive:
-        if (detailKnobs.size() >= 1)
+        if (detailKnobs.size() >= 3)
         {
             ModRing::apply(*detailKnobs[0], mm, M::DstFxDrive);
+            ModRing::apply(*detailKnobs[1], mm, M::DstDrivePreCut);
+            ModRing::apply(*detailKnobs[2], mm, M::DstDriveTrim);
         }
         break;
 
@@ -224,11 +226,13 @@ void FxPanel::timerCallback()
         break;
 
     case FxChain::Chorus:
-        if (detailKnobs.size() >= 3)
+        if (detailKnobs.size() >= 5)
         {
             ModRing::apply(*detailKnobs[0], mm, M::DstChorusRate);
             ModRing::apply(*detailKnobs[1], mm, M::DstChorusDepth);
             ModRing::apply(*detailKnobs[2], mm, M::DstChorusWidth);
+            ModRing::apply(*detailKnobs[3], mm, M::DstChorusLowCut);
+            ModRing::apply(*detailKnobs[4], mm, M::DstChorusDimension);
         }
         break;
 
@@ -334,20 +338,16 @@ void FxPanel::rebuildDetails()
         break;
 
     case FxChain::Drive:
-        title = "MULTIBAND DRIVE";
+        title = "ANATOMY ADAA SATURATOR (10 MODELS)";
         comboDefs = { { "drvShape", "SHAPE",
-                        "SHAPE - the distortion curve. Each one has a different harmonic "
-                        "flavour, from soft warmth to hard digital edge.", false } };
+                        "SHAPE - 10 analog saturation curves modeled with 1st-Order ADAA "
+                        "for zero digital aliasing (Soft Tanh, Triode, Tape, BJT, Wavefold, etc.).", false } };
         knobDefs  = { { "drvDrive", "DRIVE", 1,
-                        "DRIVE - how hard the signal is pushed into the distortion." },
-                      { "drvLow", "LOW", 2,
-                        "LOW - how much of the low band gets driven. Keep this down to "
-                        "protect the bottom end from mud." },
-                      { "drvMid", "MID", 2,
-                        "MID - drive amount for the midrange, where most vocal presence sits." },
-                      { "drvHigh", "HIGH", 2,
-                        "HIGH - drive amount for the top end. Adds air and bite, but too much "
-                        "gets harsh." } };
+                        "DRIVE - saturation amount and distortion intensity (1x to 40x)." },
+                      { "drvPreCut", "PRE-HPF", 0,
+                        "PRE-HPF - 1st-order pre-filter high-pass cutoff to protect sub-bass from distortion." },
+                      { "drvTrim", "TRIM", 1,
+                        "TRIM - output level trim (-12dB to +12dB)." } };
         break;
 
     case FxChain::Gate:
@@ -365,14 +365,17 @@ void FxPanel::rebuildDetails()
         break;
 
     case FxChain::Chorus:
-        title = "ENSEMBLE CHORUS";
-        knobDefs = { { "choRate", "RATE Hz", 2,
-                       "RATE - speed of the chorus movement." },
-                     { "choDepth", "DEPTH ms", 1,
-                       "DEPTH - how far the delay time sweeps. More depth means more "
-                       "pitch wobble and thickness." },
-                     { "choWidth", "WIDTH", 2,
-                       "WIDTH - stereo spread of the chorus voices." } };
+        title = "HYPER DIMENSION CHORUS (SUB PROTECTED)";
+        knobDefs = { { "choRate", "RATE", 2,
+                       "RATE - speed of the 4 golden-ratio modulation voices (0.05Hz to 8.0Hz)." },
+                     { "choDepth", "DEPTH", 0,
+                       "DEPTH - chorus modulation depth (0 to 100%)." },
+                     { "choWidth", "WIDTH", 0,
+                       "WIDTH - M/S stereo expansion width (0 to 200%)." },
+                     { "choLowCut", "LOW CUT", 0,
+                       "LOW CUT - sub-bass protection crossover. Low frequencies below cutoff remain 100% untouched and coherent." },
+                     { "choDimension", "DIMENSION", 0,
+                       "DIMENSION - pitch-static wide stereo expansion via phase-inverted cross-feed (0 to 100%)." } };
         break;
 
     case FxChain::Reverb:

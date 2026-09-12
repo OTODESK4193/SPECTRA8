@@ -489,13 +489,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
     layout.add(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID("resScaleFollow", 1), "Resonator Scale Follow", false));
 
-    // Multiband Drive
+    // Multiband Drive (Colors完全移植: ANATOMY ADAA 10モデル)
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("drvShape", 1), "Drive Shape", MultibandDrive::getShapeNames(), 0));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("drvDrive", 1), "Drive Amount",
-        juce::NormalisableRange<float>(1.0f, 40.0f, 0.0f, 0.4f), 4.0f,
+        juce::NormalisableRange<float>(1.0f, 40.0f, 0.0f, 0.4f), 3.0f,
         Attr().withStringFromValueFunction(fmtRatio)));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("drvPreCut", 1), "Drive Pre-HPF",
+        juce::NormalisableRange<float>(20.0f, 2000.0f, 0.0f, 0.35f), 30.0f,
+        Attr().withStringFromValueFunction([](float v, int) { return juce::String(juce::roundToInt(v)) + " Hz"; })));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("drvTrim", 1), "Drive Trim",
+        juce::NormalisableRange<float>(-12.0f, 12.0f), 0.0f,
+        Attr().withStringFromValueFunction(fmtDb)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("drvLow", 1), "Drive Low",
         juce::NormalisableRange<float>(0.0f, 1.0f), 0.4f,
@@ -527,19 +535,27 @@ juce::AudioProcessorValueTreeState::ParameterLayout SPECTRA8AudioProcessor::crea
         juce::NormalisableRange<float>(0.0f, 100.0f), 50.0f,
         Attr().withStringFromValueFunction(fmtPercent)));
 
-    // Chorus
+    // Ensemble Chorus (Colors完全移植: Hyper Dimension + Sub Protection)
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("choRate", 1), "Chorus Rate",
-        juce::NormalisableRange<float>(0.02f, 8.0f, 0.0f, 0.4f), 0.6f,
+        juce::NormalisableRange<float>(0.05f, 8.0f, 0.0f, 0.4f), 1.0f,
         Attr().withStringFromValueFunction([](float v, int) { return juce::String(v, 2) + " Hz"; })));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("choDepth", 1), "Chorus Depth",
-        juce::NormalisableRange<float>(0.1f, 12.0f), 4.0f,
-        Attr().withStringFromValueFunction([](float v, int) { return juce::String(v, 1) + " ms"; })));
+        juce::NormalisableRange<float>(0.0f, 100.0f), 50.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("choWidth", 1), "Chorus Width",
-        juce::NormalisableRange<float>(0.0f, 1.0f), 0.7f,
-        Attr().withStringFromValueFunction(fmtPercent01)));
+        juce::NormalisableRange<float>(0.0f, 200.0f), 80.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("choLowCut", 1), "Chorus Low Cut",
+        juce::NormalisableRange<float>(20.0f, 500.0f, 0.0f, 0.5f), 120.0f,
+        Attr().withStringFromValueFunction([](float v, int) { return juce::String(juce::roundToInt(v)) + " Hz"; })));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("choDimension", 1), "Chorus Dimension",
+        juce::NormalisableRange<float>(0.0f, 100.0f), 50.0f,
+        Attr().withStringFromValueFunction(fmtPercent)));
 
     // Reverb
     layout.add(std::make_unique<juce::AudioParameterFloat>(
@@ -1398,11 +1414,13 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         fp.resSpread   = smoothedParam(ModMatrix::DstResSpread);
         fp.resOutGain  = smoothedParam(ModMatrix::DstResOutGain);
 
-        fp.drvShape = (int)apvts.getRawParameterValue("drvShape")->load();
-        fp.drvDrive = smoothedParam(ModMatrix::DstFxDrive);
-        fp.drvLow   = apvts.getRawParameterValue("drvLow")->load();
-        fp.drvMid   = apvts.getRawParameterValue("drvMid")->load();
-        fp.drvHigh  = apvts.getRawParameterValue("drvHigh")->load();
+        fp.drvShape  = (int)apvts.getRawParameterValue("drvShape")->load();
+        fp.drvDrive  = smoothedParam(ModMatrix::DstFxDrive);
+        fp.drvPreCut = smoothedParam(ModMatrix::DstDrivePreCut);
+        fp.drvTrim   = smoothedParam(ModMatrix::DstDriveTrim);
+        fp.drvLow    = apvts.getRawParameterValue("drvLow")->load();
+        fp.drvMid    = apvts.getRawParameterValue("drvMid")->load();
+        fp.drvHigh   = apvts.getRawParameterValue("drvHigh")->load();
 
         fp.gateRate    = (int)apvts.getRawParameterValue("gateRate")->load();
         fp.gatePattern = (int)apvts.getRawParameterValue("gatePattern")->load();
@@ -1410,9 +1428,11 @@ void SPECTRA8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         fp.gateDecay   = smoothedParam(ModMatrix::DstGateDecay);
         fp.gateVowel   = smoothedParam(ModMatrix::DstGateVowel);
 
-        fp.choRate  = smoothedParam(ModMatrix::DstChorusRate);
-        fp.choDepth = smoothedParam(ModMatrix::DstChorusDepth);
-        fp.choWidth = smoothedParam(ModMatrix::DstChorusWidth);
+        fp.choRate      = smoothedParam(ModMatrix::DstChorusRate);
+        fp.choDepth     = smoothedParam(ModMatrix::DstChorusDepth);
+        fp.choWidth     = smoothedParam(ModMatrix::DstChorusWidth);
+        fp.choLowCut    = smoothedParam(ModMatrix::DstChorusLowCut);
+        fp.choDimension = smoothedParam(ModMatrix::DstChorusDimension);
 
         fp.revSize     = smoothedParam(ModMatrix::DstReverbSize);
         fp.revDamp     = smoothedParam(ModMatrix::DstReverbDamp);

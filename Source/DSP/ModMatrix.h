@@ -68,6 +68,10 @@ public:
         DstResShift,      // Resonator Shift (Colors移植)
         DstResSpread,     // Resonator Spread (Colors移植)
         DstResOutGain,    // Resonator Out Gain (Colors移植)
+        DstDrivePreCut,   // Drive Pre-HPF (Colors移植)
+        DstDriveTrim,     // Drive Trim (Colors移植)
+        DstChorusLowCut,  // Chorus Low Cut (Colors移植)
+        DstChorusDimension, // Chorus Dimension (Colors移植)
         NumDsts
     };
 
@@ -102,7 +106,8 @@ public:
                  "Delay Time", "Delay Feedback", "Delay Tone", "Delay Mix",
                  "Reverb Size", "Reverb Decay", "Reverb PreDelay", "Reverb Damp", "Reverb Mix",
                  "Air",
-                 "Gate Decay", "Resonator Shift", "Resonator Spread", "Resonator Out Gain" };
+                 "Gate Decay", "Resonator Shift", "Resonator Spread", "Resonator Out Gain",
+                 "Drive Pre-HPF", "Drive Trim", "Chorus Low Cut", "Chorus Dimension" };
     }
     static juce::StringArray getWaveNames()
     {
@@ -175,6 +180,10 @@ public:
         case DstResShift:       return "resShift";
         case DstResSpread:      return "resSpread";
         case DstResOutGain:     return "resOutGain";
+        case DstDrivePreCut:    return "drvPreCut";
+        case DstDriveTrim:      return "drvTrim";
+        case DstChorusLowCut:   return "choLowCut";
+        case DstChorusDimension:return "choDimension";
         default:                return "";
         }
     }
@@ -234,8 +243,8 @@ public:
         case DstResSpread:      return 100.0f;
         case DstResOutGain:     return 12.0f;
         case DstChorusRate:     return 3.0f;
-        case DstChorusDepth:    return 12.0f;
-        case DstChorusWidth:    return 1.0f;
+        case DstChorusDepth:    return 100.0f;
+        case DstChorusWidth:    return 100.0f;
         case DstChorusMix:      return 1.0f;
         case DstDelayTime:      return 3.0f;
         case DstDelayFb:        return 1.0f;
@@ -246,6 +255,10 @@ public:
         case DstReverbPre:      return 3.0f;
         case DstReverbDamp:     return 1.0f;
         case DstReverbMix:      return 1.0f;
+        case DstDrivePreCut:    return 3.0f;    // ±3 oct (20..2000Hz)
+        case DstDriveTrim:      return 12.0f;   // ±12 dB
+        case DstChorusLowCut:   return 2.5f;    // ±2.5 oct (20..500Hz)
+        case DstChorusDimension:return 100.0f;  // ±100 %
         default:                return 0.0f;
         }
     }
@@ -265,6 +278,8 @@ public:
         case DstDelayTime:
         case DstReverbDecay:
         case DstReverbPre:
+        case DstDrivePreCut:
+        case DstChorusLowCut:
             return KindExpOct;
         default:
             return KindLinear;

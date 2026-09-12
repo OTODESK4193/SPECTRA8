@@ -23,6 +23,141 @@
 #include <cmath>
 #include <cstdint>   // uint16_t (パターンマスク)。JuceHeader経由の間接includeに頼らない
 
+// ==========================================
+// ANATOMY ADAA Math & Saturation Engine (ported from Colors)
+// ==========================================
+namespace ngk
+{
+    // ADAA (Antiderivative Anti-Aliasing) 1st-Order Primitive Functions
+    inline float calcADAAFunc(float x, int type) noexcept
+    {
+        switch (type)
+        {
+        case 0: // Soft Tanh
+            if (std::abs(x) > 10.0f) return std::abs(x) - 0.693147f;
+            return std::log(std::cosh(x));
+
+        case 1: // Hard Clip
+            if (x < -1.0f) return -x - 0.5f;
+            if (x > 1.0f)  return  x - 0.5f;
+            return 0.5f * x * x;
+
+        case 6: // BJT (Atan based)
+        {
+            const float k = 2.2f;
+            const float scale = 0.58f;
+            float term1 = x * std::atan(k * x);
+            float term2 = (0.5f / k) * std::log(1.0f + k * k * x * x);
+            return scale * (term1 - term2);
+        }
+
+        case 7: // Wavefold
+            return -1.0f / juce::MathConstants<float>::pi * std::cos(x * juce::MathConstants<float>::pi);
+
+        case 10: // Cubic
+            return (0.5f * x * x) - (x * x * x * x * 0.08333333f);
+
+        default: return 0.0f;
+        }
+    }
+
+    struct SaturationState
+    {
+        float tapeHysteresis = 0.0f;
+        float lastX = 0.0f;
+        float lastF = 0.0f;
+        bool  active = false;
+
+        void reset() noexcept
+        {
+            tapeHysteresis = 0.0f;
+            lastX = 0.0f;
+            lastF = 0.0f;
+            active = false;
+        }
+    };
+
+    inline float processSaturationSampleADAA(float x, int type, float drive, SaturationState& state) noexcept
+    {
+        if (drive <= 1.001f) {
+            state.active = false;
+            state.lastX = x;
+            return x;
+        }
+
+        // Tape (hysteresis model)
+        if (type == 3) {
+            float g = x * drive;
+            float y = 0.92f * std::tanh(g + 0.08f * state.tapeHysteresis);
+            state.tapeHysteresis = y;
+            return y;
+        }
+
+        // Non-ADAA static curves
+        if (type == 2 || type == 4 || type == 5 || type == 8 || type == 9 || type == 10) {
+            float g = x * drive;
+            switch (type) {
+            case 2: { // Triode: asymmetric soft clip (even harmonics)
+                const float b = 0.25f;
+                return std::tanh(g + b) - std::tanh(b);
+            }
+            case 4: return g / (1.0f + 0.45f * std::abs(g)); // Transformer
+            case 5: return (std::abs(g) < 1.0f) ? g - (g * g * g) / 3.0f
+                                                : (g > 0 ? (2.0f / 3.0f) : -(2.0f / 3.0f)); // JFET
+            case 8: { float step = 1.0f / (1.0f + (25.0f - drive)); return std::round(g / step) * step; }
+            case 9: { // Exciter: bounded multi-harmonic
+                const float s = std::tanh(g);
+                return s + 0.3f * (std::tanh(3.0f * g) - s);
+            }
+            case 10: { // Cubic soft clip
+                const float c = juce::jlimit(-1.0f, 1.0f, g);
+                return 1.5f * c - 0.5f * c * c * c;
+            }
+            default: return g;
+            }
+        }
+
+        // 1st-Order ADAA (0: Soft Tanh, 1: Hard Clip, 6: BJT, 7: Wavefold)
+        float g = x * drive;
+
+        if (!state.active) {
+            state.active = true;
+            state.lastX = g;
+            state.lastF = calcADAAFunc(g, type);
+
+            switch (type) {
+            case 0: return std::tanh(g);
+            case 1: return juce::jlimit(-1.0f, 1.0f, g);
+            case 6: return std::atan(g * 2.2f) * 0.58f;
+            case 7: return std::sin(g * juce::MathConstants<float>::pi);
+            default: return g;
+            }
+        }
+
+        float Fx = calcADAAFunc(g, type);
+        float output = 0.0f;
+        float delta = g - state.lastX;
+
+        if (std::abs(delta) < 1.0e-5f) {
+            float xMid = 0.5f * (g + state.lastX);
+            switch (type) {
+            case 0: output = std::tanh(xMid); break;
+            case 1: output = juce::jlimit(-1.0f, 1.0f, xMid); break;
+            case 6: output = std::atan(xMid * 2.2f) * 0.58f; break;
+            case 7: output = std::sin(xMid * juce::MathConstants<float>::pi); break;
+            default: output = xMid; break;
+            }
+        }
+        else {
+            output = (Fx - state.lastF) / delta;
+        }
+
+        state.lastX = g;
+        state.lastF = Fx;
+        return output;
+    }
+} // namespace ngk
+
 // ------------------------------------------
 // 共通: 1次/2次フィルタ部品
 // ------------------------------------------
@@ -65,6 +200,18 @@ namespace fxutil
         {
             z += (1.0f - coeff) * (in - z);
             return z;
+        }
+    };
+
+    struct OnePoleHp
+    {
+        float z = 0.0f;
+        void reset() noexcept { z = 0.0f; }
+        float process(float in, float fcHz, float sr) noexcept
+        {
+            const float alpha = std::exp(-juce::MathConstants<float>::twoPi * juce::jlimit(10.0f, sr * 0.45f, fcHz) / sr);
+            z = (1.0f - alpha) * in + alpha * z;
+            return in - z;
         }
     };
 
@@ -321,85 +468,116 @@ private:
 //   3バンド(Low/Mid/High)に分けて各帯域を個別に歪ませる。
 //   全帯域を一括で歪ませると低域が濁って潰れるのを避けるのが目的。
 // ==========================================
+// 2. Multiband Drive (ANATOMY 1st-Order ADAA Saturator - 10 Models ported from Colors)
+// ==========================================
 class MultibandDrive
 {
 public:
-    enum Shape { Tanh = 0, Fold, Bitcrush, NumShapes };
-    static juce::StringArray getShapeNames() { return { "Tanh", "Fold", "Crush" }; }
+    enum Shape {
+        SoftTanh = 0,
+        HardClip,
+        Triode,
+        Tape,
+        Transformer,
+        JFET,
+        BJT,
+        Wavefold,
+        Exciter,
+        Cubic,
+        NumShapes
+    };
 
-    void prepare(double sr) { sampleRate = sr; reset(); }
-    void reset()
+    static juce::StringArray getShapeNames()
     {
-        for (auto& f : splitL) f.reset();
-        for (auto& f : splitR) f.reset();
+        return {
+            "Soft Tanh", "Hard Clip", "Triode", "Tape", "Transformer",
+            "JFET", "BJT", "Wavefold", "Exciter", "Cubic"
+        };
     }
 
-    void setParams(int shape, float drive, float loMix, float midMix, float hiMix) noexcept
+    static int comboToNgkType(int combo) noexcept
+    {
+        static const int map[10] = { 0, 1, 2, 3, 4, 5, 6, 7, 9, 10 };
+        return map[juce::jlimit(0, 9, combo)];
+    }
+
+    void prepare(double sr)
+    {
+        sampleRate = sr;
+        dcCoef = std::exp(-1.0f / (0.03183f * static_cast<float>(sampleRate)));
+        updatePreAlpha();
+        reset();
+    }
+
+    void reset() noexcept
+    {
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            satState[ch].reset();
+            dcFilterState[ch] = 0.0f;
+            preFilterX1[ch]   = 0.0f;
+            preFilterY1[ch]   = 0.0f;
+        }
+    }
+
+    void setParams(int shape, float drive, float preCutHz, float trimDb) noexcept
     {
         mShape = juce::jlimit(0, (int)NumShapes - 1, shape);
         mDrive = juce::jlimit(1.0f, 40.0f, drive);
-        mLo = juce::jlimit(0.0f, 1.0f, loMix);
-        mMid = juce::jlimit(0.0f, 1.0f, midMix);
-        mHi = juce::jlimit(0.0f, 1.0f, hiMix);
+        mPreCut = juce::jlimit(20.0f, 2000.0f, preCutHz);
+        mTrimGain = juce::Decibels::decibelsToGain(juce::jlimit(-12.0f, 12.0f, trimDb));
+        updatePreAlpha();
     }
 
     void process(float& l, float& r) noexcept
     {
-        l = processOne(l, splitL);
-        r = processOne(r, splitR);
+        float chData[2] = { l, r };
+        const int ngkType = comboToNgkType(mShape);
+
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            const float originalInput = chData[ch];
+
+            // 1st-Order HPF Pre-Filter (Sub-bass protection)
+            const float hpfOut = preAlpha * (preFilterY1[ch] + originalInput - preFilterX1[ch]);
+            preFilterX1[ch] = originalInput;
+            preFilterY1[ch] = hpfOut;
+
+            // ANATOMY 1st-Order ADAA Saturation
+            float sat = ngk::processSaturationSampleADAA(hpfOut, ngkType, mDrive, satState[ch]);
+
+            // DC Blocker
+            dcFilterState[ch] = dcCoef * dcFilterState[ch] + (1.0f - dcCoef) * sat;
+            sat -= dcFilterState[ch];
+
+            // 100% WET + Trim (Dry/Wet blend is fully unified to the FX Slot Amount knob)
+            chData[ch] = sat * mTrimGain;
+        }
+
+        l = fxutil::softClip(chData[0]);
+        r = fxutil::softClip(chData[1]);
     }
 
 private:
-    float shapeOne(float x) const noexcept
+    void updatePreAlpha() noexcept
     {
-        switch (mShape)
-        {
-        case Fold:
-        {
-            // 三角波状に折り返す (倍音が派手に増える)。
-            // ※反復で折り返す実装はDriveが大きいと回数が足りず折り切れずに
-            //   +18dBの暴走を起こす。周期4の三角波として一発で畳む。
-            float y = x + 1.0f;
-            y -= 4.0f * std::floor(y * 0.25f);      // [0,4) へ巻き取る
-            y = (y < 2.0f) ? y : (4.0f - y);        // 0→2→0 の三角
-            return y - 1.0f;                        // [-1,+1]
-        }
-        case Bitcrush:
-        {
-            const float levels = 8.0f;
-            return std::round(juce::jlimit(-1.0f, 1.0f, x) * levels) / levels;
-        }
-        default:
-            return fxutil::softClip(x);
-        }
-    }
-
-    float processOne(float in, std::array<fxutil::Svf, 2>& f) noexcept
-    {
-        // 300Hz / 2500Hz の2点で3分割
-        float lp1, bp1, hp1, lp2, bp2, hp2;
-        f[0].process(in, 300.0f / (float)sampleRate, 0.707f, lp1, bp1, hp1);
-        f[1].process(hp1, 2500.0f / (float)sampleRate, 0.707f, lp2, bp2, hp2);
-
-        const float low = lp1, mid = lp2, high = hp2;
-
-        // 帯域毎に歪ませてからミックス量で戻す。1/driveで音量を揃える。
-        const float g = 1.0f / std::sqrt(mDrive);
-        const float dLow  = shapeOne(low  * mDrive) * g;
-        const float dMid  = shapeOne(mid  * mDrive) * g;
-        const float dHigh = shapeOne(high * mDrive) * g;
-
-        const float sum = low  * (1.0f - mLo)  + dLow  * mLo
-                        + mid  * (1.0f - mMid) + dMid  * mMid
-                        + high * (1.0f - mHi)  + dHigh * mHi;
-        // 3帯域が同位相で重なった時の突出を抑える最終段
-        return fxutil::softClip(sum);
+        const float rc = 1.0f / (juce::MathConstants<float>::twoPi * juce::jmax(20.0f, mPreCut));
+        const float dt = 1.0f / static_cast<float>(sampleRate > 1000.0 ? sampleRate : 44100.0);
+        preAlpha = rc / (rc + dt);
     }
 
     double sampleRate = 44100.0;
-    std::array<fxutil::Svf, 2> splitL, splitR;
     int mShape = 0;
-    float mDrive = 4.0f, mLo = 0.5f, mMid = 1.0f, mHi = 0.7f;
+    float mDrive = 3.0f;
+    float mPreCut = 30.0f;
+    float mTrimGain = 1.0f;
+
+    float preAlpha = 1.0f;
+    float dcCoef = 0.999f;
+    ngk::SaturationState satState[2];
+    float dcFilterState[2] = { 0.0f, 0.0f };
+    float preFilterX1[2]   = { 0.0f, 0.0f };
+    float preFilterY1[2]   = { 0.0f, 0.0f };
 };
 
 // ==========================================
@@ -694,7 +872,7 @@ private:
 };
 
 // ==========================================
-// 4. Chorus (4ボイス・アンサンブル)
+// 4. Ensemble Chorus (ColorBass Hyper Dimension Edition with Sub Protection ported from Colors)
 // ==========================================
 class EnsembleChorus
 {
@@ -702,55 +880,101 @@ public:
     void prepare(double sr)
     {
         sampleRate = sr;
-        dlL.prepare((int)(sr * 0.05) + 8);
-        dlR.prepare((int)(sr * 0.05) + 8);
+        dlL.prepare((int)(sr * 0.08) + 16);
+        dlR.prepare((int)(sr * 0.08) + 16);
+        subHpL.reset(); subHpR.reset();
         reset();
     }
-    void reset() { dlL.reset(); dlR.reset(); for (auto& p : lfoPhase) p = 0.0f; }
 
-    void setParams(float rateHz, float depthMs, float width, float mix) noexcept
+    void reset()
     {
-        mRate = juce::jlimit(0.02f, 8.0f, rateHz);
-        mDepth = juce::jlimit(0.1f, 12.0f, depthMs);
-        mWidth = juce::jlimit(0.0f, 1.0f, width);
-        mMix = juce::jlimit(0.0f, 1.0f, mix);
+        dlL.reset(); dlR.reset();
+        subHpL.reset(); subHpR.reset();
+        for (auto& p : lfoPhase) p = 0.0f;
+    }
+
+    void setParams(float rateHz, float depth01, float width01, float lowCutHz, float dimension01) noexcept
+    {
+        mRate = juce::jlimit(0.05f, 8.0f, rateHz);
+        mDepth = juce::jlimit(0.0f, 1.0f, depth01);
+        mWidth = juce::jlimit(0.0f, 2.0f, width01);
+        mLowCut = juce::jlimit(20.0f, 500.0f, lowCutHz);
+        mDimension = juce::jlimit(0.0f, 1.0f, dimension01);
+    }
+
+    void process(float inL, float inR, float& outL, float& outR) noexcept
+    {
+        // 1. Sub Protection Crossover: Keep bass 100% coherent and untouched
+        const float midHiL = subHpL.process(inL, mLowCut, (float)sampleRate);
+        const float midHiR = subHpR.process(inR, mLowCut, (float)sampleRate);
+        const float subL = inL - midHiL;
+        const float subR = inR - midHiR;
+
+        // 2. Feed mid/high frequencies into delay lines
+        dlL.write(midHiL);
+        dlR.write(midHiR);
+
+        // 3. Dual 4-Voice Golden-Ratio Modulation
+        float wetL = 0.0f, wetR = 0.0f;
+        const float modScale = mDepth * 8.0f * (1.0f - mDimension * 0.65f);
+
+        for (int i = 0; i < 4; ++i)
+        {
+            lfoPhase[(size_t)i] += mRate * (1.0f + 0.1618f * (float)i) / (float)sampleRate;
+            if (lfoPhase[(size_t)i] >= 1.0f) lfoPhase[(size_t)i] -= 1.0f;
+
+            const float mod = std::sin(lfoPhase[(size_t)i] * juce::MathConstants<float>::twoPi);
+            const float baseMs = 7.0f + 3.5f * (float)i;
+            const float dMsL = baseMs + mod * modScale;
+            const float dMsR = baseMs + std::sin((lfoPhase[(size_t)i] + 0.25f) * juce::MathConstants<float>::twoPi) * modScale;
+
+            wetL += dlL.read(dMsL * 0.001f * (float)sampleRate);
+            wetR += dlR.read(dMsR * 0.001f * (float)sampleRate);
+        }
+
+        wetL *= 0.25f;
+        wetR *= 0.25f;
+
+        // 4. Dimension Expander Mode: Pitch-static wide stereo expansion via cross-inversion
+        if (mDimension > 0.001f)
+        {
+            const float dimDelayL = 12.5f * 0.001f * (float)sampleRate;
+            const float dimDelayR = 18.2f * 0.001f * (float)sampleRate;
+            const float dimL = dlL.read(dimDelayL);
+            const float dimR = dlR.read(dimDelayR);
+
+            // Phase inverted cross-feed: Left += -0.45 * dimR, Right += -0.45 * dimL
+            const float dimWetL = (dimL - 0.45f * dimR);
+            const float dimWetR = (dimR - 0.45f * dimL);
+
+            wetL = wetL * (1.0f - mDimension) + dimWetL * mDimension;
+            wetR = wetR * (1.0f - mDimension) + dimWetR * mDimension;
+        }
+
+        // 5. M/S Stereo Width
+        const float mid = (wetL + wetR) * 0.5f;
+        const float side = (wetL - wetR) * 0.5f * (1.0f + mWidth);
+
+        // 6. Recombine with pristine Sub bass
+        outL = subL + (mid + side);
+        outR = subR + (mid - side);
     }
 
     void process(float& l, float& r) noexcept
     {
-        dlL.write(l);
-        dlR.write(r);
-
-        float wetL = 0.0f, wetR = 0.0f;
-        for (int i = 0; i < 4; ++i)
-        {
-            // ボイス毎にレートを少しずらす (完全同期だとフランジャーになる)
-            lfoPhase[(size_t)i] += mRate * (1.0f + 0.17f * (float)i) / (float)sampleRate;
-            if (lfoPhase[(size_t)i] >= 1.0f) lfoPhase[(size_t)i] -= 1.0f;
-
-            const float mod = std::sin(lfoPhase[(size_t)i] * juce::MathConstants<float>::twoPi);
-            const float baseMs = 8.0f + 3.0f * (float)i;
-            const float dMs = baseMs + mod * mDepth;
-            const float dSamp = dMs * 0.001f * (float)sampleRate;
-
-            // 偶数ボイスをL寄り、奇数をR寄りに振る
-            const float panL = (i % 2 == 0) ? 1.0f : (1.0f - mWidth);
-            const float panR = (i % 2 == 0) ? (1.0f - mWidth) : 1.0f;
-            wetL += dlL.read(dSamp) * panL;
-            wetR += dlR.read(dSamp) * panR;
-        }
-        wetL *= 0.35f;
-        wetR *= 0.35f;
-
-        l = l * (1.0f - mMix) + wetL * mMix;
-        r = r * (1.0f - mMix) + wetR * mMix;
+        float outL = l, outR = r;
+        process(l, r, outL, outR);
+        l = outL;
+        r = outR;
     }
 
 private:
     double sampleRate = 44100.0;
     fxutil::DelayLine dlL, dlR;
-    std::array<float, 4> lfoPhase {};
-    float mRate = 0.6f, mDepth = 4.0f, mWidth = 0.7f, mMix = 0.5f;
+    fxutil::OnePoleHp subHpL, subHpR;
+    std::array<float, 4> lfoPhase = { 0.0f, 0.25f, 0.5f, 0.75f };
+    float mRate = 1.0f, mDepth = 0.5f, mWidth = 0.8f;
+    float mLowCut = 120.0f, mDimension = 0.5f;
 };
 
 // ==========================================
@@ -929,10 +1153,12 @@ public:
         std::array<float, 8> midiHz {};   // MIDIモード時の押鍵周波数 (低い順)
         int   numMidiHz = 0;
 
-        // Drive
+        // Drive (Colors完全移植: ANATOMY ADAA 10モデル)
         int   drvShape = 0;
-        float drvDrive = 4.0f;
-        float drvLow = 0.4f, drvMid = 1.0f, drvHigh = 0.7f;
+        float drvDrive = 3.0f;
+        float drvPreCut = 30.0f;
+        float drvTrim = 0.0f;
+        float drvLow = 0.4f, drvMid = 1.0f, drvHigh = 0.7f; // 下位互換用
 
         // Gate (Colors完全移植: 50パターン、PPQ同期、S-Curve)
         int   gateRate = 4;
@@ -941,8 +1167,9 @@ public:
         float gateDecay = 50.0f;
         float gateVowel = 50.0f;
 
-        // Chorus
-        float choRate = 0.6f, choDepth = 4.0f, choWidth = 0.7f;
+        // Chorus (Colors完全移植: Hyper Dimension + Sub Protection)
+        float choRate = 1.0f, choDepth = 50.0f, choWidth = 80.0f;
+        float choLowCut = 120.0f, choDimension = 50.0f;
 
         // Reverb
         float revSize = 0.5f, revDamp = 0.4f;
@@ -1019,18 +1246,29 @@ public:
             sm(mParams.resSpread,  p.resSpread);
             sm(mParams.resOutGain, p.resOutGain);
 
-            sm(mParams.drvDrive,   p.drvDrive);    sm(mParams.drvLow,    p.drvLow);
-            sm(mParams.drvMid,     p.drvMid);      sm(mParams.drvHigh,   p.drvHigh);
+            sm(mParams.drvDrive,   p.drvDrive);
+            sm(mParams.drvPreCut,  p.drvPreCut);
+            sm(mParams.drvTrim,    p.drvTrim);
+            sm(mParams.drvLow,     p.drvLow);
+            sm(mParams.drvMid,     p.drvMid);
+            sm(mParams.drvHigh,    p.drvHigh);
 
             sm(mParams.gateDepth,  p.gateDepth);
             sm(mParams.gateDecay,  p.gateDecay);
             sm(mParams.gateVowel,  p.gateVowel);
 
-            sm(mParams.choRate,    p.choRate);     sm(mParams.choDepth,  p.choDepth);
-            sm(mParams.choWidth,   p.choWidth);
-            sm(mParams.revSize,    p.revSize);     sm(mParams.revDamp,   p.revDamp);
-            sm(mParams.revPredelay,p.revPredelay); sm(mParams.revWidth,  p.revWidth);
-            sm(mParams.revLowCut,  p.revLowCut);   sm(mParams.revMod,    p.revMod);
+            sm(mParams.choRate,     p.choRate);
+            sm(mParams.choDepth,    p.choDepth);
+            sm(mParams.choWidth,    p.choWidth);
+            sm(mParams.choLowCut,   p.choLowCut);
+            sm(mParams.choDimension,p.choDimension);
+
+            sm(mParams.revSize,     p.revSize);
+            sm(mParams.revDamp,     p.revDamp);
+            sm(mParams.revPredelay, p.revPredelay);
+            sm(mParams.revWidth,    p.revWidth);
+            sm(mParams.revLowCut,   p.revLowCut);
+            sm(mParams.revMod,      p.revMod);
         }
 
         // PPQ時間進行の設定
@@ -1045,11 +1283,11 @@ public:
                              q.resShimmer * 0.01f, q.resInharm * 0.01f,
                              q.resSpread * 0.01f, q.resOutGain,
                              q.resShift, q.midiHz.data(), q.numMidiHz);
-        mDrive.setParams(q.drvShape, q.drvDrive, q.drvLow, q.drvMid, q.drvHigh);
+        mDrive.setParams(q.drvShape, q.drvDrive, q.drvPreCut, q.drvTrim);
         mGate.setParams(q.gateRate, q.gatePattern,
                         q.gateDepth * 0.01f, q.gateDecay * 0.01f, q.gateVowel * 0.01f);
-        // Mixは各slotのAmountで管理するのでFX内部のMixは常に1.0
-        mChorus.setParams(q.choRate, q.choDepth, q.choWidth, 1.0f);
+        mChorus.setParams(q.choRate, q.choDepth * 0.01f, q.choWidth * 0.01f,
+                          q.choLowCut, q.choDimension * 0.01f);
         mReverb.setParams(q.revSize, q.revDamp, 1.0f,
                           q.revPredelay, q.revWidth, q.revLowCut, q.revMod);
     }
