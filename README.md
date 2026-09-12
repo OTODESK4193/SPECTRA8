@@ -1,6 +1,6 @@
 # SPECTRA 8
 
-![Release](https://img.shields.io/badge/release-v0.2.0-blue)
+![Release](https://img.shields.io/badge/release-v1.0.0%20B004-blue)
 ![License](https://img.shields.io/badge/license-AGPLv3-green)
 ![JUCE](https://img.shields.io/badge/JUCE-8.0.x-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -15,9 +15,9 @@
 * **Filterbank Vocoder** — a classic 8–48 band analysis/synthesis vocoder with per-band level tracking. Crisp, articulate, and immediate.
 * **LPC Vocoder** — a linear-predictive vocal-tract model with reflection-coefficient lattice synthesis. This is the architecture behind speech chips like the TMS5220, and it delivers everything from natural formant morphing to unapologetically retro robot speech.
 
-Both engines share the same carrier (excitation) section, modulation matrix, EQ, and FX chain, and you can crossfade between them without dropouts. The result is a single plugin that covers vintage talkbox, modern EDM vocal chops, BitSpeek-style 8-bit speech, and Color Bass — territory that normally requires three or four separate tools.
+Both engines share the same carrier (excitation) section, a 56-destination modulation matrix, an interactive 48-band EQ, and an expanded 5-slot FX chain ported directly from COLORS (featuring a 50-pattern Formant Gate and a MIDI-tracking Spectral Resonator). You can crossfade between engines without dropouts, freely resize the UI, and choose from 150 factory presets spanning 8 dedicated categories.
 
-**Design goal:** surpass Orange Vocoder in sound quality while absorbing the retro character of BitSpeek — in one switchable instrument.
+**Design goal:** surpass Orange Vocoder in sound quality while absorbing the retro character of BitSpeek — in one versatile, highly-playable instrument.
 
 
 ## Key Features
@@ -66,9 +66,9 @@ The carrier is an 8-voice polyphonic oscillator with PolyBLEP anti-aliasing.
 
 * **Sources:** LFO × 3 (Sine/Tri/Saw/Square/S&H/Chaos, free or tempo-synced across 13 divisions), ENV × 2 (loopable ADSR), Velocity, Note, Mod Wheel, Random.
 * **6 slots**, each with Source → Destination, bipolar Amount, and a Uni/Bipolar polarity switch.
-* **27 destinations** — every knob on the VOCODER and EXCITATION tabs.
-* **Live range display:** modulated knobs draw a pink band showing the reachable range plus a bright dot for the current modulated value. The band is computed through the exact same function the DSP uses to apply modulation, so what you see is always what you hear.
-* Logarithmic parameters (BASE PITCH, NOISE COLOR, RESONANCE, Attack/Decay/Release) are modulated as octave ratios rather than linear offsets, which keeps them usable across their whole range.
+* **56 destinations** — every knob across the VOCODER, EXCITATION, and FX tabs (including Resonator Shift/Spread/OutGain, Gate Decay, Drive, Chorus, and Reverb).
+* **Live range display:** modulated destination knobs persistently render a pink arc band showing the reachable modulation range plus a bright dot for the instantaneous modulated value. Real-time preview is active even when idling without incoming audio. The band is computed through the exact same mathematical function the DSP uses, ensuring perfect visual-to-audio fidelity.
+* Logarithmic parameters (BASE PITCH, NOISE COLOR, RESONANCE, Attack/Decay/Release) are modulated as octave ratios rather than linear offsets, keeping them musically usable across their entire range.
 
 ---
 
@@ -77,20 +77,24 @@ The carrier is an 8-voice polyphonic oscillator with PolyBLEP anti-aliasing.
 
 ### FX Chain
 
-Five slots in series. Drag any card to reorder the chain; click a card to edit its parameters in the Detail area below.
+Five slots in series, ported and expanded directly from **COLORS** with full MIDI-mode integration. Drag any card to reorder the chain; click a card to edit its parameters in the Detail area below.
 
-* **SPECTRAL RESONATOR** — 8 tuned comb resonators (Karplus-Strong topology).
-  * **CHORD mode:** place the resonators on a root note and chord type (Octaves / Power 5 / Major / Minor / Sus4 / Min7 / Maj9 / Dim). ROOT is entered as a note name, not a frequency.
-  * **MIDI mode:** resonator pitches follow the notes you hold. Fewer than 8 notes are stacked into higher octaves. Releasing the keys holds the last voicing rather than cutting out.
-  * **FREE mode:** delay time in milliseconds — this is the same DSP as a very short delay with high feedback, so it covers metallic flanging and comb design.
-  * **DECAY** sets the ring-out time in seconds and is pitch-compensated, so low and high notes sustain for the same length. A raw feedback coefficient would make an 880 Hz note decay 13× faster than a 55 Hz one.
-  * **TIME** is the delay length and applies to **FREE mode only** — in Chord and MIDI mode the pitch determines the delay, so TIME has no effect there.
-  * **SHIMMER** adds octave-up and two-octave-up taps *in parallel to the output only*. It never enters the feedback loop, so the fundamental resonance stays intact and you get sparkle on top instead of the higher octaves taking over.
-  * **INHARM** stretches the partials the way a real string or bell does (`f_n /= √(1+B·n²)`), producing beating and metallic shimmer.
-* **MULTIBAND DRIVE** — 3-band split (300 Hz / 2500 Hz) with independent drive per band. Shapes: Tanh / Fold / Crush.
-* **FORMANT GATE** — 16-step tempo-synced rhythm gate with a vowel formant assigned per step. **SHAPE** retriggers the envelope at each step, so consecutive ON steps become individual hits — at 1/32 with the "All On" pattern this gives a true 32nd-note machine gun.
-* **ENSEMBLE CHORUS** — 4-voice widener.
-* **REVERB** — comb/allpass reverb with Pre-Delay, Width (M/S), Low Cut, and Mod (delay-length jitter to break up metallic ringing).
+* **SPECTRAL RESONATOR** — 8 tuned comb resonators with Karplus-Strong topology and complete MIDI tracking.
+  * **CHORD mode:** place the resonators on a root note and chord type (Octaves / Power 5 / Major / Minor / Sus4 / Min7 / Maj9 / Dim).
+  * **MIDI mode:** resonator pitches dynamically follow the MIDI notes played. Fewer than 8 notes are stacked into upper octaves. Releasing keys holds the last voicing without cutting off.
+  * **SHIFT (±24 st):** semitone pitch transposition knob — modifiable in real time via the ModMatrix for arpeggiated resonator chords and pitch bends.
+  * **SPREAD (0–100%):** stereo pan distribution across the 8 resonator lines.
+  * **OUT GAIN (-12–+12 dB):** output level compensation.
+  * **DECAY (0.05–20 s):** pitch-compensated ring-out time in seconds, ensuring equal sustained resonance from low sub-bass up to high treble.
+  * **SHIMMER (0–100%):** adds octave-up and two-octave-up sparkle exclusively in parallel to the output without destabilizing the feedback loop.
+  * **INHARM (0–100%):** partial-frequency stretching (`f_n /= √(1+B·n²)`), producing authentic metallic bells and gamelan-like clangs.
+* **MULTIBAND DRIVE** — 3-band split (300 Hz / 2500 Hz) with independent band gains and drive amount. Shapes: Tanh / Fold / Crush.
+* **FORMANT GATE** — 16-step tempo-synced rhythm slicer ported from COLORS.
+  * **50 PATTERNS:** comprehensive rhythm library including classic trance gates, triplets, dotted polyrhythms, stutter glitches, swing funk cuts, and complex chisel patterns.
+  * **GATE DECAY (5–1000 ms):** continuous envelope release control, ranging from sharp micro-plucks to smooth breathing swells.
+  * **VOWEL (0–100%):** per-step vowel formant filter modulation.
+* **ENSEMBLE CHORUS** — 4-voice widener with Rate, Depth, and Width.
+* **REVERB** — comb/allpass reverb with Size, Pre-Delay (0–200 ms), Width (M/S), Low Cut, Damp, and delay-modulation jitter.
 
 ---
 
@@ -155,9 +159,9 @@ Five slots in series. Drag any card to reorder the chain; click a card to edit i
 
 | FX | Parameters |
 |---|---|
-| **Resonator** | MODE (Chord/Free/MIDI), CHORD, ROOT (C1–C7), TIME (0.2–50 ms, FREE mode only), DECAY (0.05–20 s), DAMP, SPREAD, SHIMMER, INHARM |
+| **Resonator** | MODE (Chord/Free/MIDI), CHORD, ROOT (C1–C7), SHIFT (-24–+24 st), DECAY (0.05–20 s), DAMP, SPREAD, OUT GAIN (-12–+12 dB), SHIMMER, INHARM |
 | **Drive** | SHAPE (Tanh/Fold/Crush), DRIVE (1–40×), LOW, MID, HIGH |
-| **Gate** | RATE (1/2–1/32, tempo-synced), PATTERN (6 types), DEPTH, SHAPE, VOWEL, SMOOTH |
+| **Gate** | RATE (1/2–1/32, tempo-synced), PATTERN (50 types: Trance, Triplet, Polyrhythm, Stutter, Glitch, etc.), GATE DECAY (5–1000 ms), VOWEL, SMOOTH |
 | **Chorus** | RATE (0.02–8 Hz), DEPTH (0.1–12 ms), WIDTH |
 | **Reverb** | SIZE, DAMP, PRE-DLY (0–200 ms), WIDTH, LOW CUT (20–1000 Hz), MOD |
 
@@ -209,7 +213,24 @@ The FX chain sits on the wet path, so **MIX at 0 gives you the untouched dry sig
 * **Lock-free analyzer.** The spectrum analyzer runs on a background thread and communicates only through atomics and a ring buffer.
 * **Smoothed parameters.** MIX and OUT LEVEL use 20 ms sample-accurate ramps. FMT SHIFT/STRETCH, DETUNE, NOISE, and resonator delay lengths are smoothed inside their engines to prevent zipper noise and clicks.
 * **Bounded feedback.** Resonator feedback is hard-limited below 1.0 with soft clipping inside the loop; reverb feedback tops out at 0.98.
-* **Verified by numerical tests.** LPC parameter combinations (900 permutations), scale snapping (20 scales × 12 keys × ±24 st), FX stability, and gate timing accuracy are all covered by standalone test programs under `Tests/`.
+## UI Scaling & Ergonomics
+
+* **Freely resizable window:** Drag from any corner or edge to scale the entire interface from 25% up to 200%. The UI maintains a crisp, fixed aspect ratio (1100 × 700 base resolution) with vectorized graphics.
+* **Persistent window size:** The plugin automatically remembers your preferred editor dimensions across DAW sessions and project reloads.
+
+
+## Factory Presets (150 Presets)
+
+SPECTRA 8 includes **150 production-ready factory presets** organized into 8 distinct musical categories:
+
+1. **FilterBank (Auto)** — 20 presets: Natural articulation, pop harmonies, deep vocoded textures, and sub tracking.
+2. **LPC (Auto)** — 20 presets: Retro 8-bit robots, speech chips, vintage toys, and synthetic whisper pads.
+3. **FilterBank (MIDI)** — 20 presets: Polyphonic playable chords, EDM chops, and sharp vocal lead synths.
+4. **LPC (MIDI)** — 20 presets: Expressive vocal-tract solo leads, talking basses, and formantic polysynths.
+5. **M.Pitch Modulations** — 10 presets: Slow analog flutter, 16th-note sync arps, and pentatonic scale snap sequences.
+6. **Rhythmic Formant Gate** — 10 presets: 50-pattern groove gates, 32nd stutter glitches, and breathing envelope decays.
+7. **Spectral Resonator Lab** — 10 presets: Micro-delay combs, +24 st shifted arpeggios, and 85% inharmonic metallic bell clouds.
+8. **SpecialFX** — 40 presets: Full 6-slot modulation matrix powerhouses across FilterBank (20) and LPC (20) engines in complete MIDI mode, covering cybernetic uplinks, quantum singularities, hologram glitches, and bio-scanners.
 
 
 ## 📚 Manual
