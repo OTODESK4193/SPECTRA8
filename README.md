@@ -8,6 +8,16 @@
 ##
 <img src="Source/Assets/VOCODER.jpg" width="700">
 
+## Demo Videos
+
+<p align="center">
+  <b>Introduction YouTube Link</b><br>
+  <a href="https://youtu.be/B6zf_JjsJb8">
+    <img src="Source/Assets/thumbnail.jpg"
+         alt="Ambience - Introduction YouTube Link" width="640" height="360">
+  </a>
+</p>
+
 ## Overview
 
 **SPECTRA 8** is a hybrid vocoder VST3 plugin that combines two completely different voice-modeling engines in a single instrument:
